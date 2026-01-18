@@ -1,0 +1,117 @@
+name: Test Podman Compose
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test-compose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Podman and Podman Compose
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman podman-compose
+          podman --version
+          podman compose --version
+          
+          # Start Podman socket for rootless mode
+          systemctl --user start podman.socket
+          systemctl --user status podman.socket
+          
+          # Set Docker host to use Podman socket
+          echo "DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock" >> $GITHUB_ENV
+
+      - name: Build services
+        run: |
+          podman compose -f podman-compose.yml build --no-cache
+        timeout-minutes: 20
+      - name: Start all services
+        run: |
+          chmod -R 777 cassandra-data
+          podman compose -f podman-compose.yml up -d
+        timeout-minutes: 20
+
+      - name: Wait for services to be healthy and verify
+        run: |
+          echo "=== Waiting for Kafka to be healthy ==="
+          timeout 120 bash -c 'until podman exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --list >/dev/null 2>&1; do echo "Waiting for Kafka..."; sleep 5; done'
+          echo "✓ Kafka is healthy"
+
+          echo -e "\n=== Waiting for Cassandra to be healthy ==="
+          timeout 300 bash -c 'until podman exec cassandra cqlsh -e "DESCRIBE KEYSPACES" cassandra 9042 >/dev/null 2>&1; do echo "Waiting for Cassandra..."; sleep 10; done'
+          echo "✓ Cassandra is healthy"
+
+          echo -e "\n=== Waiting for Spark to be ready ==="
+          timeout 120 bash -c 'until curl -sf http://localhost:8080 >/dev/null 2>&1; do echo "Waiting for Spark..."; sleep 5; done'
+          echo "✓ Spark is ready"
+
+          echo -e "\n=== Waiting for Presto to be ready ==="
+          timeout 120 bash -c 'until curl -sf http://localhost:8088/v1/info >/dev/null 2>&1; do echo "Waiting for Presto..."; sleep 5; done'
+          echo "✓ Presto is ready"
+
+          echo -e "\n=== All services are healthy ==="
+          podman ps
+
+          echo -e "\n=== Checking data-producer is running ==="
+          while ! podman ps --filter "name=data-producer" --format "{{.Names}}" | grep -q "data-producer" ; do
+            echo "waiting for data-producer to be running…"
+            sleep 5
+          done
+          
+          echo -e "\n=== Waiting for data to flow through the system ==="
+          sleep 30
+          podman compose -f podman-compose.yml logs data-cassandra-sink
+
+          echo -e "\n=== Checking Cassandra for demo data ==="
+          timeout 300 bash -c '
+            while true; do
+              echo "Attempting to query demo.events table..."
+              RESULT=$(podman exec cassandra cqlsh cassandra -e "SELECT * FROM demo.events LIMIT 1;" 2>&1)
+              EXIT_CODE=$?
+              echo "$RESULT"
+              # Check if result contains a UUID (indicating actual data rows)
+              if [ $EXIT_CODE -eq 0 ] && echo "$RESULT" | grep -qE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"; then
+                echo "✓ Found events in demo.events table"
+                break
+              fi
+              sleep 10
+            done
+          '
+        timeout-minutes: 12
+
+      - name: Show service logs on failure
+        if: failure()
+        run: |
+          echo "=== Kafka logs ==="
+          podman logs kafka || true
+          
+          echo -e "\n=== Cassandra logs ==="
+          podman logs cassandra || true
+          
+          echo -e "\n=== Cassandra Sidecar logs ==="
+          podman logs cassandra-sidecar || true
+          
+          echo -e "\n=== Spark logs ==="
+          podman logs spark || true
+          
+          echo -e "\n=== Presto logs ==="
+          podman logs presto || true
+          
+          echo -e "\n=== Data Producer logs ==="
+          podman logs data-producer || true
+          
+          echo -e "\n=== Data Cassandra Sink logs ==="
+          podman logs data-cassandra-sink || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          podman compose -f podman-compose.yml down -v
+          podman system prune -af --volumes

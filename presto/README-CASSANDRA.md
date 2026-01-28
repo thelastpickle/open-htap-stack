@@ -64,24 +64,27 @@ SELECT * FROM cassandra.demo.events LIMIT 100;
 SELECT COUNT(*) FROM cassandra.demo.events;
 
 -- Filter and aggregate
-SELECT 
-    event_type,
+SELECT
+    entity_id,
     COUNT(*) as count,
     MIN(event_time) as first_event,
     MAX(event_time) as last_event
 FROM cassandra.demo.events
-GROUP BY event_type
-ORDER BY count DESC;
+GROUP BY entity_id
+ORDER BY count DESC
+LIMIT 10;
 ```
 
 ### Join with Other Data Sources
 Presto allows you to join Cassandra data with other catalogs (if configured):
 ```sql
--- Example: Join Cassandra with system information
-SELECT 
+-- Example: Filter by time range
+SELECT
     c.event_id,
-    c.event_type,
-    c.event_time
+    c.entity_id,
+    c.event_time,
+    c.latitude,
+    c.longitude
 FROM cassandra.demo.events c
 WHERE c.event_time > CURRENT_TIMESTAMP - INTERVAL '1' HOUR
 LIMIT 100;
@@ -96,9 +99,10 @@ LIMIT 100;
 
 Example with partition key filter:
 ```sql
--- Assuming partition_key is a partition key column
-SELECT * FROM cassandra.demo.events 
-WHERE partition_key = 'some_value'
+-- The partition key is (entity_id, event_day)
+SELECT * FROM cassandra.demo.events
+WHERE entity_id = 'asset-000001'
+  AND event_day = DATE '2026-03-22'
 LIMIT 100;
 ```
 

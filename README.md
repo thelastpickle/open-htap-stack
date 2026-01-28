@@ -1,4 +1,4 @@
-🏗️🚧👷👷🏽‍👷‍️🚧  see todos inline (also see mck/drone-data-model branch for new data model coming)
+🏗️🚧👷👷🏽‍👷‍️🚧  see todos inl
 
 # Vendor-Neutral Open Source HTAP Data Platform
 
@@ -61,7 +61,7 @@ podman exec presto \
  presto-cli --execute "SELECT * FROM cassandra.demo.events LIMIT 100;"
 
 podman exec presto \
- presto-cli --execute "SELECT event_type, COUNT(*) FROM cassandra.demo.events GROUP BY event_type;"
+ presto-cli --execute "SELECT entity_id, COUNT(*) FROM cassandra.demo.events GROUP BY entity_id LIMIT 10;"
 ```
 To watch query progress in browser, open http://localhost:8088/ui/  
 
@@ -109,8 +109,8 @@ OPTIONS (
 
 SELECT count(*) FROM events_for_bulk_queries;
 
-SELECT event_type, COUNT(*) AS cnt, MIN(event_time) AS first_seen, MAX(event_time) AS last_seen
-  FROM events_for_wide_queries GROUP BY event_type ORDER BY cnt DESC LIMIT 10;
+SELECT entity_id, COUNT(*) AS cnt, MIN(event_time) AS first_seen, MAX(event_time) AS last_seen
+  FROM events_for_bulk_queries GROUP BY entity_id ORDER BY cnt DESC LIMIT 10;
 ```
 To watch query progress in browser, open http://localhost:4040/
 

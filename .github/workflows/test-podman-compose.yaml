@@ -128,7 +128,7 @@ jobs:
           echo "✓ SELECT query validated with data"
           
           echo -e "\nTesting GROUP BY query..."
-          RESULT=$(podman exec presto presto-cli --execute "SELECT event_type, COUNT(*) FROM cassandra.demo.events GROUP BY event_type;" 2>&1)
+          RESULT=$(podman exec presto presto-cli --execute "SELECT entity_id, COUNT(*) FROM cassandra.demo.events GROUP BY entity_id LIMIT 10;" 2>&1)
           EXIT_CODE=$?
           echo "$RESULT"
           [ $EXIT_CODE -ne 0 ] && { echo "❌ GROUP BY query failed with exit code $EXIT_CODE"; exit 1; }

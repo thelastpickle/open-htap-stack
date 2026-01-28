@@ -6,6 +6,7 @@ from datetime import datetime
 
 from cassandra.cluster import Cluster, ConsistencyLevel
 from cassandra.auth import PlainTextAuthProvider
+from cassandra.util import datetime_from_uuid1
 from kafka import KafkaConsumer
 
 
@@ -31,16 +32,27 @@ def ensure_schema(session, keyspace: str, table: str):
         """
     )
     session.set_keyspace(keyspace)
+
     session.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {table} (
-          event_id uuid PRIMARY KEY,
+          entity_id text,
+          event_day date,
+          event_id timeuuid,
           event_time timestamp,
-          user_id text,
           event_type text,
-          payload text
+          observer_id text,
+          latitude double,
+          longitude double,
+          altitude_m float,
+          temp_external_c float,
+          temp_internal_c float,
+          text_payload text,
+          PRIMARY KEY (event_id)
         );
         """
+        # TODO: PRIMARY KEY ((entity_id, event_day), event_id)
+        #
         # WITH transactional_mode = 'full';
     )
     # These are for the Accord transactions the demo "exactly-once in-order session timeline projections"
@@ -71,7 +83,7 @@ def ensure_schema(session, keyspace: str, table: str):
           user_id text,
           session_id uuid,
           seq bigint,
-          event_id uuid,
+          event_id timeuuid,
           event_time timestamp,
           event_type text,
           payload text,
@@ -122,7 +134,7 @@ def main() -> None:
             time.sleep(5)
 
     insert_cql = session.prepare(
-        f"INSERT INTO {table} (event_id, event_time, user_id, event_type, payload) VALUES (?, ?, ?, ?, ?)"
+        f"INSERT INTO {table} (entity_id, event_day, event_id, event_time, event_type, observer_id, latitude, longitude, altitude_m, temp_external_c, temp_internal_c, text_payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     insert_cql.consistency_level = ConsistencyLevel.QUORUM
 
@@ -159,15 +171,25 @@ def main() -> None:
                 evt = msg.value
                 try:
                     event_id = uuid.UUID(evt.get("event_id"))
+                    # Extract timestamp from timeuuid
+                    event_time = datetime_from_uuid1(event_id)
                 except Exception:
                     event_id = uuid.uuid4()
+                    event_time = datetime.utcnow()
 
-                event_time = parse_ts(evt.get("ts", ""))
-                user_id = str(evt.get("user_id", ""))
+                event_day = event_time.date()
+                entity_id = str(evt.get("entity_id", ""))
                 event_type = str(evt.get("event_type", ""))
-                payload = str(evt.get("payload", ""))
+                observer_id = str(evt.get("observer_id", ""))
+                pos = evt.get("position", {})
+                latitude = float(pos.get("lat", 0.0))
+                longitude = float(pos.get("lon", 0.0))
+                altitude_m = float(evt.get("z_m", 0.0))
+                temp_external_c = float(evt.get("temp_external_c", 0.0))
+                temp_internal_c = float(evt.get("temp_internal_c", 0.0))
+                text_payload = str(evt.get("text", ""))
 
-                session.execute(insert_cql, (event_id, event_time, user_id, event_type, payload))
+                session.execute(insert_cql, (entity_id, event_day, event_id, event_time, event_type, observer_id, latitude, longitude, altitude_m, temp_external_c, temp_internal_c, text_payload))
                 buffered += 1
                 total += 1
 

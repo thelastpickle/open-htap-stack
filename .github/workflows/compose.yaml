@@ -180,7 +180,6 @@ jobs:
           set +e
           RESULT=$(podman exec spark spark-sql \
             --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.3.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.3.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.3.0 \
-            --repositories https://repository.apache.org/content/repositories/orgapachecassandra-1437/ \
             -f /tmp/spark_bulk_test.sql 2>&1)
           EXIT_CODE=$?
           set -e
@@ -219,7 +218,6 @@ jobs:
           set +e
           RESULT=$(podman exec spark spark-sql \
             --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.3.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.3.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.3.0 \
-            --repositories https://repository.apache.org/content/repositories/orgapachecassandra-1437/ \
             -f /tmp/spark_parquet_export.sql 2>&1)
           EXIT_CODE=$?
           set -e
@@ -280,7 +278,6 @@ jobs:
           set +e
           RESULT=$(podman exec spark spark-shell \
             --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.3.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.3.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.3.0 \
-            --repositories https://repository.apache.org/content/repositories/orgapachecassandra-1437/ \
             -i /tmp/parquet_import.scala 2>&1)
           EXIT_CODE=$?
           set -e

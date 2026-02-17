@@ -85,7 +85,6 @@ Queries using the Cassandra Spark Bulk Reader (via the Cassandra Sidecar)
 podman exec -it spark \
  spark-sql \
   --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.3.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.3.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.3.0 \
-  --repositories https://repository.apache.org/content/repositories/orgapachecassandra-1437/
 ```
 ```sql
 CREATE OR REPLACE TEMP VIEW events_for_bulk_queries
@@ -109,7 +108,6 @@ To watch query progress in browser, open http://localhost:4040/
 
 The Cassandra Bulk Reader/Writer interfaces directly to the data directory disks of the Cassandra nodes.  Reads are direct to a snapshot of the sstables files directly (off disk), providing point-in-time consistency.  Direct file access provides high throughput of bulk or analytics-style read and writes that does not impact latencies of other requests to the Cassandra cluster.
 
-(TODO: remove `--repositories` use once 0.3.0 is released)
 
   <br>
 
@@ -131,7 +129,6 @@ FIXME: currently broken w/ 'DecoratedKey… not serializable result: java.nio.He
 podman exec -it spark \
  spark-shell  \
   --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.3.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.3.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.3.0   \
-  --repositories https://repository.apache.org/content/repositories/orgapachecassandra-1437/
 ```
 ```scala
 val df = spark.read.parquet("/var/lib/cassandra/parquet-exports/demo_events")

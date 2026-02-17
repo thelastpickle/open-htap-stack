@@ -27,6 +27,7 @@ _Proof of Concept that takes 4 minutes to demonstrate_
 
 ##### Prerequisites - Give podman machine enough memory to run the stack
 
+Check machine memory with `podman machine list` or `podman machine inspect --format "{{.Resources.Memory}}"` and ensure it has at least 12 GB of memory allocated. If not, you can stop the machine, remove it, and re-initialize it with more memory using the following commands:
 ```shell
 podman machine stop
 podman machine rm

@@ -24,6 +24,15 @@ _Proof of Concept that takes 4 minutes to demonstrate_
 ---
 
 ## Demo Quick Start
+
+##### Prerequisites - Give podman machine enough memory to run the stack
+
+```shell
+podman machine stop
+podman machine rm
+podman machine init --memory 12288 # 12 GB example
+podman machine start
+```
   
 ##### Bring up the whole stack in under 4 minutes, and start ingesting event data.
 
@@ -63,7 +72,7 @@ To watch query progress in browser, open http://localhost:8088/ui/
 
 A simple query using the Cassandra-Spark-Connector (requires creating a temp view first)
 ```shell
-podman exec spark \
+podman exec -it spark \
  spark-sql --packages com.datastax.spark:spark-cassandra-connector_2.12:3.5.1 \
   --conf spark.cassandra.connection.host=cassandra
 ```

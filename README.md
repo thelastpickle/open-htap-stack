@@ -9,12 +9,12 @@ _Proof of Concept that takes 4 minutes to demonstrate_
 - Record of Truth: simplifies data governance, security, catalogue and schema management
   - OLTP store with high concurrency + horizontal scaling 
   - Strict-serializable ACID transactions
-  - Different SQL interfaces: OLAP SparkSQL & PrestoDB, OLTP Postgres wire-protocol + dialect (subset PoC),
+  - Different SQL interfaces: OLAP SparkSQL & Presto, OLTP Postgres wire-protocol + dialect (subset PoC),
   - OLAP resource isolation without data duplication from OLTP
 - Ready for today's Agentic AI demands
-- Ecosystem integration: Apache Kafka, Apache Spark, PrestoDB, Apache Parquet, Apache Iceberg
+- Ecosystem integration: Apache Kafka, Apache Spark, Presto, Apache Parquet, Apache Iceberg
 - Freedom to Operate: built with commoditized software not controlled by vendors, that can be deployed anywhere
-- 80%+ Lower Total Cost of Ownership [compared](TCO-Comparisons.md) to common OLTP + ETL + OLAP solutions
+- 80%+ Lower Total Cost of Ownership [compared](docs/TCO-Comparisons.md) to common OLTP + ETL + OLAP solutions
 
 ---
 1. [Demo Quick Start](#demo-quick-start)  
@@ -184,14 +184,14 @@ In details, the reasons to choose this stack are broken down into the following:
 • [ACID Guarantees](#acid-guarantees)  
 • [SQL Compatibility](#sql-compatibility)  
 • [Change Data Capture Kafka Streaming](#change-data-capture-kafka-streaming)  
-• [Why PrestoDB and Apache Spark](#why-prestodb-and-apache-spark)  
+• [Why Presto and Apache Spark](#why-presto-and-apache-spark)  
 • [Why Podman](#why-podman)  
 • [Common (Bad) Assumptions: YAGNI, Scale, and the OLAP Platform](#common-bad-assumptions-yagni-scale-and-the-olap-platform)  
 • [Appendix: Scope, Architecture Notes, and Enterprise Considerations](#appendix-scope-architecture-notes-and-enterprise-considerations)  
 • [Hard Questions FAQ (direct answers)](#hard-questions-faq-direct-answers)  
 • [References](#references)  
 
-And, for an illustration of the material reductions in recurring spend on licenses and Saas every month see [TCO-Comparisons.md](TCO-Comparisons.md).
+And, for an illustration of the material reductions in recurring spend on licenses and Saas every month see [TCO-Comparisons.md](docs/TCO-Comparisons.md).
 
 ## Architecture – Keep It Simple, Keep It Fast, Keep It Consistent
 
@@ -214,6 +214,7 @@ By providing direct access to the data, but different access paths for different
 
 Application workloads (OLTP) can expect p99 latencies for writes under 5ms and reads under 50ms, regardless of throughput or concurrency.
 
+ 
 ## AI Data Platform demands
 
 AI agents need real-time access to all data sources in an enterprise, with high throughput, strong consistency and low latency, without bypassing security and governance controls.
@@ -247,12 +248,17 @@ This stack demonstrates how different SQL implementations deliver value for vary
 ## Change Data Capture Kafka Streaming
 TODO
 
-## Why PrestoDB and Apache Spark
+## Why Presto and Apache Spark
 TODO
 
-## Why Podman
 
-The demo uses Podman as the open source alternative to Docker.  It is still compatible with Docker, so you are free to still use Docker.
+---
+
+*Turn database sprawl into something much simpler*
+
+![fun but serious illustration of data platform debt](docs/simplification.png)
+
+---
 
 ## Common (Bad) Assumptions: YAGNI, Scale, and the OLAP Platform
 

@@ -38,20 +38,39 @@ This eliminates the "dual-system pipeline tax" (tools + people) that dominates T
 ```mermaid
 graph TB
     subgraph "Traditional Dual-System"
-        A1[OLTP: Postgres/Oracle] -->|ETL/CDC| B1[Pipeline Tools]
+        A1[OLTP: Postgres/MySQL] -->|ETL/CDC| B1[Pipeline Tools]
+        A2["Oracle/SQL Server (legacy)"] --> B1
+        A3["KV/column stores xN"] --> B1
+        A4["Document stores xN"] --> B1
+        A6["Caches xN"] --> B1
+        A7["Vector DB (new)"] --> B1
         B1 --> C1[OLAP: Snowflake/Databricks]
+        B1 --> C2[OLAP: Snowflake/Databricks]
+        B1 --> C3[OLAP: Snowflake/Databricks]
+        C1 --> |ETL| B2[Pipeline Tools]
+        C2 --> |ETL| B3[Pipeline Tools]
+        C3 --> |ETL| B4[Pipeline Tools]
+        B2 --> A3
+        B3 --> A6
+        B4 --> A7
         B1 --> D1[Kafka/Airflow/dbt]
+        C1 --> D1
+        C2 --> D1
+        C3 --> D1
         style B1 fill:#ff9999
+        style B2 fill:#ff9999
+        style B3 fill:#ff9999
+        style B4 fill:#ff9999
         style D1 fill:#ff9999
     end
-    
     subgraph "Unified HTAP Stack"
-        A2[Single Data Store<br/>Cassandra + Accord]
-        A2 -->|Postgres Wire| B2[OLTP Queries]
-        A2 -->|Spark/Presto| C2[OLAP Queries]
-        A2 -->|Native CDC| D2[Kafka Streams]
-        A2 -->|Vector Search| E2[AI/ML]
-        style A2 fill:#99ff99
+        H2[Single ACID Data Store<br/>Cassandra + Accord]
+        H2 -->|CQL Wire| W1[OLTP Queries]
+        H2 -->|Postgres Wire| W2[OLTP Queries]
+        H2 -->|Spark/Presto| W3[OLAP Queries]
+        H2 -->|Native CDC| W4[Kafka Streams]
+        H2 -->|Vector Search| W5[AI/ML]
+        style H2 fill:#99ff99
     end
 ```
 

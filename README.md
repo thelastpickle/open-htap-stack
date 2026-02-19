@@ -25,15 +25,13 @@ _Proof of Concept that takes 4 minutes to demonstrate_
 
 ## Demo Quick Start
 
-##### Prerequisites - Give podman machine enough memory to run the stack
+##### Prerequisites
 
-Check machine memory with `podman machine list` or `podman machine inspect --format "{{.Resources.Memory}}"` and ensure it has at least 12 GB of memory allocated. If not, you can stop the machine, remove it, and re-initialize it with more memory using the following commands:
+Check machine memory has at least 12 GB of memory allocated.
 ```shell
-podman machine stop
-podman machine rm
-podman machine init --memory 12288 # 12 GB example
-podman machine start
+podman machine inspect --format "{{.Resources.Memory}}" # must be greater than 12287 (12GB)
 ```
+See docs/TROUBSHOOTING.md for how to increase the memory limit.
   
 ##### Bring up the whole stack in under 4 minutes, and start ingesting event data.
 

@@ -5,6 +5,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# cancel same workflows in progress for pull request branches
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/trunk' }}
+
 jobs:
   test-compose:
     runs-on: ubuntu-latest

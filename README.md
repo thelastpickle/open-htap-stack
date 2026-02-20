@@ -24,6 +24,14 @@ _Proof of Concept that takes 4 minutes to demonstrate_
 ---
 
 ## Demo Quick Start
+
+##### Prerequisites
+
+Check machine memory has at least 12 GB of memory allocated.
+```shell
+podman machine inspect --format "{{.Resources.Memory}}" # must be greater than 12287 (12GB)
+```
+See docs/TROUBSHOOTING.md for how to increase the memory limit.
   
 ##### Bring up the whole stack in under 4 minutes, and start ingesting event data.
 
@@ -63,7 +71,7 @@ To watch query progress in browser, open http://localhost:8088/ui/
 
 A simple query using the Cassandra-Spark-Connector (requires creating a temp view first)
 ```shell
-podman exec spark \
+podman exec -it spark \
  spark-sql --packages com.datastax.spark:spark-cassandra-connector_2.12:3.5.1 \
   --conf spark.cassandra.connection.host=cassandra
 ```

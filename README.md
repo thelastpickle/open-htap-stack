@@ -31,7 +31,7 @@ Check machine memory has at least 12 GB of memory allocated.
 ```shell
 podman machine inspect --format "{{.Resources.Memory}}" # must be greater than 12287 (12GB)
 ```
-See docs/TROUBSHOOTING.md for how to increase the memory limit.
+See [docs/TROUBSHOOTING.md](./docs/TROUBLESHOOTING.md) for how to increase the memory limit.
   
 ##### Bring up the whole stack in under 4 minutes, and start ingesting event data.
 

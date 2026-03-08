@@ -1,1 +1,5 @@
 cassandra-data/*
+
+spark/ivy/cache/**/*.xml.original
+spark/ivy/cache/**/ivydata-*.properties
+spark/ivy/jars

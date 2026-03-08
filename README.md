@@ -92,7 +92,7 @@ Queries using the Cassandra Spark Bulk Reader (via the Cassandra Sidecar)
 ```shell
 podman exec -it spark \
  spark-sql \
-  --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.3.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.3.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.3.0 \
+  --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0
 ```
 ```sql
 CREATE OR REPLACE TEMP VIEW events_for_bulk_queries
@@ -136,7 +136,7 @@ FIXME: currently broken w/ 'DecoratedKey… not serializable result: java.nio.He
 ```shell
 podman exec -it spark \
  spark-shell  \
-  --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.3.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.3.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.3.0   \
+  --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0   \
 ```
 ```scala
 val df = spark.read.parquet("/var/lib/cassandra/parquet-exports/demo_events")

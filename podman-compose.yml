@@ -69,6 +69,7 @@ services:
     volumes:
       - ./cassandra-data:/var/lib/cassandra
       - ./cassandra/sidecar.yaml:/config/sidecar.yaml:ro
+      - ./cassandra/sidecar-logback.xml:/config/sidecar-logback.xml:ro
     environment:
       CASSANDRA_CLUSTER_NAME: "${CASSANDRA_CLUSTER_NAME:-htap-demo}"
       CASSANDRA_NUM_TOKENS: "${CASSANDRA_NUM_TOKENS:-16}"
@@ -87,6 +88,7 @@ services:
   spark:
     # cassandra-analytics does not support spark 4 yet, ref CASSANALYTICS-34
     image: apache/spark:3.5.8-scala2.12-java17-python3-ubuntu
+
     container_name: spark
     hostname: spark
     networks: [htap-net]
@@ -100,12 +102,13 @@ services:
       - "4040:4040"   # First Spark app UI
     volumes:
       - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+      - ./spark/conf/ivysettings.xml:/opt/spark/conf/ivysettings.xml:ro
       - ./spark/jobs:/opt/spark/jobs:rw
       - ./cassandra-data:/var/lib/cassandra
+      - ./spark/ivy:/opt/spark/work-dir/.ivy2:rw
     environment:
       # Set home directory for Ivy cache (needed for --packages)
       HOME: "/opt/spark/work-dir"
-      IVY_HOME: "/opt/spark/work-dir/.ivy2"
       PATH: "/opt/spark/bin:${PATH}"
     command: >
       bash -lc '

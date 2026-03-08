@@ -18,6 +18,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Install Podman and Podman Compose
         run: |
@@ -39,7 +41,11 @@ jobs:
         timeout-minutes: 20
       - name: Start all services
         run: |
-          chmod -R 777 cassandra-data
+          # Clear Ivy resolver metadata that may have stale references
+          # Keep the actual jars and ivy.xml files
+          find spark/ivy/cache -name "ivydata-*.properties" -delete || true
+          find spark/ivy/cache -name "*.properties" -delete || true
+          chmod -R 777 cassandra-data spark/ivy
           podman compose -f podman-compose.yml up -d
         timeout-minutes: 20
 
@@ -184,7 +190,7 @@ jobs:
           echo "Executing bulk SparkSQL queries..."
           set +e
           RESULT=$(podman exec spark spark-sql \
-            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.3.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.3.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.3.0 \
+            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0 \
             -f /tmp/spark_bulk_test.sql 2>&1)
           EXIT_CODE=$?
           set -e
@@ -222,7 +228,7 @@ jobs:
           echo "Executing Parquet export..."
           set +e
           RESULT=$(podman exec spark spark-sql \
-            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.3.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.3.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.3.0 \
+            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0 \
             -f /tmp/spark_parquet_export.sql 2>&1)
           EXIT_CODE=$?
           set -e
@@ -282,7 +288,7 @@ jobs:
           echo "Executing Parquet import via spark-shell..."
           set +e
           RESULT=$(podman exec spark spark-shell \
-            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.3.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.3.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.3.0 \
+            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0 \
             -i /tmp/parquet_import.scala 2>&1)
           EXIT_CODE=$?
           set -e

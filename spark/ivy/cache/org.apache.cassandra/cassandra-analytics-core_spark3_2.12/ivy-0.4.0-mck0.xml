@@ -1,0 +1,904 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ivy-module version="2.0" xmlns:m="http://ant.apache.org/ivy/maven">
+	<info organisation="org.apache.cassandra"
+		module="cassandra-analytics-core_spark3_2.12"
+		revision="0.4.0-mck0"
+		status="release"
+		publication="20260308133319"
+	>
+		<description homepage="" />
+		<m:dependency.management__software.amazon.awssdk__codegen-lite-maven-plugin__version>2.26.12</m:dependency.management__software.amazon.awssdk__codegen-lite-maven-plugin__version>
+		<m:dependency.management__software.amazon.awssdk__codegen-lite__version>2.26.12</m:dependency.management__software.amazon.awssdk__codegen-lite__version>
+		<m:dependency.management__software.amazon.awssdk__codegen-maven-plugin__version>2.26.12</m:dependency.management__software.amazon.awssdk__codegen-maven-plugin__version>
+		<m:dependency.management__software.amazon.awssdk__codegen__version>2.26.12</m:dependency.management__software.amazon.awssdk__codegen__version>
+		<m:dependency.management__software.amazon.awssdk__annotations__version>2.26.12</m:dependency.management__software.amazon.awssdk__annotations__version>
+		<m:dependency.management__software.amazon.awssdk__arns__version>2.26.12</m:dependency.management__software.amazon.awssdk__arns__version>
+		<m:dependency.management__software.amazon.awssdk__json-utils__version>2.26.12</m:dependency.management__software.amazon.awssdk__json-utils__version>
+		<m:dependency.management__software.amazon.awssdk__third-party-jackson-core__version>2.26.12</m:dependency.management__software.amazon.awssdk__third-party-jackson-core__version>
+		<m:dependency.management__software.amazon.awssdk__third-party-jackson-dataformat-cbor__version>2.26.12</m:dependency.management__software.amazon.awssdk__third-party-jackson-dataformat-cbor__version>
+		<m:dependency.management__software.amazon.awssdk__auth__version>2.26.12</m:dependency.management__software.amazon.awssdk__auth__version>
+		<m:dependency.management__software.amazon.awssdk__aws-core__version>2.26.12</m:dependency.management__software.amazon.awssdk__aws-core__version>
+		<m:dependency.management__software.amazon.awssdk__profiles__version>2.26.12</m:dependency.management__software.amazon.awssdk__profiles__version>
+		<m:dependency.management__software.amazon.awssdk__aws-cbor-protocol__version>2.26.12</m:dependency.management__software.amazon.awssdk__aws-cbor-protocol__version>
+		<m:dependency.management__software.amazon.awssdk__aws-json-protocol__version>2.26.12</m:dependency.management__software.amazon.awssdk__aws-json-protocol__version>
+		<m:dependency.management__software.amazon.awssdk__aws-query-protocol__version>2.26.12</m:dependency.management__software.amazon.awssdk__aws-query-protocol__version>
+		<m:dependency.management__software.amazon.awssdk__aws-xml-protocol__version>2.26.12</m:dependency.management__software.amazon.awssdk__aws-xml-protocol__version>
+		<m:dependency.management__software.amazon.awssdk__protocol-core__version>2.26.12</m:dependency.management__software.amazon.awssdk__protocol-core__version>
+		<m:dependency.management__software.amazon.awssdk__regions__version>2.26.12</m:dependency.management__software.amazon.awssdk__regions__version>
+		<m:dependency.management__software.amazon.awssdk__sdk-core__version>2.26.12</m:dependency.management__software.amazon.awssdk__sdk-core__version>
+		<m:dependency.management__software.amazon.awssdk__checksums-spi__version>2.26.12</m:dependency.management__software.amazon.awssdk__checksums-spi__version>
+		<m:dependency.management__software.amazon.awssdk__checksums__version>2.26.12</m:dependency.management__software.amazon.awssdk__checksums__version>
+		<m:dependency.management__software.amazon.awssdk__http-auth-spi__version>2.26.12</m:dependency.management__software.amazon.awssdk__http-auth-spi__version>
+		<m:dependency.management__software.amazon.awssdk__http-auth__version>2.26.12</m:dependency.management__software.amazon.awssdk__http-auth__version>
+		<m:dependency.management__software.amazon.awssdk__http-auth-aws__version>2.26.12</m:dependency.management__software.amazon.awssdk__http-auth-aws__version>
+		<m:dependency.management__software.amazon.awssdk__http-auth-aws-crt__version>2.26.12</m:dependency.management__software.amazon.awssdk__http-auth-aws-crt__version>
+		<m:dependency.management__software.amazon.awssdk__http-auth-aws-eventstream__version>2.26.12</m:dependency.management__software.amazon.awssdk__http-auth-aws-eventstream__version>
+		<m:dependency.management__software.amazon.awssdk__identity-spi__version>2.26.12</m:dependency.management__software.amazon.awssdk__identity-spi__version>
+		<m:dependency.management__software.amazon.awssdk__http-client-spi__version>2.26.12</m:dependency.management__software.amazon.awssdk__http-client-spi__version>
+		<m:dependency.management__software.amazon.awssdk__retries__version>2.26.12</m:dependency.management__software.amazon.awssdk__retries__version>
+		<m:dependency.management__software.amazon.awssdk__retries-spi__version>2.26.12</m:dependency.management__software.amazon.awssdk__retries-spi__version>
+		<m:dependency.management__software.amazon.awssdk__apache-client__version>2.26.12</m:dependency.management__software.amazon.awssdk__apache-client__version>
+		<m:dependency.management__software.amazon.awssdk__netty-nio-client__version>2.26.12</m:dependency.management__software.amazon.awssdk__netty-nio-client__version>
+		<m:dependency.management__software.amazon.awssdk__url-connection-client__version>2.26.12</m:dependency.management__software.amazon.awssdk__url-connection-client__version>
+		<m:dependency.management__software.amazon.awssdk__utils__version>2.26.12</m:dependency.management__software.amazon.awssdk__utils__version>
+		<m:dependency.management__software.amazon.awssdk__cloudwatch-metric-publisher__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudwatch-metric-publisher__version>
+		<m:dependency.management__software.amazon.awssdk__s3-transfer-manager__version>2.26.12</m:dependency.management__software.amazon.awssdk__s3-transfer-manager__version>
+		<m:dependency.management__software.amazon.awssdk__s3-event-notifications__version>2.26.12</m:dependency.management__software.amazon.awssdk__s3-event-notifications__version>
+		<m:dependency.management__software.amazon.awssdk__aws-crt-client__version>2.26.12</m:dependency.management__software.amazon.awssdk__aws-crt-client__version>
+		<m:dependency.management__software.amazon.awssdk__auth-crt__version>2.26.12</m:dependency.management__software.amazon.awssdk__auth-crt__version>
+		<m:dependency.management__software.amazon.awssdk__iam-policy-builder__version>2.26.12</m:dependency.management__software.amazon.awssdk__iam-policy-builder__version>
+		<m:dependency.management__software.amazon.awssdk__endpoints-spi__version>2.26.12</m:dependency.management__software.amazon.awssdk__endpoints-spi__version>
+		<m:dependency.management__software.amazon.awssdk__acm__version>2.26.12</m:dependency.management__software.amazon.awssdk__acm__version>
+		<m:dependency.management__software.amazon.awssdk__acmpca__version>2.26.12</m:dependency.management__software.amazon.awssdk__acmpca__version>
+		<m:dependency.management__software.amazon.awssdk__amplify__version>2.26.12</m:dependency.management__software.amazon.awssdk__amplify__version>
+		<m:dependency.management__software.amazon.awssdk__apigateway__version>2.26.12</m:dependency.management__software.amazon.awssdk__apigateway__version>
+		<m:dependency.management__software.amazon.awssdk__apigatewaymanagementapi__version>2.26.12</m:dependency.management__software.amazon.awssdk__apigatewaymanagementapi__version>
+		<m:dependency.management__software.amazon.awssdk__apigatewayv2__version>2.26.12</m:dependency.management__software.amazon.awssdk__apigatewayv2__version>
+		<m:dependency.management__software.amazon.awssdk__applicationautoscaling__version>2.26.12</m:dependency.management__software.amazon.awssdk__applicationautoscaling__version>
+		<m:dependency.management__software.amazon.awssdk__applicationdiscovery__version>2.26.12</m:dependency.management__software.amazon.awssdk__applicationdiscovery__version>
+		<m:dependency.management__software.amazon.awssdk__appmesh__version>2.26.12</m:dependency.management__software.amazon.awssdk__appmesh__version>
+		<m:dependency.management__software.amazon.awssdk__appstream__version>2.26.12</m:dependency.management__software.amazon.awssdk__appstream__version>
+		<m:dependency.management__software.amazon.awssdk__appsync__version>2.26.12</m:dependency.management__software.amazon.awssdk__appsync__version>
+		<m:dependency.management__software.amazon.awssdk__athena__version>2.26.12</m:dependency.management__software.amazon.awssdk__athena__version>
+		<m:dependency.management__software.amazon.awssdk__autoscaling__version>2.26.12</m:dependency.management__software.amazon.awssdk__autoscaling__version>
+		<m:dependency.management__software.amazon.awssdk__autoscalingplans__version>2.26.12</m:dependency.management__software.amazon.awssdk__autoscalingplans__version>
+		<m:dependency.management__software.amazon.awssdk__backup__version>2.26.12</m:dependency.management__software.amazon.awssdk__backup__version>
+		<m:dependency.management__software.amazon.awssdk__batch__version>2.26.12</m:dependency.management__software.amazon.awssdk__batch__version>
+		<m:dependency.management__software.amazon.awssdk__budgets__version>2.26.12</m:dependency.management__software.amazon.awssdk__budgets__version>
+		<m:dependency.management__software.amazon.awssdk__chime__version>2.26.12</m:dependency.management__software.amazon.awssdk__chime__version>
+		<m:dependency.management__software.amazon.awssdk__cloud9__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloud9__version>
+		<m:dependency.management__software.amazon.awssdk__clouddirectory__version>2.26.12</m:dependency.management__software.amazon.awssdk__clouddirectory__version>
+		<m:dependency.management__software.amazon.awssdk__cloudformation__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudformation__version>
+		<m:dependency.management__software.amazon.awssdk__cloudfront__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudfront__version>
+		<m:dependency.management__software.amazon.awssdk__cloudhsm__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudhsm__version>
+		<m:dependency.management__software.amazon.awssdk__cloudhsmv2__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudhsmv2__version>
+		<m:dependency.management__software.amazon.awssdk__cloudsearch__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudsearch__version>
+		<m:dependency.management__software.amazon.awssdk__cloudsearchdomain__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudsearchdomain__version>
+		<m:dependency.management__software.amazon.awssdk__cloudtrail__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudtrail__version>
+		<m:dependency.management__software.amazon.awssdk__cloudwatch__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudwatch__version>
+		<m:dependency.management__software.amazon.awssdk__cloudwatchevents__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudwatchevents__version>
+		<m:dependency.management__software.amazon.awssdk__cloudwatchlogs__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudwatchlogs__version>
+		<m:dependency.management__software.amazon.awssdk__codebuild__version>2.26.12</m:dependency.management__software.amazon.awssdk__codebuild__version>
+		<m:dependency.management__software.amazon.awssdk__codecommit__version>2.26.12</m:dependency.management__software.amazon.awssdk__codecommit__version>
+		<m:dependency.management__software.amazon.awssdk__codedeploy__version>2.26.12</m:dependency.management__software.amazon.awssdk__codedeploy__version>
+		<m:dependency.management__software.amazon.awssdk__codepipeline__version>2.26.12</m:dependency.management__software.amazon.awssdk__codepipeline__version>
+		<m:dependency.management__software.amazon.awssdk__codestar__version>2.26.12</m:dependency.management__software.amazon.awssdk__codestar__version>
+		<m:dependency.management__software.amazon.awssdk__cognitoidentity__version>2.26.12</m:dependency.management__software.amazon.awssdk__cognitoidentity__version>
+		<m:dependency.management__software.amazon.awssdk__cognitoidentityprovider__version>2.26.12</m:dependency.management__software.amazon.awssdk__cognitoidentityprovider__version>
+		<m:dependency.management__software.amazon.awssdk__cognitosync__version>2.26.12</m:dependency.management__software.amazon.awssdk__cognitosync__version>
+		<m:dependency.management__software.amazon.awssdk__comprehend__version>2.26.12</m:dependency.management__software.amazon.awssdk__comprehend__version>
+		<m:dependency.management__software.amazon.awssdk__comprehendmedical__version>2.26.12</m:dependency.management__software.amazon.awssdk__comprehendmedical__version>
+		<m:dependency.management__software.amazon.awssdk__config__version>2.26.12</m:dependency.management__software.amazon.awssdk__config__version>
+		<m:dependency.management__software.amazon.awssdk__connect__version>2.26.12</m:dependency.management__software.amazon.awssdk__connect__version>
+		<m:dependency.management__software.amazon.awssdk__costandusagereport__version>2.26.12</m:dependency.management__software.amazon.awssdk__costandusagereport__version>
+		<m:dependency.management__software.amazon.awssdk__costexplorer__version>2.26.12</m:dependency.management__software.amazon.awssdk__costexplorer__version>
+		<m:dependency.management__software.amazon.awssdk__databasemigration__version>2.26.12</m:dependency.management__software.amazon.awssdk__databasemigration__version>
+		<m:dependency.management__software.amazon.awssdk__datapipeline__version>2.26.12</m:dependency.management__software.amazon.awssdk__datapipeline__version>
+		<m:dependency.management__software.amazon.awssdk__datasync__version>2.26.12</m:dependency.management__software.amazon.awssdk__datasync__version>
+		<m:dependency.management__software.amazon.awssdk__dax__version>2.26.12</m:dependency.management__software.amazon.awssdk__dax__version>
+		<m:dependency.management__software.amazon.awssdk__devicefarm__version>2.26.12</m:dependency.management__software.amazon.awssdk__devicefarm__version>
+		<m:dependency.management__software.amazon.awssdk__directconnect__version>2.26.12</m:dependency.management__software.amazon.awssdk__directconnect__version>
+		<m:dependency.management__software.amazon.awssdk__directory__version>2.26.12</m:dependency.management__software.amazon.awssdk__directory__version>
+		<m:dependency.management__software.amazon.awssdk__dlm__version>2.26.12</m:dependency.management__software.amazon.awssdk__dlm__version>
+		<m:dependency.management__software.amazon.awssdk__docdb__version>2.26.12</m:dependency.management__software.amazon.awssdk__docdb__version>
+		<m:dependency.management__software.amazon.awssdk__dynamodb__version>2.26.12</m:dependency.management__software.amazon.awssdk__dynamodb__version>
+		<m:dependency.management__software.amazon.awssdk__dynamodb-enhanced__version>2.26.12</m:dependency.management__software.amazon.awssdk__dynamodb-enhanced__version>
+		<m:dependency.management__software.amazon.awssdk__ec2__version>2.26.12</m:dependency.management__software.amazon.awssdk__ec2__version>
+		<m:dependency.management__software.amazon.awssdk__ecr__version>2.26.12</m:dependency.management__software.amazon.awssdk__ecr__version>
+		<m:dependency.management__software.amazon.awssdk__ecs__version>2.26.12</m:dependency.management__software.amazon.awssdk__ecs__version>
+		<m:dependency.management__software.amazon.awssdk__efs__version>2.26.12</m:dependency.management__software.amazon.awssdk__efs__version>
+		<m:dependency.management__software.amazon.awssdk__eks__version>2.26.12</m:dependency.management__software.amazon.awssdk__eks__version>
+		<m:dependency.management__software.amazon.awssdk__elasticache__version>2.26.12</m:dependency.management__software.amazon.awssdk__elasticache__version>
+		<m:dependency.management__software.amazon.awssdk__elasticbeanstalk__version>2.26.12</m:dependency.management__software.amazon.awssdk__elasticbeanstalk__version>
+		<m:dependency.management__software.amazon.awssdk__elasticloadbalancing__version>2.26.12</m:dependency.management__software.amazon.awssdk__elasticloadbalancing__version>
+		<m:dependency.management__software.amazon.awssdk__elasticloadbalancingv2__version>2.26.12</m:dependency.management__software.amazon.awssdk__elasticloadbalancingv2__version>
+		<m:dependency.management__software.amazon.awssdk__elasticsearch__version>2.26.12</m:dependency.management__software.amazon.awssdk__elasticsearch__version>
+		<m:dependency.management__software.amazon.awssdk__elastictranscoder__version>2.26.12</m:dependency.management__software.amazon.awssdk__elastictranscoder__version>
+		<m:dependency.management__software.amazon.awssdk__emr__version>2.26.12</m:dependency.management__software.amazon.awssdk__emr__version>
+		<m:dependency.management__software.amazon.awssdk__firehose__version>2.26.12</m:dependency.management__software.amazon.awssdk__firehose__version>
+		<m:dependency.management__software.amazon.awssdk__fms__version>2.26.12</m:dependency.management__software.amazon.awssdk__fms__version>
+		<m:dependency.management__software.amazon.awssdk__fsx__version>2.26.12</m:dependency.management__software.amazon.awssdk__fsx__version>
+		<m:dependency.management__software.amazon.awssdk__gamelift__version>2.26.12</m:dependency.management__software.amazon.awssdk__gamelift__version>
+		<m:dependency.management__software.amazon.awssdk__glacier__version>2.26.12</m:dependency.management__software.amazon.awssdk__glacier__version>
+		<m:dependency.management__software.amazon.awssdk__globalaccelerator__version>2.26.12</m:dependency.management__software.amazon.awssdk__globalaccelerator__version>
+		<m:dependency.management__software.amazon.awssdk__glue__version>2.26.12</m:dependency.management__software.amazon.awssdk__glue__version>
+		<m:dependency.management__software.amazon.awssdk__greengrass__version>2.26.12</m:dependency.management__software.amazon.awssdk__greengrass__version>
+		<m:dependency.management__software.amazon.awssdk__guardduty__version>2.26.12</m:dependency.management__software.amazon.awssdk__guardduty__version>
+		<m:dependency.management__software.amazon.awssdk__health__version>2.26.12</m:dependency.management__software.amazon.awssdk__health__version>
+		<m:dependency.management__software.amazon.awssdk__iam__version>2.26.12</m:dependency.management__software.amazon.awssdk__iam__version>
+		<m:dependency.management__software.amazon.awssdk__inspector__version>2.26.12</m:dependency.management__software.amazon.awssdk__inspector__version>
+		<m:dependency.management__software.amazon.awssdk__iot__version>2.26.12</m:dependency.management__software.amazon.awssdk__iot__version>
+		<m:dependency.management__software.amazon.awssdk__iot1clickdevices__version>2.26.12</m:dependency.management__software.amazon.awssdk__iot1clickdevices__version>
+		<m:dependency.management__software.amazon.awssdk__iot1clickprojects__version>2.26.12</m:dependency.management__software.amazon.awssdk__iot1clickprojects__version>
+		<m:dependency.management__software.amazon.awssdk__iotanalytics__version>2.26.12</m:dependency.management__software.amazon.awssdk__iotanalytics__version>
+		<m:dependency.management__software.amazon.awssdk__iotdataplane__version>2.26.12</m:dependency.management__software.amazon.awssdk__iotdataplane__version>
+		<m:dependency.management__software.amazon.awssdk__iotjobsdataplane__version>2.26.12</m:dependency.management__software.amazon.awssdk__iotjobsdataplane__version>
+		<m:dependency.management__software.amazon.awssdk__kafka__version>2.26.12</m:dependency.management__software.amazon.awssdk__kafka__version>
+		<m:dependency.management__software.amazon.awssdk__kinesis__version>2.26.12</m:dependency.management__software.amazon.awssdk__kinesis__version>
+		<m:dependency.management__software.amazon.awssdk__kinesisanalytics__version>2.26.12</m:dependency.management__software.amazon.awssdk__kinesisanalytics__version>
+		<m:dependency.management__software.amazon.awssdk__kinesisanalyticsv2__version>2.26.12</m:dependency.management__software.amazon.awssdk__kinesisanalyticsv2__version>
+		<m:dependency.management__software.amazon.awssdk__kinesisvideo__version>2.26.12</m:dependency.management__software.amazon.awssdk__kinesisvideo__version>
+		<m:dependency.management__software.amazon.awssdk__kinesisvideoarchivedmedia__version>2.26.12</m:dependency.management__software.amazon.awssdk__kinesisvideoarchivedmedia__version>
+		<m:dependency.management__software.amazon.awssdk__kinesisvideomedia__version>2.26.12</m:dependency.management__software.amazon.awssdk__kinesisvideomedia__version>
+		<m:dependency.management__software.amazon.awssdk__kms__version>2.26.12</m:dependency.management__software.amazon.awssdk__kms__version>
+		<m:dependency.management__software.amazon.awssdk__lambda__version>2.26.12</m:dependency.management__software.amazon.awssdk__lambda__version>
+		<m:dependency.management__software.amazon.awssdk__lexmodelbuilding__version>2.26.12</m:dependency.management__software.amazon.awssdk__lexmodelbuilding__version>
+		<m:dependency.management__software.amazon.awssdk__lexruntime__version>2.26.12</m:dependency.management__software.amazon.awssdk__lexruntime__version>
+		<m:dependency.management__software.amazon.awssdk__licensemanager__version>2.26.12</m:dependency.management__software.amazon.awssdk__licensemanager__version>
+		<m:dependency.management__software.amazon.awssdk__lightsail__version>2.26.12</m:dependency.management__software.amazon.awssdk__lightsail__version>
+		<m:dependency.management__software.amazon.awssdk__machinelearning__version>2.26.12</m:dependency.management__software.amazon.awssdk__machinelearning__version>
+		<m:dependency.management__software.amazon.awssdk__managedblockchain__version>2.26.12</m:dependency.management__software.amazon.awssdk__managedblockchain__version>
+		<m:dependency.management__software.amazon.awssdk__marketplacecommerceanalytics__version>2.26.12</m:dependency.management__software.amazon.awssdk__marketplacecommerceanalytics__version>
+		<m:dependency.management__software.amazon.awssdk__marketplaceentitlement__version>2.26.12</m:dependency.management__software.amazon.awssdk__marketplaceentitlement__version>
+		<m:dependency.management__software.amazon.awssdk__marketplacemetering__version>2.26.12</m:dependency.management__software.amazon.awssdk__marketplacemetering__version>
+		<m:dependency.management__software.amazon.awssdk__mediaconnect__version>2.26.12</m:dependency.management__software.amazon.awssdk__mediaconnect__version>
+		<m:dependency.management__software.amazon.awssdk__mediaconvert__version>2.26.12</m:dependency.management__software.amazon.awssdk__mediaconvert__version>
+		<m:dependency.management__software.amazon.awssdk__medialive__version>2.26.12</m:dependency.management__software.amazon.awssdk__medialive__version>
+		<m:dependency.management__software.amazon.awssdk__mediapackage__version>2.26.12</m:dependency.management__software.amazon.awssdk__mediapackage__version>
+		<m:dependency.management__software.amazon.awssdk__mediapackagevod__version>2.26.12</m:dependency.management__software.amazon.awssdk__mediapackagevod__version>
+		<m:dependency.management__software.amazon.awssdk__mediastore__version>2.26.12</m:dependency.management__software.amazon.awssdk__mediastore__version>
+		<m:dependency.management__software.amazon.awssdk__mediastoredata__version>2.26.12</m:dependency.management__software.amazon.awssdk__mediastoredata__version>
+		<m:dependency.management__software.amazon.awssdk__mediatailor__version>2.26.12</m:dependency.management__software.amazon.awssdk__mediatailor__version>
+		<m:dependency.management__software.amazon.awssdk__migrationhub__version>2.26.12</m:dependency.management__software.amazon.awssdk__migrationhub__version>
+		<m:dependency.management__software.amazon.awssdk__mobile__version>2.26.12</m:dependency.management__software.amazon.awssdk__mobile__version>
+		<m:dependency.management__software.amazon.awssdk__mq__version>2.26.12</m:dependency.management__software.amazon.awssdk__mq__version>
+		<m:dependency.management__software.amazon.awssdk__mturk__version>2.26.12</m:dependency.management__software.amazon.awssdk__mturk__version>
+		<m:dependency.management__software.amazon.awssdk__neptune__version>2.26.12</m:dependency.management__software.amazon.awssdk__neptune__version>
+		<m:dependency.management__software.amazon.awssdk__opsworks__version>2.26.12</m:dependency.management__software.amazon.awssdk__opsworks__version>
+		<m:dependency.management__software.amazon.awssdk__opsworkscm__version>2.26.12</m:dependency.management__software.amazon.awssdk__opsworkscm__version>
+		<m:dependency.management__software.amazon.awssdk__organizations__version>2.26.12</m:dependency.management__software.amazon.awssdk__organizations__version>
+		<m:dependency.management__software.amazon.awssdk__pi__version>2.26.12</m:dependency.management__software.amazon.awssdk__pi__version>
+		<m:dependency.management__software.amazon.awssdk__pinpoint__version>2.26.12</m:dependency.management__software.amazon.awssdk__pinpoint__version>
+		<m:dependency.management__software.amazon.awssdk__pinpointemail__version>2.26.12</m:dependency.management__software.amazon.awssdk__pinpointemail__version>
+		<m:dependency.management__software.amazon.awssdk__pinpointsmsvoice__version>2.26.12</m:dependency.management__software.amazon.awssdk__pinpointsmsvoice__version>
+		<m:dependency.management__software.amazon.awssdk__polly__version>2.26.12</m:dependency.management__software.amazon.awssdk__polly__version>
+		<m:dependency.management__software.amazon.awssdk__pricing__version>2.26.12</m:dependency.management__software.amazon.awssdk__pricing__version>
+		<m:dependency.management__software.amazon.awssdk__quicksight__version>2.26.12</m:dependency.management__software.amazon.awssdk__quicksight__version>
+		<m:dependency.management__software.amazon.awssdk__ram__version>2.26.12</m:dependency.management__software.amazon.awssdk__ram__version>
+		<m:dependency.management__software.amazon.awssdk__rds__version>2.26.12</m:dependency.management__software.amazon.awssdk__rds__version>
+		<m:dependency.management__software.amazon.awssdk__rdsdata__version>2.26.12</m:dependency.management__software.amazon.awssdk__rdsdata__version>
+		<m:dependency.management__software.amazon.awssdk__redshift__version>2.26.12</m:dependency.management__software.amazon.awssdk__redshift__version>
+		<m:dependency.management__software.amazon.awssdk__rekognition__version>2.26.12</m:dependency.management__software.amazon.awssdk__rekognition__version>
+		<m:dependency.management__software.amazon.awssdk__resourcegroups__version>2.26.12</m:dependency.management__software.amazon.awssdk__resourcegroups__version>
+		<m:dependency.management__software.amazon.awssdk__resourcegroupstaggingapi__version>2.26.12</m:dependency.management__software.amazon.awssdk__resourcegroupstaggingapi__version>
+		<m:dependency.management__software.amazon.awssdk__robomaker__version>2.26.12</m:dependency.management__software.amazon.awssdk__robomaker__version>
+		<m:dependency.management__software.amazon.awssdk__route53__version>2.26.12</m:dependency.management__software.amazon.awssdk__route53__version>
+		<m:dependency.management__software.amazon.awssdk__route53domains__version>2.26.12</m:dependency.management__software.amazon.awssdk__route53domains__version>
+		<m:dependency.management__software.amazon.awssdk__route53resolver__version>2.26.12</m:dependency.management__software.amazon.awssdk__route53resolver__version>
+		<m:dependency.management__software.amazon.awssdk__s3__version>2.26.12</m:dependency.management__software.amazon.awssdk__s3__version>
+		<m:dependency.management__software.amazon.awssdk__s3control__version>2.26.12</m:dependency.management__software.amazon.awssdk__s3control__version>
+		<m:dependency.management__software.amazon.awssdk__sagemaker__version>2.26.12</m:dependency.management__software.amazon.awssdk__sagemaker__version>
+		<m:dependency.management__software.amazon.awssdk__sagemakerruntime__version>2.26.12</m:dependency.management__software.amazon.awssdk__sagemakerruntime__version>
+		<m:dependency.management__software.amazon.awssdk__secretsmanager__version>2.26.12</m:dependency.management__software.amazon.awssdk__secretsmanager__version>
+		<m:dependency.management__software.amazon.awssdk__securityhub__version>2.26.12</m:dependency.management__software.amazon.awssdk__securityhub__version>
+		<m:dependency.management__software.amazon.awssdk__serverlessapplicationrepository__version>2.26.12</m:dependency.management__software.amazon.awssdk__serverlessapplicationrepository__version>
+		<m:dependency.management__software.amazon.awssdk__servicecatalog__version>2.26.12</m:dependency.management__software.amazon.awssdk__servicecatalog__version>
+		<m:dependency.management__software.amazon.awssdk__servicediscovery__version>2.26.12</m:dependency.management__software.amazon.awssdk__servicediscovery__version>
+		<m:dependency.management__software.amazon.awssdk__ses__version>2.26.12</m:dependency.management__software.amazon.awssdk__ses__version>
+		<m:dependency.management__software.amazon.awssdk__sfn__version>2.26.12</m:dependency.management__software.amazon.awssdk__sfn__version>
+		<m:dependency.management__software.amazon.awssdk__shield__version>2.26.12</m:dependency.management__software.amazon.awssdk__shield__version>
+		<m:dependency.management__software.amazon.awssdk__signer__version>2.26.12</m:dependency.management__software.amazon.awssdk__signer__version>
+		<m:dependency.management__software.amazon.awssdk__sms__version>2.26.12</m:dependency.management__software.amazon.awssdk__sms__version>
+		<m:dependency.management__software.amazon.awssdk__snowball__version>2.26.12</m:dependency.management__software.amazon.awssdk__snowball__version>
+		<m:dependency.management__software.amazon.awssdk__sns__version>2.26.12</m:dependency.management__software.amazon.awssdk__sns__version>
+		<m:dependency.management__software.amazon.awssdk__sqs__version>2.26.12</m:dependency.management__software.amazon.awssdk__sqs__version>
+		<m:dependency.management__software.amazon.awssdk__ssm__version>2.26.12</m:dependency.management__software.amazon.awssdk__ssm__version>
+		<m:dependency.management__software.amazon.awssdk__storagegateway__version>2.26.12</m:dependency.management__software.amazon.awssdk__storagegateway__version>
+		<m:dependency.management__software.amazon.awssdk__sts__version>2.26.12</m:dependency.management__software.amazon.awssdk__sts__version>
+		<m:dependency.management__software.amazon.awssdk__support__version>2.26.12</m:dependency.management__software.amazon.awssdk__support__version>
+		<m:dependency.management__software.amazon.awssdk__swf__version>2.26.12</m:dependency.management__software.amazon.awssdk__swf__version>
+		<m:dependency.management__software.amazon.awssdk__textract__version>2.26.12</m:dependency.management__software.amazon.awssdk__textract__version>
+		<m:dependency.management__software.amazon.awssdk__transcribe__version>2.26.12</m:dependency.management__software.amazon.awssdk__transcribe__version>
+		<m:dependency.management__software.amazon.awssdk__transcribestreaming__version>2.26.12</m:dependency.management__software.amazon.awssdk__transcribestreaming__version>
+		<m:dependency.management__software.amazon.awssdk__transfer__version>2.26.12</m:dependency.management__software.amazon.awssdk__transfer__version>
+		<m:dependency.management__software.amazon.awssdk__translate__version>2.26.12</m:dependency.management__software.amazon.awssdk__translate__version>
+		<m:dependency.management__software.amazon.awssdk__waf__version>2.26.12</m:dependency.management__software.amazon.awssdk__waf__version>
+		<m:dependency.management__software.amazon.awssdk__workdocs__version>2.26.12</m:dependency.management__software.amazon.awssdk__workdocs__version>
+		<m:dependency.management__software.amazon.awssdk__worklink__version>2.26.12</m:dependency.management__software.amazon.awssdk__worklink__version>
+		<m:dependency.management__software.amazon.awssdk__workmail__version>2.26.12</m:dependency.management__software.amazon.awssdk__workmail__version>
+		<m:dependency.management__software.amazon.awssdk__workspaces__version>2.26.12</m:dependency.management__software.amazon.awssdk__workspaces__version>
+		<m:dependency.management__software.amazon.awssdk__xray__version>2.26.12</m:dependency.management__software.amazon.awssdk__xray__version>
+		<m:dependency.management__software.amazon.awssdk__groundstation__version>2.26.12</m:dependency.management__software.amazon.awssdk__groundstation__version>
+		<m:dependency.management__software.amazon.awssdk__iotthingsgraph__version>2.26.12</m:dependency.management__software.amazon.awssdk__iotthingsgraph__version>
+		<m:dependency.management__software.amazon.awssdk__iotevents__version>2.26.12</m:dependency.management__software.amazon.awssdk__iotevents__version>
+		<m:dependency.management__software.amazon.awssdk__ioteventsdata__version>2.26.12</m:dependency.management__software.amazon.awssdk__ioteventsdata__version>
+		<m:dependency.management__software.amazon.awssdk__personalizeruntime__version>2.26.12</m:dependency.management__software.amazon.awssdk__personalizeruntime__version>
+		<m:dependency.management__software.amazon.awssdk__personalize__version>2.26.12</m:dependency.management__software.amazon.awssdk__personalize__version>
+		<m:dependency.management__software.amazon.awssdk__personalizeevents__version>2.26.12</m:dependency.management__software.amazon.awssdk__personalizeevents__version>
+		<m:dependency.management__software.amazon.awssdk__servicequotas__version>2.26.12</m:dependency.management__software.amazon.awssdk__servicequotas__version>
+		<m:dependency.management__software.amazon.awssdk__applicationinsights__version>2.26.12</m:dependency.management__software.amazon.awssdk__applicationinsights__version>
+		<m:dependency.management__software.amazon.awssdk__ec2instanceconnect__version>2.26.12</m:dependency.management__software.amazon.awssdk__ec2instanceconnect__version>
+		<m:dependency.management__software.amazon.awssdk__eventbridge__version>2.26.12</m:dependency.management__software.amazon.awssdk__eventbridge__version>
+		<m:dependency.management__software.amazon.awssdk__lakeformation__version>2.26.12</m:dependency.management__software.amazon.awssdk__lakeformation__version>
+		<m:dependency.management__software.amazon.awssdk__forecast__version>2.26.12</m:dependency.management__software.amazon.awssdk__forecast__version>
+		<m:dependency.management__software.amazon.awssdk__forecastquery__version>2.26.12</m:dependency.management__software.amazon.awssdk__forecastquery__version>
+		<m:dependency.management__software.amazon.awssdk__qldb__version>2.26.12</m:dependency.management__software.amazon.awssdk__qldb__version>
+		<m:dependency.management__software.amazon.awssdk__qldbsession__version>2.26.12</m:dependency.management__software.amazon.awssdk__qldbsession__version>
+		<m:dependency.management__software.amazon.awssdk__workmailmessageflow__version>2.26.12</m:dependency.management__software.amazon.awssdk__workmailmessageflow__version>
+		<m:dependency.management__software.amazon.awssdk__codestarnotifications__version>2.26.12</m:dependency.management__software.amazon.awssdk__codestarnotifications__version>
+		<m:dependency.management__software.amazon.awssdk__savingsplans__version>2.26.12</m:dependency.management__software.amazon.awssdk__savingsplans__version>
+		<m:dependency.management__software.amazon.awssdk__sso__version>2.26.12</m:dependency.management__software.amazon.awssdk__sso__version>
+		<m:dependency.management__software.amazon.awssdk__ssooidc__version>2.26.12</m:dependency.management__software.amazon.awssdk__ssooidc__version>
+		<m:dependency.management__software.amazon.awssdk__marketplacecatalog__version>2.26.12</m:dependency.management__software.amazon.awssdk__marketplacecatalog__version>
+		<m:dependency.management__software.amazon.awssdk__sesv2__version>2.26.12</m:dependency.management__software.amazon.awssdk__sesv2__version>
+		<m:dependency.management__software.amazon.awssdk__dataexchange__version>2.26.12</m:dependency.management__software.amazon.awssdk__dataexchange__version>
+		<m:dependency.management__software.amazon.awssdk__migrationhubconfig__version>2.26.12</m:dependency.management__software.amazon.awssdk__migrationhubconfig__version>
+		<m:dependency.management__software.amazon.awssdk__connectparticipant__version>2.26.12</m:dependency.management__software.amazon.awssdk__connectparticipant__version>
+		<m:dependency.management__software.amazon.awssdk__wafv2__version>2.26.12</m:dependency.management__software.amazon.awssdk__wafv2__version>
+		<m:dependency.management__software.amazon.awssdk__appconfig__version>2.26.12</m:dependency.management__software.amazon.awssdk__appconfig__version>
+		<m:dependency.management__software.amazon.awssdk__iotsecuretunneling__version>2.26.12</m:dependency.management__software.amazon.awssdk__iotsecuretunneling__version>
+		<m:dependency.management__software.amazon.awssdk__elasticinference__version>2.26.12</m:dependency.management__software.amazon.awssdk__elasticinference__version>
+		<m:dependency.management__software.amazon.awssdk__imagebuilder__version>2.26.12</m:dependency.management__software.amazon.awssdk__imagebuilder__version>
+		<m:dependency.management__software.amazon.awssdk__schemas__version>2.26.12</m:dependency.management__software.amazon.awssdk__schemas__version>
+		<m:dependency.management__software.amazon.awssdk__accessanalyzer__version>2.26.12</m:dependency.management__software.amazon.awssdk__accessanalyzer__version>
+		<m:dependency.management__software.amazon.awssdk__computeoptimizer__version>2.26.12</m:dependency.management__software.amazon.awssdk__computeoptimizer__version>
+		<m:dependency.management__software.amazon.awssdk__networkmanager__version>2.26.12</m:dependency.management__software.amazon.awssdk__networkmanager__version>
+		<m:dependency.management__software.amazon.awssdk__kendra__version>2.26.12</m:dependency.management__software.amazon.awssdk__kendra__version>
+		<m:dependency.management__software.amazon.awssdk__frauddetector__version>2.26.12</m:dependency.management__software.amazon.awssdk__frauddetector__version>
+		<m:dependency.management__software.amazon.awssdk__codegurureviewer__version>2.26.12</m:dependency.management__software.amazon.awssdk__codegurureviewer__version>
+		<m:dependency.management__software.amazon.awssdk__codeguruprofiler__version>2.26.12</m:dependency.management__software.amazon.awssdk__codeguruprofiler__version>
+		<m:dependency.management__software.amazon.awssdk__outposts__version>2.26.12</m:dependency.management__software.amazon.awssdk__outposts__version>
+		<m:dependency.management__software.amazon.awssdk__sagemakera2iruntime__version>2.26.12</m:dependency.management__software.amazon.awssdk__sagemakera2iruntime__version>
+		<m:dependency.management__software.amazon.awssdk__ebs__version>2.26.12</m:dependency.management__software.amazon.awssdk__ebs__version>
+		<m:dependency.management__software.amazon.awssdk__kinesisvideosignaling__version>2.26.12</m:dependency.management__software.amazon.awssdk__kinesisvideosignaling__version>
+		<m:dependency.management__software.amazon.awssdk__detective__version>2.26.12</m:dependency.management__software.amazon.awssdk__detective__version>
+		<m:dependency.management__software.amazon.awssdk__codestarconnections__version>2.26.12</m:dependency.management__software.amazon.awssdk__codestarconnections__version>
+		<m:dependency.management__software.amazon.awssdk__synthetics__version>2.26.12</m:dependency.management__software.amazon.awssdk__synthetics__version>
+		<m:dependency.management__software.amazon.awssdk__iotsitewise__version>2.26.12</m:dependency.management__software.amazon.awssdk__iotsitewise__version>
+		<m:dependency.management__software.amazon.awssdk__macie2__version>2.26.12</m:dependency.management__software.amazon.awssdk__macie2__version>
+		<m:dependency.management__software.amazon.awssdk__codeartifact__version>2.26.12</m:dependency.management__software.amazon.awssdk__codeartifact__version>
+		<m:dependency.management__software.amazon.awssdk__ivs__version>2.26.12</m:dependency.management__software.amazon.awssdk__ivs__version>
+		<m:dependency.management__software.amazon.awssdk__braket__version>2.26.12</m:dependency.management__software.amazon.awssdk__braket__version>
+		<m:dependency.management__software.amazon.awssdk__identitystore__version>2.26.12</m:dependency.management__software.amazon.awssdk__identitystore__version>
+		<m:dependency.management__software.amazon.awssdk__appflow__version>2.26.12</m:dependency.management__software.amazon.awssdk__appflow__version>
+		<m:dependency.management__software.amazon.awssdk__redshiftdata__version>2.26.12</m:dependency.management__software.amazon.awssdk__redshiftdata__version>
+		<m:dependency.management__software.amazon.awssdk__ssoadmin__version>2.26.12</m:dependency.management__software.amazon.awssdk__ssoadmin__version>
+		<m:dependency.management__software.amazon.awssdk__timestreamwrite__version>2.26.12</m:dependency.management__software.amazon.awssdk__timestreamwrite__version>
+		<m:dependency.management__software.amazon.awssdk__timestreamquery__version>2.26.12</m:dependency.management__software.amazon.awssdk__timestreamquery__version>
+		<m:dependency.management__software.amazon.awssdk__s3outposts__version>2.26.12</m:dependency.management__software.amazon.awssdk__s3outposts__version>
+		<m:dependency.management__software.amazon.awssdk__metrics-spi__version>2.26.12</m:dependency.management__software.amazon.awssdk__metrics-spi__version>
+		<m:dependency.management__software.amazon.awssdk__databrew__version>2.26.12</m:dependency.management__software.amazon.awssdk__databrew__version>
+		<m:dependency.management__software.amazon.awssdk__servicecatalogappregistry__version>2.26.12</m:dependency.management__software.amazon.awssdk__servicecatalogappregistry__version>
+		<m:dependency.management__software.amazon.awssdk__networkfirewall__version>2.26.12</m:dependency.management__software.amazon.awssdk__networkfirewall__version>
+		<m:dependency.management__software.amazon.awssdk__mwaa__version>2.26.12</m:dependency.management__software.amazon.awssdk__mwaa__version>
+		<m:dependency.management__software.amazon.awssdk__devopsguru__version>2.26.12</m:dependency.management__software.amazon.awssdk__devopsguru__version>
+		<m:dependency.management__software.amazon.awssdk__sagemakerfeaturestoreruntime__version>2.26.12</m:dependency.management__software.amazon.awssdk__sagemakerfeaturestoreruntime__version>
+		<m:dependency.management__software.amazon.awssdk__appintegrations__version>2.26.12</m:dependency.management__software.amazon.awssdk__appintegrations__version>
+		<m:dependency.management__software.amazon.awssdk__ecrpublic__version>2.26.12</m:dependency.management__software.amazon.awssdk__ecrpublic__version>
+		<m:dependency.management__software.amazon.awssdk__amplifybackend__version>2.26.12</m:dependency.management__software.amazon.awssdk__amplifybackend__version>
+		<m:dependency.management__software.amazon.awssdk__connectcontactlens__version>2.26.12</m:dependency.management__software.amazon.awssdk__connectcontactlens__version>
+		<m:dependency.management__software.amazon.awssdk__lookoutvision__version>2.26.12</m:dependency.management__software.amazon.awssdk__lookoutvision__version>
+		<m:dependency.management__software.amazon.awssdk__customerprofiles__version>2.26.12</m:dependency.management__software.amazon.awssdk__customerprofiles__version>
+		<m:dependency.management__software.amazon.awssdk__emrcontainers__version>2.26.12</m:dependency.management__software.amazon.awssdk__emrcontainers__version>
+		<m:dependency.management__software.amazon.awssdk__sagemakeredge__version>2.26.12</m:dependency.management__software.amazon.awssdk__sagemakeredge__version>
+		<m:dependency.management__software.amazon.awssdk__healthlake__version>2.26.12</m:dependency.management__software.amazon.awssdk__healthlake__version>
+		<m:dependency.management__software.amazon.awssdk__auditmanager__version>2.26.12</m:dependency.management__software.amazon.awssdk__auditmanager__version>
+		<m:dependency.management__software.amazon.awssdk__amp__version>2.26.12</m:dependency.management__software.amazon.awssdk__amp__version>
+		<m:dependency.management__software.amazon.awssdk__greengrassv2__version>2.26.12</m:dependency.management__software.amazon.awssdk__greengrassv2__version>
+		<m:dependency.management__software.amazon.awssdk__iotwireless__version>2.26.12</m:dependency.management__software.amazon.awssdk__iotwireless__version>
+		<m:dependency.management__software.amazon.awssdk__iotfleethub__version>2.26.12</m:dependency.management__software.amazon.awssdk__iotfleethub__version>
+		<m:dependency.management__software.amazon.awssdk__iotdeviceadvisor__version>2.26.12</m:dependency.management__software.amazon.awssdk__iotdeviceadvisor__version>
+		<m:dependency.management__software.amazon.awssdk__location__version>2.26.12</m:dependency.management__software.amazon.awssdk__location__version>
+		<m:dependency.management__software.amazon.awssdk__wellarchitected__version>2.26.12</m:dependency.management__software.amazon.awssdk__wellarchitected__version>
+		<m:dependency.management__software.amazon.awssdk__lexruntimev2__version>2.26.12</m:dependency.management__software.amazon.awssdk__lexruntimev2__version>
+		<m:dependency.management__software.amazon.awssdk__lexmodelsv2__version>2.26.12</m:dependency.management__software.amazon.awssdk__lexmodelsv2__version>
+		<m:dependency.management__software.amazon.awssdk__fis__version>2.26.12</m:dependency.management__software.amazon.awssdk__fis__version>
+		<m:dependency.management__software.amazon.awssdk__lookoutmetrics__version>2.26.12</m:dependency.management__software.amazon.awssdk__lookoutmetrics__version>
+		<m:dependency.management__software.amazon.awssdk__mgn__version>2.26.12</m:dependency.management__software.amazon.awssdk__mgn__version>
+		<m:dependency.management__software.amazon.awssdk__lookoutequipment__version>2.26.12</m:dependency.management__software.amazon.awssdk__lookoutequipment__version>
+		<m:dependency.management__software.amazon.awssdk__nimble__version>2.26.12</m:dependency.management__software.amazon.awssdk__nimble__version>
+		<m:dependency.management__software.amazon.awssdk__finspacedata__version>2.26.12</m:dependency.management__software.amazon.awssdk__finspacedata__version>
+		<m:dependency.management__software.amazon.awssdk__finspace__version>2.26.12</m:dependency.management__software.amazon.awssdk__finspace__version>
+		<m:dependency.management__software.amazon.awssdk__ssmincidents__version>2.26.12</m:dependency.management__software.amazon.awssdk__ssmincidents__version>
+		<m:dependency.management__software.amazon.awssdk__ssmcontacts__version>2.26.12</m:dependency.management__software.amazon.awssdk__ssmcontacts__version>
+		<m:dependency.management__software.amazon.awssdk__applicationcostprofiler__version>2.26.12</m:dependency.management__software.amazon.awssdk__applicationcostprofiler__version>
+		<m:dependency.management__software.amazon.awssdk__apprunner__version>2.26.12</m:dependency.management__software.amazon.awssdk__apprunner__version>
+		<m:dependency.management__software.amazon.awssdk__proton__version>2.26.12</m:dependency.management__software.amazon.awssdk__proton__version>
+		<m:dependency.management__software.amazon.awssdk__route53recoveryreadiness__version>2.26.12</m:dependency.management__software.amazon.awssdk__route53recoveryreadiness__version>
+		<m:dependency.management__software.amazon.awssdk__route53recoverycontrolconfig__version>2.26.12</m:dependency.management__software.amazon.awssdk__route53recoverycontrolconfig__version>
+		<m:dependency.management__software.amazon.awssdk__route53recoverycluster__version>2.26.12</m:dependency.management__software.amazon.awssdk__route53recoverycluster__version>
+		<m:dependency.management__software.amazon.awssdk__chimesdkmessaging__version>2.26.12</m:dependency.management__software.amazon.awssdk__chimesdkmessaging__version>
+		<m:dependency.management__software.amazon.awssdk__chimesdkidentity__version>2.26.12</m:dependency.management__software.amazon.awssdk__chimesdkidentity__version>
+		<m:dependency.management__software.amazon.awssdk__snowdevicemanagement__version>2.26.12</m:dependency.management__software.amazon.awssdk__snowdevicemanagement__version>
+		<m:dependency.management__software.amazon.awssdk__memorydb__version>2.26.12</m:dependency.management__software.amazon.awssdk__memorydb__version>
+		<m:dependency.management__software.amazon.awssdk__opensearch__version>2.26.12</m:dependency.management__software.amazon.awssdk__opensearch__version>
+		<m:dependency.management__software.amazon.awssdk__kafkaconnect__version>2.26.12</m:dependency.management__software.amazon.awssdk__kafkaconnect__version>
+		<m:dependency.management__software.amazon.awssdk__wisdom__version>2.26.12</m:dependency.management__software.amazon.awssdk__wisdom__version>
+		<m:dependency.management__software.amazon.awssdk__voiceid__version>2.26.12</m:dependency.management__software.amazon.awssdk__voiceid__version>
+		<m:dependency.management__software.amazon.awssdk__account__version>2.26.12</m:dependency.management__software.amazon.awssdk__account__version>
+		<m:dependency.management__software.amazon.awssdk__cloudcontrol__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudcontrol__version>
+		<m:dependency.management__software.amazon.awssdk__grafana__version>2.26.12</m:dependency.management__software.amazon.awssdk__grafana__version>
+		<m:dependency.management__software.amazon.awssdk__panorama__version>2.26.12</m:dependency.management__software.amazon.awssdk__panorama__version>
+		<m:dependency.management__software.amazon.awssdk__chimesdkmeetings__version>2.26.12</m:dependency.management__software.amazon.awssdk__chimesdkmeetings__version>
+		<m:dependency.management__software.amazon.awssdk__resiliencehub__version>2.26.12</m:dependency.management__software.amazon.awssdk__resiliencehub__version>
+		<m:dependency.management__software.amazon.awssdk__migrationhubstrategy__version>2.26.12</m:dependency.management__software.amazon.awssdk__migrationhubstrategy__version>
+		<m:dependency.management__software.amazon.awssdk__drs__version>2.26.12</m:dependency.management__software.amazon.awssdk__drs__version>
+		<m:dependency.management__software.amazon.awssdk__appconfigdata__version>2.26.12</m:dependency.management__software.amazon.awssdk__appconfigdata__version>
+		<m:dependency.management__software.amazon.awssdk__migrationhubrefactorspaces__version>2.26.12</m:dependency.management__software.amazon.awssdk__migrationhubrefactorspaces__version>
+		<m:dependency.management__software.amazon.awssdk__inspector2__version>2.26.12</m:dependency.management__software.amazon.awssdk__inspector2__version>
+		<m:dependency.management__software.amazon.awssdk__evidently__version>2.26.12</m:dependency.management__software.amazon.awssdk__evidently__version>
+		<m:dependency.management__software.amazon.awssdk__rum__version>2.26.12</m:dependency.management__software.amazon.awssdk__rum__version>
+		<m:dependency.management__software.amazon.awssdk__rbin__version>2.26.12</m:dependency.management__software.amazon.awssdk__rbin__version>
+		<m:dependency.management__software.amazon.awssdk__iottwinmaker__version>2.26.12</m:dependency.management__software.amazon.awssdk__iottwinmaker__version>
+		<m:dependency.management__software.amazon.awssdk__workspacesweb__version>2.26.12</m:dependency.management__software.amazon.awssdk__workspacesweb__version>
+		<m:dependency.management__software.amazon.awssdk__backupgateway__version>2.26.12</m:dependency.management__software.amazon.awssdk__backupgateway__version>
+		<m:dependency.management__software.amazon.awssdk__amplifyuibuilder__version>2.26.12</m:dependency.management__software.amazon.awssdk__amplifyuibuilder__version>
+		<m:dependency.management__software.amazon.awssdk__keyspaces__version>2.26.12</m:dependency.management__software.amazon.awssdk__keyspaces__version>
+		<m:dependency.management__software.amazon.awssdk__billingconductor__version>2.26.12</m:dependency.management__software.amazon.awssdk__billingconductor__version>
+		<m:dependency.management__software.amazon.awssdk__pinpointsmsvoicev2__version>2.26.12</m:dependency.management__software.amazon.awssdk__pinpointsmsvoicev2__version>
+		<m:dependency.management__software.amazon.awssdk__ivschat__version>2.26.12</m:dependency.management__software.amazon.awssdk__ivschat__version>
+		<m:dependency.management__software.amazon.awssdk__chimesdkmediapipelines__version>2.26.12</m:dependency.management__software.amazon.awssdk__chimesdkmediapipelines__version>
+		<m:dependency.management__software.amazon.awssdk__emrserverless__version>2.26.12</m:dependency.management__software.amazon.awssdk__emrserverless__version>
+		<m:dependency.management__software.amazon.awssdk__m2__version>2.26.12</m:dependency.management__software.amazon.awssdk__m2__version>
+		<m:dependency.management__software.amazon.awssdk__connectcampaigns__version>2.26.12</m:dependency.management__software.amazon.awssdk__connectcampaigns__version>
+		<m:dependency.management__software.amazon.awssdk__redshiftserverless__version>2.26.12</m:dependency.management__software.amazon.awssdk__redshiftserverless__version>
+		<m:dependency.management__software.amazon.awssdk__rolesanywhere__version>2.26.12</m:dependency.management__software.amazon.awssdk__rolesanywhere__version>
+		<m:dependency.management__software.amazon.awssdk__licensemanagerusersubscriptions__version>2.26.12</m:dependency.management__software.amazon.awssdk__licensemanagerusersubscriptions__version>
+		<m:dependency.management__software.amazon.awssdk__privatenetworks__version>2.26.12</m:dependency.management__software.amazon.awssdk__privatenetworks__version>
+		<m:dependency.management__software.amazon.awssdk__supportapp__version>2.26.12</m:dependency.management__software.amazon.awssdk__supportapp__version>
+		<m:dependency.management__software.amazon.awssdk__controltower__version>2.26.12</m:dependency.management__software.amazon.awssdk__controltower__version>
+		<m:dependency.management__software.amazon.awssdk__iotfleetwise__version>2.26.12</m:dependency.management__software.amazon.awssdk__iotfleetwise__version>
+		<m:dependency.management__software.amazon.awssdk__migrationhuborchestrator__version>2.26.12</m:dependency.management__software.amazon.awssdk__migrationhuborchestrator__version>
+		<m:dependency.management__software.amazon.awssdk__connectcases__version>2.26.12</m:dependency.management__software.amazon.awssdk__connectcases__version>
+		<m:dependency.management__software.amazon.awssdk__resourceexplorer2__version>2.26.12</m:dependency.management__software.amazon.awssdk__resourceexplorer2__version>
+		<m:dependency.management__software.amazon.awssdk__scheduler__version>2.26.12</m:dependency.management__software.amazon.awssdk__scheduler__version>
+		<m:dependency.management__software.amazon.awssdk__ssmsap__version>2.26.12</m:dependency.management__software.amazon.awssdk__ssmsap__version>
+		<m:dependency.management__software.amazon.awssdk__chimesdkvoice__version>2.26.12</m:dependency.management__software.amazon.awssdk__chimesdkvoice__version>
+		<m:dependency.management__software.amazon.awssdk__oam__version>2.26.12</m:dependency.management__software.amazon.awssdk__oam__version>
+		<m:dependency.management__software.amazon.awssdk__arczonalshift__version>2.26.12</m:dependency.management__software.amazon.awssdk__arczonalshift__version>
+		<m:dependency.management__software.amazon.awssdk__simspaceweaver__version>2.26.12</m:dependency.management__software.amazon.awssdk__simspaceweaver__version>
+		<m:dependency.management__software.amazon.awssdk__securitylake__version>2.26.12</m:dependency.management__software.amazon.awssdk__securitylake__version>
+		<m:dependency.management__software.amazon.awssdk__opensearchserverless__version>2.26.12</m:dependency.management__software.amazon.awssdk__opensearchserverless__version>
+		<m:dependency.management__software.amazon.awssdk__omics__version>2.26.12</m:dependency.management__software.amazon.awssdk__omics__version>
+		<m:dependency.management__software.amazon.awssdk__docdbelastic__version>2.26.12</m:dependency.management__software.amazon.awssdk__docdbelastic__version>
+		<m:dependency.management__software.amazon.awssdk__sagemakergeospatial__version>2.26.12</m:dependency.management__software.amazon.awssdk__sagemakergeospatial__version>
+		<m:dependency.management__software.amazon.awssdk__pipes__version>2.26.12</m:dependency.management__software.amazon.awssdk__pipes__version>
+		<m:dependency.management__software.amazon.awssdk__codecatalyst__version>2.26.12</m:dependency.management__software.amazon.awssdk__codecatalyst__version>
+		<m:dependency.management__software.amazon.awssdk__sagemakermetrics__version>2.26.12</m:dependency.management__software.amazon.awssdk__sagemakermetrics__version>
+		<m:dependency.management__software.amazon.awssdk__kinesisvideowebrtcstorage__version>2.26.12</m:dependency.management__software.amazon.awssdk__kinesisvideowebrtcstorage__version>
+		<m:dependency.management__software.amazon.awssdk__licensemanagerlinuxsubscriptions__version>2.26.12</m:dependency.management__software.amazon.awssdk__licensemanagerlinuxsubscriptions__version>
+		<m:dependency.management__software.amazon.awssdk__kendraranking__version>2.26.12</m:dependency.management__software.amazon.awssdk__kendraranking__version>
+		<m:dependency.management__software.amazon.awssdk__cleanrooms__version>2.26.12</m:dependency.management__software.amazon.awssdk__cleanrooms__version>
+		<m:dependency.management__software.amazon.awssdk__cloudtraildata__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudtraildata__version>
+		<m:dependency.management__software.amazon.awssdk__imds__version>2.26.12</m:dependency.management__software.amazon.awssdk__imds__version>
+		<m:dependency.management__software.amazon.awssdk__tnb__version>2.26.12</m:dependency.management__software.amazon.awssdk__tnb__version>
+		<m:dependency.management__software.amazon.awssdk__internetmonitor__version>2.26.12</m:dependency.management__software.amazon.awssdk__internetmonitor__version>
+		<m:dependency.management__software.amazon.awssdk__ivsrealtime__version>2.26.12</m:dependency.management__software.amazon.awssdk__ivsrealtime__version>
+		<m:dependency.management__software.amazon.awssdk__vpclattice__version>2.26.12</m:dependency.management__software.amazon.awssdk__vpclattice__version>
+		<m:dependency.management__software.amazon.awssdk__osis__version>2.26.12</m:dependency.management__software.amazon.awssdk__osis__version>
+		<m:dependency.management__software.amazon.awssdk__mediapackagev2__version>2.26.12</m:dependency.management__software.amazon.awssdk__mediapackagev2__version>
+		<m:dependency.management__software.amazon.awssdk__paymentcryptographydata__version>2.26.12</m:dependency.management__software.amazon.awssdk__paymentcryptographydata__version>
+		<m:dependency.management__software.amazon.awssdk__paymentcryptography__version>2.26.12</m:dependency.management__software.amazon.awssdk__paymentcryptography__version>
+		<m:dependency.management__software.amazon.awssdk__codegurusecurity__version>2.26.12</m:dependency.management__software.amazon.awssdk__codegurusecurity__version>
+		<m:dependency.management__software.amazon.awssdk__verifiedpermissions__version>2.26.12</m:dependency.management__software.amazon.awssdk__verifiedpermissions__version>
+		<m:dependency.management__software.amazon.awssdk__appfabric__version>2.26.12</m:dependency.management__software.amazon.awssdk__appfabric__version>
+		<m:dependency.management__software.amazon.awssdk__medicalimaging__version>2.26.12</m:dependency.management__software.amazon.awssdk__medicalimaging__version>
+		<m:dependency.management__software.amazon.awssdk__entityresolution__version>2.26.12</m:dependency.management__software.amazon.awssdk__entityresolution__version>
+		<m:dependency.management__software.amazon.awssdk__managedblockchainquery__version>2.26.12</m:dependency.management__software.amazon.awssdk__managedblockchainquery__version>
+		<m:dependency.management__software.amazon.awssdk__pcaconnectorad__version>2.26.12</m:dependency.management__software.amazon.awssdk__pcaconnectorad__version>
+		<m:dependency.management__software.amazon.awssdk__neptunedata__version>2.26.12</m:dependency.management__software.amazon.awssdk__neptunedata__version>
+		<m:dependency.management__software.amazon.awssdk__bedrockruntime__version>2.26.12</m:dependency.management__software.amazon.awssdk__bedrockruntime__version>
+		<m:dependency.management__software.amazon.awssdk__bedrock__version>2.26.12</m:dependency.management__software.amazon.awssdk__bedrock__version>
+		<m:dependency.management__software.amazon.awssdk__datazone__version>2.26.12</m:dependency.management__software.amazon.awssdk__datazone__version>
+		<m:dependency.management__software.amazon.awssdk__launchwizard__version>2.26.12</m:dependency.management__software.amazon.awssdk__launchwizard__version>
+		<m:dependency.management__software.amazon.awssdk__trustedadvisor__version>2.26.12</m:dependency.management__software.amazon.awssdk__trustedadvisor__version>
+		<m:dependency.management__software.amazon.awssdk__cloudfrontkeyvaluestore__version>2.26.12</m:dependency.management__software.amazon.awssdk__cloudfrontkeyvaluestore__version>
+		<m:dependency.management__software.amazon.awssdk__inspectorscan__version>2.26.12</m:dependency.management__software.amazon.awssdk__inspectorscan__version>
+		<m:dependency.management__software.amazon.awssdk__costoptimizationhub__version>2.26.12</m:dependency.management__software.amazon.awssdk__costoptimizationhub__version>
+		<m:dependency.management__software.amazon.awssdk__repostspace__version>2.26.12</m:dependency.management__software.amazon.awssdk__repostspace__version>
+		<m:dependency.management__software.amazon.awssdk__bcmdataexports__version>2.26.12</m:dependency.management__software.amazon.awssdk__bcmdataexports__version>
+		<m:dependency.management__software.amazon.awssdk__freetier__version>2.26.12</m:dependency.management__software.amazon.awssdk__freetier__version>
+		<m:dependency.management__software.amazon.awssdk__eksauth__version>2.26.12</m:dependency.management__software.amazon.awssdk__eksauth__version>
+		<m:dependency.management__software.amazon.awssdk__workspacesthinclient__version>2.26.12</m:dependency.management__software.amazon.awssdk__workspacesthinclient__version>
+		<m:dependency.management__software.amazon.awssdk__b2bi__version>2.26.12</m:dependency.management__software.amazon.awssdk__b2bi__version>
+		<m:dependency.management__software.amazon.awssdk__bedrockagentruntime__version>2.26.12</m:dependency.management__software.amazon.awssdk__bedrockagentruntime__version>
+		<m:dependency.management__software.amazon.awssdk__qbusiness__version>2.26.12</m:dependency.management__software.amazon.awssdk__qbusiness__version>
+		<m:dependency.management__software.amazon.awssdk__qconnect__version>2.26.12</m:dependency.management__software.amazon.awssdk__qconnect__version>
+		<m:dependency.management__software.amazon.awssdk__bedrockagent__version>2.26.12</m:dependency.management__software.amazon.awssdk__bedrockagent__version>
+		<m:dependency.management__software.amazon.awssdk__cleanroomsml__version>2.26.12</m:dependency.management__software.amazon.awssdk__cleanroomsml__version>
+		<m:dependency.management__software.amazon.awssdk__marketplacedeployment__version>2.26.12</m:dependency.management__software.amazon.awssdk__marketplacedeployment__version>
+		<m:dependency.management__software.amazon.awssdk__marketplaceagreement__version>2.26.12</m:dependency.management__software.amazon.awssdk__marketplaceagreement__version>
+		<m:dependency.management__software.amazon.awssdk__neptunegraph__version>2.26.12</m:dependency.management__software.amazon.awssdk__neptunegraph__version>
+		<m:dependency.management__software.amazon.awssdk__networkmonitor__version>2.26.12</m:dependency.management__software.amazon.awssdk__networkmonitor__version>
+		<m:dependency.management__software.amazon.awssdk__supplychain__version>2.26.12</m:dependency.management__software.amazon.awssdk__supplychain__version>
+		<m:dependency.management__software.amazon.awssdk__artifact__version>2.26.12</m:dependency.management__software.amazon.awssdk__artifact__version>
+		<m:dependency.management__software.amazon.awssdk__chatbot__version>2.26.12</m:dependency.management__software.amazon.awssdk__chatbot__version>
+		<m:dependency.management__software.amazon.awssdk__timestreaminfluxdb__version>2.26.12</m:dependency.management__software.amazon.awssdk__timestreaminfluxdb__version>
+		<m:dependency.management__software.amazon.awssdk__codeconnections__version>2.26.12</m:dependency.management__software.amazon.awssdk__codeconnections__version>
+		<m:dependency.management__software.amazon.awssdk__deadline__version>2.26.12</m:dependency.management__software.amazon.awssdk__deadline__version>
+		<m:dependency.management__software.amazon.awssdk__controlcatalog__version>2.26.12</m:dependency.management__software.amazon.awssdk__controlcatalog__version>
+		<m:dependency.management__software.amazon.awssdk__route53profiles__version>2.26.12</m:dependency.management__software.amazon.awssdk__route53profiles__version>
+		<m:dependency.management__software.amazon.awssdk__mailmanager__version>2.26.12</m:dependency.management__software.amazon.awssdk__mailmanager__version>
+		<m:dependency.management__software.amazon.awssdk__taxsettings__version>2.26.12</m:dependency.management__software.amazon.awssdk__taxsettings__version>
+		<m:dependency.management__software.amazon.awssdk__applicationsignals__version>2.26.12</m:dependency.management__software.amazon.awssdk__applicationsignals__version>
+		<m:dependency.management__software.amazon.awssdk__pcaconnectorscep__version>2.26.12</m:dependency.management__software.amazon.awssdk__pcaconnectorscep__version>
+		<m:dependency.management__software.amazon.awssdk__apptest__version>2.26.12</m:dependency.management__software.amazon.awssdk__apptest__version>
+	</info>
+	<configurations>
+		<conf name="default" visibility="public" description="runtime dependencies and master artifact can be used with this conf" extends="runtime,master"/>
+		<conf name="master" visibility="public" description="contains only the artifact published by this module itself, with no transitive dependencies"/>
+		<conf name="compile" visibility="public" description="this is the default scope, used if none is specified. Compile dependencies are available in all classpaths."/>
+		<conf name="provided" visibility="public" description="this is much like compile, but indicates you expect the JDK or a container to provide it. It is only available on the compilation classpath, and is not transitive."/>
+		<conf name="runtime" visibility="public" description="this scope indicates that the dependency is not required for compilation, but is for execution. It is in the runtime and test classpaths, but not the compile classpath." extends="compile"/>
+		<conf name="test" visibility="public" description="this scope indicates that the dependency is not required for normal use of the application, and is only available for the test compilation and execution phases." extends="runtime"/>
+		<conf name="system" visibility="public" description="this scope is similar to provided except that you have to provide the JAR which contains it explicitly. The artifact is always available and is not looked up in a repository."/>
+		<conf name="sources" visibility="public" description="this configuration contains the source artifact of this module, if any."/>
+		<conf name="javadoc" visibility="public" description="this configuration contains the javadoc artifact of this module, if any."/>
+		<conf name="optional" visibility="public" description="contains all optional dependencies"/>
+	</configurations>
+	<publications>
+		<artifact name="cassandra-analytics-core_spark3_2.12" type="jar" ext="jar" conf="master"/>
+	</publications>
+	<dependencies>
+		<dependency org="org.apache.cassandra" name="cassandra-bridge_spark3_2.12" rev="0.4.0-mck0" force="true" conf="compile->compile(*),master(*);runtime->runtime(*)"/>
+		<dependency org="org.apache.cassandra" name="cassandra-analytics-spark-converter_spark3_2.12" rev="0.4.0-mck0" force="true" conf="compile->compile(*),master(*);runtime->runtime(*)"/>
+		<dependency org="org.apache.cassandra" name="cassandra-analytics-common" rev="0.4.0-mck0" force="true" conf="runtime->compile(*),runtime(*),master(*)"/>
+		<dependency org="org.apache.cassandra" name="cassandra-analytics-sidecar-client" rev="0.4.0-mck0" force="true" conf="runtime->compile(*),runtime(*),master(*)"/>
+		<dependency org="software.amazon.awssdk" name="s3" rev="2.26.12" force="true" conf="runtime->compile(*),runtime(*),master(*)"/>
+		<dependency org="software.amazon.awssdk" name="netty-nio-client" rev="2.26.12" force="true" conf="runtime->compile(*),runtime(*),master(*)"/>
+		<dependency org="net.java.dev.jna" name="jna" rev="5.9.0" force="true" conf="runtime->compile(*),runtime(*),master(*)"/>
+		<dependency org="net.java.dev.jna" name="jna-platform" rev="5.9.0" force="true" conf="runtime->compile(*),runtime(*),master(*)"/>
+		<dependency org="com.google.guava" name="guava" rev="19.0" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.junit.jupiter" name="junit-jupiter-api" rev="5.10.2" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.junit.jupiter" name="junit-jupiter-params" rev="5.10.2" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.junit.jupiter" name="junit-jupiter-engine" rev="5.10.2" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.assertj" name="assertj-core" rev="3.24.2" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.quicktheories" name="quicktheories" rev="0.26" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.slf4j" name="slf4j-simple" rev="1.7.26" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.mockito" name="mockito-core" rev="3.12.4" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.mockito" name="mockito-inline" rev="3.12.4" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.apache.spark" name="spark-core_2.12" rev="3.2.2" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.apache.spark" name="spark-sql_2.12" rev="3.2.2" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.hamcrest" name="hamcrest" rev="2.2" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.openjdk.jmh" name="jmh-core" rev="1.33" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.apache.httpcomponents" name="httpclient" rev="4.5.13" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="com.github.luben" name="zstd-jni" rev="1.5.0-4" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<dependency org="org.xerial.snappy" name="snappy-java" rev="1.1.8.4" force="true" conf="optional->compile(*),provided(*),master(*)"/>
+		<override org="software.amazon.awssdk" module="codegen-lite-maven-plugin" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codegen-lite" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codegen-maven-plugin" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codegen" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="annotations" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="arns" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="json-utils" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="third-party-jackson-core" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="third-party-jackson-dataformat-cbor" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="auth" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="aws-core" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="profiles" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="aws-cbor-protocol" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="aws-json-protocol" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="aws-query-protocol" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="aws-xml-protocol" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="protocol-core" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="regions" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sdk-core" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="checksums-spi" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="checksums" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="http-auth-spi" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="http-auth" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="http-auth-aws" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="http-auth-aws-crt" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="http-auth-aws-eventstream" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="identity-spi" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="http-client-spi" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="retries" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="retries-spi" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="apache-client" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="netty-nio-client" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="url-connection-client" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="utils" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudwatch-metric-publisher" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="s3-transfer-manager" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="s3-event-notifications" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="aws-crt-client" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="auth-crt" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iam-policy-builder" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="endpoints-spi" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="acm" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="acmpca" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="amplify" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="apigateway" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="apigatewaymanagementapi" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="apigatewayv2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="applicationautoscaling" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="applicationdiscovery" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="appmesh" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="appstream" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="appsync" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="athena" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="autoscaling" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="autoscalingplans" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="backup" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="batch" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="budgets" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="chime" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloud9" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="clouddirectory" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudformation" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudfront" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudhsm" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudhsmv2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudsearch" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudsearchdomain" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudtrail" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudwatch" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudwatchevents" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudwatchlogs" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codebuild" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codecommit" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codedeploy" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codepipeline" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codestar" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cognitoidentity" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cognitoidentityprovider" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cognitosync" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="comprehend" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="comprehendmedical" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="config" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="connect" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="costandusagereport" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="costexplorer" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="databasemigration" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="datapipeline" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="datasync" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="dax" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="devicefarm" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="directconnect" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="directory" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="dlm" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="docdb" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="dynamodb" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="dynamodb-enhanced" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ec2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ecr" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ecs" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="efs" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="eks" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="elasticache" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="elasticbeanstalk" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="elasticloadbalancing" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="elasticloadbalancingv2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="elasticsearch" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="elastictranscoder" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="emr" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="firehose" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="fms" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="fsx" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="gamelift" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="glacier" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="globalaccelerator" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="glue" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="greengrass" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="guardduty" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="health" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iam" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="inspector" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iot" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iot1clickdevices" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iot1clickprojects" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iotanalytics" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iotdataplane" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iotjobsdataplane" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kafka" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kinesis" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kinesisanalytics" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kinesisanalyticsv2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kinesisvideo" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kinesisvideoarchivedmedia" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kinesisvideomedia" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kms" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="lambda" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="lexmodelbuilding" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="lexruntime" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="licensemanager" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="lightsail" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="machinelearning" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="managedblockchain" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="marketplacecommerceanalytics" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="marketplaceentitlement" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="marketplacemetering" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mediaconnect" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mediaconvert" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="medialive" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mediapackage" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mediapackagevod" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mediastore" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mediastoredata" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mediatailor" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="migrationhub" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mobile" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mq" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mturk" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="neptune" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="opsworks" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="opsworkscm" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="organizations" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="pi" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="pinpoint" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="pinpointemail" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="pinpointsmsvoice" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="polly" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="pricing" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="quicksight" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ram" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="rds" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="rdsdata" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="redshift" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="rekognition" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="resourcegroups" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="resourcegroupstaggingapi" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="robomaker" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="route53" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="route53domains" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="route53resolver" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="s3" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="s3control" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sagemaker" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sagemakerruntime" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="secretsmanager" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="securityhub" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="serverlessapplicationrepository" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="servicecatalog" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="servicediscovery" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ses" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sfn" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="shield" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="signer" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sms" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="snowball" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sns" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sqs" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ssm" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="storagegateway" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sts" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="support" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="swf" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="textract" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="transcribe" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="transcribestreaming" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="transfer" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="translate" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="waf" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="workdocs" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="worklink" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="workmail" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="workspaces" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="xray" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="groundstation" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iotthingsgraph" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iotevents" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ioteventsdata" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="personalizeruntime" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="personalize" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="personalizeevents" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="servicequotas" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="applicationinsights" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ec2instanceconnect" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="eventbridge" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="lakeformation" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="forecast" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="forecastquery" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="qldb" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="qldbsession" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="workmailmessageflow" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codestarnotifications" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="savingsplans" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sso" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ssooidc" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="marketplacecatalog" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sesv2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="dataexchange" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="migrationhubconfig" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="connectparticipant" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="wafv2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="appconfig" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iotsecuretunneling" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="elasticinference" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="imagebuilder" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="schemas" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="accessanalyzer" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="computeoptimizer" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="networkmanager" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kendra" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="frauddetector" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codegurureviewer" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codeguruprofiler" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="outposts" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sagemakera2iruntime" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ebs" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kinesisvideosignaling" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="detective" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codestarconnections" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="synthetics" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iotsitewise" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="macie2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codeartifact" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ivs" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="braket" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="identitystore" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="appflow" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="redshiftdata" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ssoadmin" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="timestreamwrite" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="timestreamquery" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="s3outposts" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="metrics-spi" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="databrew" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="servicecatalogappregistry" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="networkfirewall" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mwaa" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="devopsguru" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sagemakerfeaturestoreruntime" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="appintegrations" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ecrpublic" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="amplifybackend" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="connectcontactlens" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="lookoutvision" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="customerprofiles" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="emrcontainers" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sagemakeredge" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="healthlake" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="auditmanager" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="amp" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="greengrassv2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iotwireless" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iotfleethub" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iotdeviceadvisor" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="location" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="wellarchitected" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="lexruntimev2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="lexmodelsv2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="fis" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="lookoutmetrics" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mgn" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="lookoutequipment" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="nimble" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="finspacedata" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="finspace" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ssmincidents" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ssmcontacts" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="applicationcostprofiler" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="apprunner" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="proton" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="route53recoveryreadiness" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="route53recoverycontrolconfig" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="route53recoverycluster" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="chimesdkmessaging" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="chimesdkidentity" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="snowdevicemanagement" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="memorydb" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="opensearch" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kafkaconnect" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="wisdom" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="voiceid" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="account" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudcontrol" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="grafana" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="panorama" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="chimesdkmeetings" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="resiliencehub" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="migrationhubstrategy" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="drs" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="appconfigdata" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="migrationhubrefactorspaces" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="inspector2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="evidently" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="rum" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="rbin" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iottwinmaker" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="workspacesweb" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="backupgateway" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="amplifyuibuilder" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="keyspaces" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="billingconductor" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="pinpointsmsvoicev2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ivschat" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="chimesdkmediapipelines" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="emrserverless" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="m2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="connectcampaigns" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="redshiftserverless" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="rolesanywhere" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="licensemanagerusersubscriptions" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="privatenetworks" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="supportapp" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="controltower" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="iotfleetwise" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="migrationhuborchestrator" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="connectcases" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="resourceexplorer2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="scheduler" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ssmsap" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="chimesdkvoice" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="oam" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="arczonalshift" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="simspaceweaver" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="securitylake" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="opensearchserverless" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="omics" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="docdbelastic" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sagemakergeospatial" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="pipes" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codecatalyst" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="sagemakermetrics" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kinesisvideowebrtcstorage" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="licensemanagerlinuxsubscriptions" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="kendraranking" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cleanrooms" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudtraildata" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="imds" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="tnb" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="internetmonitor" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="ivsrealtime" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="vpclattice" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="osis" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mediapackagev2" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="paymentcryptographydata" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="paymentcryptography" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codegurusecurity" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="verifiedpermissions" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="appfabric" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="medicalimaging" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="entityresolution" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="managedblockchainquery" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="pcaconnectorad" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="neptunedata" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="bedrockruntime" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="bedrock" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="datazone" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="launchwizard" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="trustedadvisor" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cloudfrontkeyvaluestore" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="inspectorscan" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="costoptimizationhub" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="repostspace" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="bcmdataexports" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="freetier" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="eksauth" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="workspacesthinclient" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="b2bi" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="bedrockagentruntime" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="qbusiness" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="qconnect" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="bedrockagent" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="cleanroomsml" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="marketplacedeployment" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="marketplaceagreement" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="neptunegraph" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="networkmonitor" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="supplychain" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="artifact" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="chatbot" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="timestreaminfluxdb" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="codeconnections" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="deadline" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="controlcatalog" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="route53profiles" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="mailmanager" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="taxsettings" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="applicationsignals" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="pcaconnectorscep" matcher="exact" rev="2.26.12"/>
+		<override org="software.amazon.awssdk" module="apptest" matcher="exact" rev="2.26.12"/>
+	</dependencies>
+</ivy-module>

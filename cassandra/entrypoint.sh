@@ -17,11 +17,9 @@ sed -i \
   -e "s/^rpc_address:.*/rpc_address: ${CONTAINER_IP}/" \
   -e "s/seeds: \"127.0.0.1:7000\"/seeds: \"${CONTAINER_IP}:7000\"/" \
   -e "s/seeds: \"127.0.0.1:7000\"/seeds: \"${CONTAINER_IP}:7000\"/" \
-  -e "s/selected_format: bti/selected_format: big/" \
   "${CONF}"
-# TODO: change selected_format back to bti
-#   also see cassandra.analytics.bridges.sstable_format in spark-defaults.conf
 
+# TODO– enable accord when 6.0-alpha1 becomes available
 #echo -e "accord:\n  enabled: true" >> "${CONF}"
 
 sed -i 's|cassandra_storagedir="$CASSANDRA_HOME/data|cassandra_storagedir="/var/lib/cassandra|' "${CASSANDRA_HOME}/bin/cassandra.in.sh"
@@ -42,6 +40,7 @@ echo "Starting Cassandra Sidecar..."
 
 java -cp "@/app/jib-classpath-file" \
   -Dsidecar.config=file:///config/sidecar.yaml -Dio.netty.transport.noNative=true \
+  -Dlogback.configurationFile=file:///config/sidecar-logback.xml \
   org.apache.cassandra.sidecar.CassandraSidecarDaemon &
 
 SIDECAR_PID=$!

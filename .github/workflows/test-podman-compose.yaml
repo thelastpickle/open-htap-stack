@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  # also test trunk daily (due to many unpinned dependencies)
+  schedule:
+    - cron: '0 0 * * *'
 
 # cancel same workflows in progress for pull request branches
 concurrency:

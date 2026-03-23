@@ -1,4 +1,4 @@
-🏗️🚧👷👷🏽‍👷‍️🚧  see todos inl
+🏗️🚧👷👷🏽‍👷‍️🚧  see todos
 
 # Vendor-Neutral Open Source HTAP Data Platform
 

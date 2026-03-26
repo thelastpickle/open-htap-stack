@@ -79,7 +79,7 @@ podman exec -it spark \
   CREATE TEMPORARY VIEW events_for_partition_queries USING org.apache.spark.sql.cassandra
   OPTIONS (keyspace 'demo', table 'events');
 
-  SELECT * FROM events_for_partition_queries LIMIT 3;"
+  SELECT * FROM events_for_partition_queries LIMIT 3;
 ```
 The `spark-cassandra-connector` is best for per-partition (or per-index) queries.  Reads and writes go through Cassandra's CQL interface and its jvm.
 
@@ -95,7 +95,7 @@ podman exec -it spark \
   --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0
 ```
 ```sql
-CREATE OR REPLACE TEMP VIEW events_for_bulk_queries
+CREATE TEMPORARY VIEW events_for_bulk_queries
 USING org.apache.cassandra.spark.sparksql.CassandraDataSource
 OPTIONS (
   sidecar_contact_points "cassandra",

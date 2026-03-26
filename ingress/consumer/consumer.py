@@ -160,6 +160,8 @@ def main() -> None:
 
     buffered = 0
     total = 0
+    window_count = 0
+    last_report = time.time()
 
     while True:
         records = consumer.poll(timeout_ms=1000, max_records=batch_size)
@@ -189,16 +191,23 @@ def main() -> None:
                 temp_internal_c = float(evt.get("temp_internal_c", 0.0))
                 text_payload = str(evt.get("text", ""))
 
-                session.execute(insert_cql, (entity_id, event_day, event_id, event_time, event_type, observer_id, latitude, longitude, altitude_m, temp_external_c, temp_internal_c, text_payload))
+                session.execute_async(insert_cql, (entity_id, event_day, event_id, event_time, event_type, observer_id, latitude, longitude, altitude_m, temp_external_c, temp_internal_c, text_payload))
                 buffered += 1
                 total += 1
+                window_count += 1
 
         # Commit offsets after successful writes
         consumer.commit()
         buffered = 0
 
-        if total % log_every == 0:
-            print(f"[sink] total_inserted={total}")
+        # Report every 5 seconds (like producer)
+        now = time.time()
+        if now - last_report >= 5.0:
+            elapsed = now - last_report
+            rate = window_count / elapsed if elapsed > 0 else 0
+            print(f"[sink] total_inserted={total} (~{rate:.1f}/s)")
+            window_count = 0
+            last_report = now
 
 
 if __name__ == "__main__":

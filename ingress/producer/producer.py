@@ -629,8 +629,8 @@ def main() -> None:
 
             # rate control
             elapsed = time.time() - loop_start
-            #if elapsed < period_s:
-            #    time.sleep(period_s - elapsed)
+            if elapsed < period_s:
+                time.sleep(period_s - elapsed)
 
             # report
             t = time.time()

@@ -10,7 +10,7 @@ _Proof of Concept that takes 4 minutes to demonstrate_
   - OLTP store with high concurrency + horizontal scaling 
   - Strict-serializable ACID transactions
   - Different SQL interfaces: OLAP SparkSQL & Presto, OLTP Postgres wire-protocol + dialect (subset PoC),
-  - OLAP resource isolation without data duplication from OLTP
+  - OLAP from OLTP resource isolation, without data duplication
 - Ready for today's Agentic AI demands
 - Ecosystem integration: Apache Kafka, Apache Spark, Presto, Apache Parquet, Apache Iceberg
 - Freedom to Operate: built with commoditized software not controlled by vendors, that can be deployed anywhere
@@ -18,9 +18,9 @@ _Proof of Concept that takes 4 minutes to demonstrate_
 
 ---
 1. [Demo Quick Start](#demo-quick-start)  
-2. [Vision Statement (the "why")](#why-just-one-data-platform)  
+2. [Vision Statement](#why-just-one-data-platform)
 3. [Appendix: Scope, Architecture Notes, and Enterprise Considerations](#appendix-scope-architecture-notes-and-enterprise-considerations)  
-4. [FAQ (hard question and direct answers)](#hard-questions-faq-direct-answers)   
+4. [FAQ (hard questions and direct answers)](#hard-questions-faq-direct-answers)
 ---
 
 ## Demo Quick Start

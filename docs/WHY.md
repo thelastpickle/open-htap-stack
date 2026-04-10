@@ -12,7 +12,7 @@ This document is the argument for the approach. The [README](../README.md) cover
 - [ACID guarantees at scale](#acid-guarantees-at-scale)
 - [SQL compatibility, honestly](#sql-compatibility-honestly)
 - [Vector similarity search: a compounding case against separation](#vector-similarity-search-a-compounding-case-against-separation)
-- [Why Presto and Apache Spark: different analytical access patterns](#why-presto-and-apache-spark-different-analytical-access-patterns)
+- [Why Presto and Apache Spark: different analytical access patterns, one shared substrate](#why-presto-and-apache-spark-different-analytical-access-patterns-one-shared-substrate)
 - [When the defaults break down](#when-the-defaults-break-down)
 - [What to take from this](#what-to-take-from-this)
 
@@ -177,41 +177,85 @@ The empirical result is JVector maintains high recall as working sets exceed RAM
 
 Astra DB (DataStax's managed Cassandra offering, built on JVector) has been recognised as a Forrester Leader for  vector search capabilities. 
 
-## Why Presto and Apache Spark: different analytical access patterns
+## Why Presto and Apache Spark: different analytical access patterns, one shared substrate
 
 Analytics is not a single workload. Interactive BI queries, ad-hoc exploration, scheduled reporting, ML feature generation, and batch aggregations all share the label "analytics" while having profoundly different execution profiles. A platform that collapses OLTP and OLAP onto one dataset must still offer the right engine for each analytical access pattern, or the unification becomes a regression for the analytical users.
 
 This stack provides both Presto and Apache Spark as first-class analytical engines, reading the same persisted data through different paths optimised for different workloads. The division of labour is deliberate.
 
-### Presto – interactive SQL at BI concurrency
-Presto (and its Trino fork) was built at Facebook for interactive, federated SQL over heterogeneous data sources. Its strengths are low-latency query planning, cost-based optimization over joins, and concurrency models designed for many simultaneous BI users. In this stack, Presto connects to Cassandra via its Cassandra connector, runs queries that target specific partitions or bounded token ranges, and returns results with the latency profile BI tools expect (seconds, not minutes). Presto is the right engine when:
+### Presto — interactive SQL at BI concurrency
 
-- users are interactive and expect sub-minute responses
-- queries hit specific partitions or narrow ranges
-- the workload is read-only SQL with standard aggregations and joins
-- concurrency is high (many analysts, many dashboards, many agents)
+Presto was built at Facebook for interactive, federated SQL over heterogeneous data sources. Its strengths are low-latency query planning, cost-based optimization over joins, and concurrency models designed for many simultaneous BI users. In this stack, Presto connects to Cassandra via its Cassandra connector, runs queries that target specific partitions or bounded token ranges, and returns results with the latency profile BI tools expect. 
+
+Presto is the right engine when:
+ - users are interactive and expect sub-minute responses
+ - queries hit specific partitions or narrow ranges
+ - the workload is read-only SQL with standard aggregations and joins
+ - concurrency is high (many analysts, many dashboards, many agents)
 
 ### Apache Spark – bulk compute over the entire dataset
+
 Spark was built for large-scale distributed computation and has matured into the standard tool for ETL, ML feature generation, and analytical workloads that touch substantial fractions of a dataset. In this stack, Spark has two distinct paths into Cassandra: the standard spark-cassandra-connector (for per-partition queries that benefit from Spark's distributed execution but not from bulk I/O), and the Spark Bulk Reader via the Sidecar (CEP-28) for wide scans that read SSTable files directly from snapshots. Spark is the right engine when:
+ - the workload touches large fractions of the dataset (wide scans, cross-partition aggregations, full-table statistics)
+ - the computation is non-trivial (feature engineering, ML training, complex transformations)
+ - batch latency (minutes to hours) is acceptable
+ - the read throughput requirement exceeds what the OLTP path can sustain without impact
 
-- the workload touches large fractions of the dataset (wide scans, cross-partition aggregations, full-table statistics)
-- the computation is non-trivial (feature engineering, ML training, complex transformations)
-- batch latency (minutes to hours) is acceptable
-- the read throughput requirement exceeds what the OLTP path can sustain without impact
+**The architectural point is what these engines share, not what distinguishes them.** Both read the same persisted data that the OLTP path writes to. There is no separate analytical copy, no reshaping into a columnar warehouse, no ETL window during which analytics are stale. The two engines give analytical users the right tool for their access pattern while preserving the core property of the unified architecture: one record of truth, accessed through paths optimised for each workload's SLO profile.
 
-**The architectural point is what these engines share, not what distinguishes them:** both read the same persisted data that the OLTP path writes to. There is no separate analytical copy, no reshaping into a columnar warehouse, no ETL window during which analytics are stale. The two engines give analytical users the right tool for their access pattern while preserving the core property of the unified architecture, one record of truth, accessed through paths optimised for each workload's SLO profile.
+In a dual-system architecture, the OLAP engine is the storage layer. Snowflake's compute and storage are co-designed. Databricks' Photon engine assumes Delta Lake. This coupling is what makes those systems fast for their intended workloads, but it also means the analytical engine locks in the storage decision. Choosing Snowflake means storing data in Snowflake's format, with Snowflake's governance, under Snowflake's operational model.
 
-Why this matters for the overall thesis: in a dual-system architecture, the OLAP engine is the storage layer; Snowflake's compute and storage are co-designed, Databricks' Photon engine assumes Delta Lake. This coupling is what makes those systems fast for their intended workloads, but it also means the analytical engine locks in the storage decision. Choosing Snowflake means storing data in Snowflake's format, with Snowflake's governance, under Snowflake's operational model.
+This stack decouples the analytical engine from the storage layer. Presto and Spark are the engines in this demo; they are not the only possible engines. Any tool that can read Cassandra's SSTables (directly or via Sidecar APIs) can serve analytical workloads against the same data. The choice of analytical engine becomes a workload-matching decision rather than a platform-migration decision: which is, architecturally, what "compute/storage separation" was supposed to mean before the cloud warehouses re-coupled them under a different brand.
 
-This stack decouples the analytical engine from the storage layer. Presto and Spark are the engines in this demo; they are not the only possible engines. Any tool that can read Cassandra's SSTables (directly or via Sidecar APIs) can serve analytical workloads against the same data. The choice of analytical engine becomes a workload-matching decision rather than a platform-migration decision, which is, architecturally, what "compute/storage separation" was supposed to mean before the cloud warehouses re-coupled them under a different brand.
+### Iceberg v3 as the optional columnar layer
 
-The synergy across these three capabilities: native vector search, storage-layer CDC, decoupled analytical engines; is the unified architecture's actual argument. Each by itself is an optimisation. Together they represent an architectural property that dual-system stacks cannot replicate without recreating the duplication they were meant to avoid: every new access pattern, every new modality, every new downstream consumer is served from the same record of truth, without a new pipeline.
+For workloads where columnar storage is genuinely the right answer: long-term retention, cold-tier analytics, scan-heavy queries over historical data, interop with external tools; this stack exports to Apache Parquet and Apache Iceberg. Exports are optional, not foundational: the authoritative, freshest, strongly-consistent view remains in the OLTP store. But when you do export, the destination matters, and Iceberg just went through a generational shift that's worth understanding.
+
+Iceberg v3, ratified in mid-2025 and maturing through the 1.8, 1.9, and 1.10 releases, closes most of the expressiveness gap between open table formats and traditional data warehouses. Four changes stand out:
+
+**Deletion vectors.** Row-level deletes in Iceberg v2 used position delete files, a sensible design that degraded under high-churn workloads because readers had to merge many small delete files against large data files on every query. V3 replaces them with binary deletion vectors: a Roaring-bitmap sidecar file per data file, encoding deleted row positions compactly. Query engines check the bitmap with minimal overhead and skip deleted rows without merging delete files. CDC and streaming-upsert workloads: the ones that were hardest on Iceberg v2; become dramatically cheaper to maintain. The compaction pressure drops, the read path stabilises, and the write-amplification problem that made Iceberg v2 unsuitable for mutation-heavy pipelines largely disappears.
+
+**The Variant type.** Semi-structured data has haunted analytical systems for a decade. The two workarounds: flatten JSON into many nullable columns, or store JSON as string blobs; both fail: the first by exploding schema width, the second by eliminating filter pushdown. Iceberg v3 introduces a Variant binary encoding, defined jointly with the Parquet project, that stores semi-structured data natively with schema flexibility and engine-level pushdown. Engines can filter on nested Variant fields without parsing entire JSON strings or scanning every row. Logs, telemetry, event data, and configuration workloads: the use cases that previously forced enterprises into separate document stores; can now live in Iceberg tables without either of the old workarounds.
+
+**Row lineage.** Every row in a v3 table carries stable metadata indicating when it was added and last modified. For incremental processing, CDC replication, and regulated-environment audit, this eliminates the need to compute row-level change detection from scratch on every downstream job.
+
+**Default values and instant schema evolution.** Adding a column to a petabyte table no longer requires a backfill. The default value lives in metadata; existing data files are read as if the column were present with that default. ALTER TABLE becomes O(1) on a table with any number of rows. This is the Iceberg parallel to the schema-evolution argument made earlier for adding vector columns to Cassandra tables via SAI: schema change becomes cheap enough to stop being an architectural event.
+
+The significance for this stack is specific. Cassandra holds the record of truth; analytical workloads read SSTable storage directly via the Bulk Reader for live queries. And they can export to Iceberg v3 where columnar, time-travel, or external-tool interop is genuinely the right answer, to a format that just closed the expressiveness gap with proprietary warehouses while remaining fully open and vendor-neutral. The export is no longer to a format frozen in 2020; it's to a format that went through a generational shift in 2025.
+
+**Velox.** Presto 2.0, internally named Prestissimo, is a full rewrite of the Presto execution engine on Velox, Meta's open-source composable query execution library. It ships today as a drop-in replacement for workers in the same Presto cluster. The coordinator remains unchanged; worker processes are swapped; the same SQL runs against the same data with the same connectors.
+
+Meta, Uber, and IBM run it at production scale. IBM's published TPC-DS benchmarks showed roughly 3× speedup with Prestissimo at 1TB, and at 100TB delivered price/performance competitive with Databricks Photon at less than 60% of the cost. Fleet-size reductions of 2–3× are commonly reported. For batch and interactive analytical workloads, this is the difference between "acceptable" and "best in class" on price/performance.
+
+The deeper point, however, is Velox itself. Velox is not a Presto feature; it is a composable execution library that factors out the runtime primitives shared across query engines: hash joins, aggregations, windows, filter/project operators, memory management, vectorized scan paths. Apache Spark's Gluten project uses Velox to accelerate Spark execution. The same runtime library, tuned once, benefits multiple engines.
+
+In a traditional lakehouse architecture, each engine has its own execution primitives, its own operators, its own performance characteristics, which is why moving a workload from Spark to Presto to Snowflake to Databricks produces different results with different tuning properties and different cost profiles. Velox turns that fragmentation into a shared substrate. An optimization contributed to Velox, a better hash-join implementation, a vectorized aggregation, a smarter I/O prefetcher, propagates to every engine built on it. The economics of open-source contribution change, because the contribution surface is shared.
+
+### GPU-native execution
+
+Velox's composability has enabled something that would have been nearly impossible for a monolithic query engine: hardware-accelerated execution without rewriting the engine. NVIDIA and IBM have integrated cuDF  (NVIDIA's GPU-native DataFrame library) as a Velox backend, producing GPU-executed Presto queries and hybrid CPU/GPU execution for Spark.
+
+The early published results are notable. TPC-DS queries running on an NVIDIA GH200 Grace Hopper system completed in a fraction of the time of CPU-only execution on high-end silicon. For workloads dominated by hash joins, aggregations, and scans over columnar data, GPU execution has been known to be promising for years; what Velox enables is the ability to drop it into existing Presto and Spark deployments without a fork, without a rewrite, without a new engine.
+
+The relevance to this stack is indirect but important. The architecture this repo demonstrates: Cassandra as the storage of record, Iceberg v3 as the optional columnar export, Presto and Spark as the analytical engines; is positioned to benefit from GPU acceleration as it matures, because the execution layer is already the one that GPU acceleration targets. A future where analytical scans run on GPU workers consuming the same data that CPU workers consume today requires no architectural change to this stack. It requires a worker binary swap.
+
+### The compounding picture
+
+Each of the shifts behind this stack, Accord for strict-serializable transactions, JVector for larger-than-memory vector search, native storage-layer CDC, Iceberg v3 for expressive open table formats, Velox for composable high-performance execution, cuDF for GPU acceleration, landed within roughly the same 24-month window. That's not a coincidence. Each was pursuing the same underlying goal: decoupling the semantic layer of data management (transactions, consistency, schemas, types) from the physical layer (storage format, execution engine, hardware target) so that each can evolve independently.
+
+When decoupling succeeds, the compound effect is more than the sum of its parts. A write to the system of record flows through strict-serializable consensus into SSTable storage; is indexed in place by SAI for scalar filters and by JVector for vector similarity; is streamed through CDC to Kafka with replication-factor-aware dedup; is read directly from SSTables by Spark for bulk analytics; is queried through Presto Native running on Velox primitives that will soon run on GPUs; and is optionally exported to Iceberg v3 with row-level lineage and deletion vectors where columnar scans are the right tool. Each stage uses the component best suited to its workload. None of them locks the others in.
+
+This is what the cloud warehouse vendors cannot match without abandoning the architectural bets their businesses are built on. Snowflake's execution engine is proprietary; it cannot adopt Velox without becoming a different product. Databricks' Photon is coupled to Delta Lake; they have publicly committed to Iceberg v3 interoperability, but Delta remains the house format and the optimizer is tuned for it. Neither can plausibly offer the per-request availability model that a leaderless Cassandra+Accord deployment provides, because their storage architectures were not designed for it.
+
+The open stack wins not because any single component is the best at its job. Velox-based Presto will likely trail Snowflake on some workloads for years. JVector will trail specialist vector databases on pure ANN benchmarks on pre-sized in-memory corpora. Iceberg will trail Delta on certain ecosystem integrations until the v3 rollout completes across engines. It wins because the components can be assembled, replaced, and accelerated independently, by an industry-wide contribution surface, without vendor permission.
+
+Every new access pattern, every new modality, every new downstream consumer, every new hardware target, served from the same record of truth, without a new pipeline and without a new platform migration. That optionality is what an enterprise data platform needs to still be relevant in ten years. It is the synergy across all of these components, strict-serializable transactions, in-place vector search, storage-layer CDC, decoupled analytical engines, generational open table formats, composable execution, hardware acceleration, that constitutes the unified architecture's actual argument. Each by itself is an optimisation. Together they represent an architectural property that dual-system stacks cannot replicate without recreating the duplication they were meant to avoid.
 
 ---
 
-## When the defaults break down
+## Broken Opinions
 
-Two received principles work well in most software contexts and break down at the data-platform layer. They're worth naming directly, because they're why dual-system architectures persist long after the trade-offs stop favouring them.
+Two typical software engineering assumptions that break down at the data-platform layer: 1) YAGNI, and 2) the OLTP vs OLAP separation; are worth naming and addressing because they materially to blame for many a data-platform crisis.
 
 ### "YAGNI: don't design for scale until you need to"
 
@@ -248,15 +292,10 @@ The era of agentic AI forces this to surface, because agent workloads are indist
 
 ---
 
-## What to take from this
 
-Neither YAGNI nor "analytics is separate" is wrong. They're defaults that were right for a long time and are still right for many workloads.
+The proposal of this repo is that the trade-offs have shifted for a growing class of applications, and that when they shift, the cost of the inherited architecture becomes the dominant line item, both in dollars (see [TCO-Comparisons.md](TCO-Comparisons.md)) and in organizational capacity (the data platform becomes the thing that blocks everything else).
 
-The argument of this repo is that the trade-offs have shifted for a growing class of applications, and that when they shift, the cost of the inherited architecture becomes the dominant line item, both in dollars (see [TCO-Comparisons.md](TCO-Comparisons.md)) and in organizational capacity (the data platform becomes the thing that blocks everything else).
-
-The harder argument: once you accept that the trade-offs have shifted, there is no graceful way to delay the reckoning. Dual-system architectures compound. Every new AI initiative, every new data modality, every new compliance requirement adds infrastructure and pipelines. The time to revisit the architecture is before the next compound.
-
-This stack is one answer. It's not the only one. [ARCHITECTURE.md](ARCHITECTURE.md#hard-questions-faq) includes an honest comparison with CockroachDB, TiDB, YugabyteDB, SingleStore, Snowflake Hybrid Tables, and Postgres + Citus. Each is a different bet on the same problem. The point of this document is to make the problem visible, enabling your choice of solution.
+The harder argument: once you accept that the trade-offs have shifted, there is no graceful way to delay the reckoning. Dual-system architectures compound. Every new AI initiative, every new data modality, every new compliance requirement adds infrastructure and pipelines.
 
 *Turn database sprawl into something much simpler.*
 

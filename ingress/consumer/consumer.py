@@ -48,10 +48,9 @@ def ensure_schema(session, keyspace: str, table: str):
           temp_external_c float,
           temp_internal_c float,
           text_payload text,
-          PRIMARY KEY (event_id)
+          PRIMARY KEY ((entity_id, event_day), event_id)
         );
         """
-        # TODO: PRIMARY KEY ((entity_id, event_day), event_id)
         #
         # WITH transactional_mode = 'full';
     )

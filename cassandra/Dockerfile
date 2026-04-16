@@ -3,7 +3,7 @@ FROM ghcr.io/apache/cassandra-sidecar@sha256:24a080b9333ddc16822f3e1ab1ff53bef31
 # base image
 FROM eclipse-temurin:17-jdk
 
-ENV CASSANDRA_NIGHTLY_TGZ_URL="https://archive.apache.org/dist/cassandra/5.0.6/apache-cassandra-5.0.6-bin.tar.gz"
+ENV CASSANDRA_NIGHTLY_TGZ_URL="https://archive.apache.org/dist/cassandra/5.0.8/apache-cassandra-5.0.8-bin.tar.gz"
 ENV CASSANDRA_HOME=/opt/cassandra
 ENV PATH="${CASSANDRA_HOME}/bin:${PATH}"
 

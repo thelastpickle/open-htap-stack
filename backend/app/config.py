@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     cassandra_host: str = "cassandra"
     cassandra_port: int = 9042
     cassandra_keyspace: str = "demo"
+    # Named in the bulk reader's options; it addresses nodes by datacenter.
+    cassandra_datacenter: str = "datacenter1"
     # When the backend runs on the host rather than inside the compose network,
     # the driver discovers the node's broadcast address (172.20.0.10) and cannot
     # reach it.  Set this to 127.0.0.1 to rewrite every discovered address to the
@@ -27,8 +29,9 @@ class Settings(BaseSettings):
     spark_thrift_host: str = "spark"
     spark_thrift_port: int = 10000
     # A Spark job has no other deadline, so this socket timeout is what stops a
-    # stuck query from hanging the dashboard.
-    spark_query_timeout_s: int = 60
+    # stuck query from hanging the dashboard.  It has to allow for the bulk reader,
+    # which takes a snapshot before it reads.  nginx allows 300s in front of this.
+    spark_query_timeout_s: int = 180
 
     # Kafka — used by the platform health probe only
     kafka_host: str = "kafka"

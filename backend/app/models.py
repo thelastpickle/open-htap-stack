@@ -173,6 +173,8 @@ class BenchmarkResponse(BaseModel):
     cassandra: EngineResult
     presto: EngineResult
     spark: EngineResult
+    # The Analytics bulk reader: same rows, read straight from SSTables.
+    spark_bulk: EngineResult
 
 
 class NLQueryRequest(BaseModel):

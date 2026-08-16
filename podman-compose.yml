@@ -100,6 +100,7 @@ services:
       - "8080:8080"   # Spark master UI
       - "8081:8081"   # Spark worker UI
       - "4040:4040"   # First Spark app UI
+      - "10000:10000" # Spark Thrift Server (HiveServer2)
     volumes:
       - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
       - ./spark/conf/ivysettings.xml:/opt/spark/conf/ivysettings.xml:ro
@@ -127,6 +128,20 @@ services:
 
         /opt/spark/sbin/start-master.sh --host spark;
         /opt/spark/sbin/start-worker.sh spark://spark:7077;
+
+        # Thrift Server, so the dashboard can run SparkSQL over Cassandra.
+        # --packages resolves the Cassandra connector through the Ivy cache this
+        # repository vendors, the same way the CI SparkSQL tests do.  NOSASL keeps
+        # the wire protocol plain, so clients need no SASL library.  The long
+        # keepAlive holds the Cassandra session of the connector open between
+        # queries: the dashboard queries in bursts, and rebuilding a driver
+        # session per burst would cost time and add a failure mode for nothing.
+        # Mind the quoting: this whole block is one single-quoted shell string,
+        # so an apostrophe anywhere in it — including in a comment — ends the
+        # string and silently truncates the script.
+        echo "Starting the Spark Thrift Server on 10000…";
+        /opt/spark/sbin/start-thriftserver.sh --master spark://spark:7077 --packages com.datastax.spark:spark-cassandra-connector_2.12:3.5.1 --hiveconf hive.server2.authentication=NOSASL --hiveconf hive.server2.thrift.port=10000 --hiveconf hive.server2.thrift.bind.host=0.0.0.0 --conf spark.cassandra.connection.host=cassandra --conf spark.cassandra.connection.port=9042 --conf spark.cassandra.connection.keepAliveMS=3600000;
+
         tail -F /opt/spark/logs/* || tail -f /dev/null
       '
     # tips for debugging: check /opt/spark/work/*/*/stderr
@@ -163,9 +178,19 @@ services:
     environment:
       KAFKA_BOOTSTRAP: "kafka:19092"
       TOPIC: "${DEMO_TOPIC:-demo-events}"
-      EVENTS_PER_SEC: "${DEMO_EVENTS_PER_SEC:-500}"
-      PAYLOAD_BYTES: "${DEMO_PAYLOAD_BYTES:-256}"
+      # Starting fleet size and rate.  The dashboard's Settings page can change
+      # both at runtime, up to MAX_ENTITIES.  The default rate is one the sink
+      # sustains on a laptop: it writes three rows per event at QUORUM, so it is
+      # the narrower end of the pipe, and a producer that outruns it turns a live
+      # demo into a growing Kafka backlog.
+      N_ENTITIES: "${DEMO_N_ENTITIES:-100}"
+      MAX_ENTITIES: "${DEMO_MAX_ENTITIES:-2000}"
+      EVENTS_PER_SEC: "${DEMO_EVENTS_PER_SEC:-2000}"
+      OUTLIER_PERCENT: "${DEMO_OUTLIER_PERCENT:-5.0}"
       PRODUCER_CLIENT_ID: "demo-producer"
+      # Live demo controls.  Unset this to ignore the dashboard entirely.
+      SETTINGS_URL: "http://backend:8000/api/settings/demo"
+      SETTINGS_POLL_INTERVAL_S: "${DEMO_SETTINGS_POLL_INTERVAL_S:-10}"
     restart: unless-stopped
 
   data-cassandra-sink:
@@ -187,5 +212,63 @@ services:
       KEYSPACE: "${DEMO_KEYSPACE:-demo}"
       TABLE: "${DEMO_TABLE:-events}"
       BATCH_SIZE: "${DEMO_BATCH_SIZE:-200}"
-      LOG_EVERY: "${DEMO_LOG_EVERY:-2000}"
+    restart: unless-stopped
+
+
+###############################################################################
+## Mission Control dashboard
+##
+## The dashboard is the demo's front end: one API over all three engines, and a
+## web UI on top of it.  Nothing else in the stack depends on either service, so
+## both can be stopped without affecting ingest.
+###############################################################################
+
+  backend:
+    build:
+      context: ./backend
+    container_name: backend
+    networks: [htap-net]
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    ports:
+      - "8000:8000"   # REST API and OpenAPI docs at /docs
+    environment:
+      CASSANDRA_HOST: "cassandra"
+      CASSANDRA_PORT: "9042"
+      CASSANDRA_KEYSPACE: "${DEMO_KEYSPACE:-demo}"
+      PRESTO_HOST: "presto"
+      PRESTO_PORT: "8080"
+      SPARK_THRIFT_HOST: "spark"
+      SPARK_THRIFT_PORT: "10000"
+      KAFKA_HOST: "kafka"
+      KAFKA_PORT: "19092"
+      SPARK_UI_HOST: "spark"
+      SPARK_UI_PORT: "8080"
+      # Shown as the startup defaults on the Settings page, so they must match
+      # what data-producer above was started with.
+      DEMO_N_ENTITIES: "${DEMO_N_ENTITIES:-100}"
+      DEMO_MAX_ENTITIES: "${DEMO_MAX_ENTITIES:-2000}"
+      DEMO_EVENTS_PER_SEC: "${DEMO_EVENTS_PER_SEC:-2000}"
+      DEMO_OUTLIER_PERCENT: "${DEMO_OUTLIER_PERCENT:-5.0}"
+      # Optional.  Without a key the backend embeds text locally, so the AI
+      # search still works; see backend/app/routes/vector.py.
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: frontend
+    networks: [htap-net]
+    depends_on:
+      - backend
+    ports:
+      - "4000:80"     # the dashboard: http://localhost:4000
     restart: unless-stopped

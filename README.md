@@ -26,8 +26,9 @@ An enterprise-grade Hybrid Transactional/Analytical Processing (HTAP) data platf
 2. [Architecture at a glance](#architecture-at-a-glance)
 3. [Why this stack](docs/WHY.md) — the vision and the argument
 4. [Architecture deep-dive](docs/ARCHITECTURE.md) — scope, consistency, enterprise considerations
-5. [TCO Comparisons](docs/TCO-Comparisons.md) — worksheet and sensitivity analysis
-6. [Hard Questions FAQ](docs/ARCHITECTURE.md#hard-questions-faq) — direct answers
+5. [Mission Control dashboard](docs/MISSION-CONTROL.md) — the demo you can show a boardroom
+6. [TCO Comparisons](docs/TCO-Comparisons.md) — worksheet and sensitivity analysis
+7. [Hard Questions FAQ](docs/ARCHITECTURE.md#hard-questions-faq) — direct answers
 
 ---
 
@@ -48,6 +49,33 @@ See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for how to increase the m
 ```shell
 podman compose -f podman-compose.yml up
 ```
+
+| Service                  | URL                                            |
+| ------------------------ | ---------------------------------------------- |
+| Mission Control dashboard| <http://localhost:4000>                        |
+| Dashboard API and docs   | <http://localhost:8000/docs>                   |
+| Presto UI                | <http://localhost:8088/ui/>                    |
+| Spark master UI          | <http://localhost:8080>                        |
+| Spark application UI     | <http://localhost:4040>                        |
+
+### The 4-minute demonstration
+
+Open <http://localhost:4000>. Every figure on every page is a live query against the stack you just
+started; nothing is seeded or pre-rendered.
+
+1. **Overview** — the fleet, the ingest rate, and the events already stored.
+2. **Map** — live positions against restricted airspace. Click an asset for its recorded flight path,
+   read back out of Cassandra.
+3. **Explore → Three-engine compare** — run one query on Cassandra, Presto and Spark at once, and
+   watch which access path suits which question. This is the argument of the whole stack in one
+   screen: same rows, three engines, no ETL between them.
+4. **Explore → Vector search** — semantic search over the assets' text payloads, through Cassandra 5
+   SAI, with each hit's live position fetched by point read.
+5. **Settings → Trigger breach scenario** — write a real alert and watch the map, the KPIs and the
+   alert feed pick it up.
+
+See [docs/MISSION-CONTROL.md](docs/MISSION-CONTROL.md) for what each page queries, how the demo
+controls reach the data producer, and how to run either half from source.
 
 ### Example CQL queries (plumbing)
 

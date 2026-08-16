@@ -1,0 +1,49 @@
+Urban planning is a technical and political process that designs and regulates land use in cities, towns, and rural areas. Planners seek to balance competing interests, including housing, transportation, commerce, and green space. Effective zoning laws are essential to prevent industrial facilities from encroaching on residential neighbourhoods.
+
+The Norwegian Sovereign Wealth Fund, formally known as the Government Pension Fund Global, is the world's largest sovereign wealth fund with assets exceeding 1.7 trillion US dollars. It invests in equities, fixed income instruments, and real estate across more than 70 countries. The fund was established in 1990 to manage surplus revenues from the country's petroleum sector.
+
+Photosynthesis is the biochemical process by which green plants, algae, and certain bacteria convert light energy, typically from the sun, into chemical energy stored in glucose. This process takes place primarily in the chloroplasts, using the pigment chlorophyll to absorb photons. The overall reaction consumes carbon dioxide and water while releasing oxygen as a byproduct.
+
+The Viking Age refers to the period from approximately 793 to 1066 AD, during which Norse seafarers explored, raided, and traded across wide areas of Europe, the North Atlantic islands, and as far west as North America. The Vikings established settlements in Iceland, Greenland, and briefly in Newfoundland. Their longships, capable of navigating both open seas and shallow rivers, were a key technological advantage.
+
+Machine learning is a branch of artificial intelligence that enables systems to learn and improve from data without being explicitly programmed. Supervised learning, unsupervised learning, and reinforcement learning are the three principal paradigms. Deep neural networks have dramatically accelerated progress in image recognition, natural language processing, and scientific discovery.
+
+The baroque period in music spanned roughly from 1600 to 1750, featuring composers such as Johann Sebastian Bach, George Frideric Handel, and Antonio Vivaldi. Characteristic features of baroque music include basso continuo, ornamentation, and the use of counterpoint. The development of the modern orchestra and opera house can be traced directly to this era.
+
+Supply chain management involves the coordination of all activities associated with the flow of goods, information, and finances from raw material suppliers to the final consumer. Just-in-time inventory strategies reduce warehousing costs but introduce vulnerability to disruptions. The COVID-19 pandemic exposed significant fragility in global supply chains, prompting renewed interest in nearshoring.
+
+The Atlantic Ocean is the second-largest of Earth's five oceans, covering approximately 20 percent of Earth's surface. It separates the Americas from Europe and Africa and contains the Mid-Atlantic Ridge, the world's longest mountain range. The thermohaline circulation, sometimes called the ocean conveyor belt, plays a critical role in regulating global climate.
+
+Public health infrastructure encompasses the organizations, systems, and resources needed to prevent disease and protect community health. Vaccination programmes have eliminated smallpox and dramatically reduced polio worldwide. Epidemiologists use surveillance data and statistical modelling to identify outbreak sources and recommend containment strategies.
+
+The Fibonacci sequence is a series of numbers in which each number is the sum of the two preceding ones, beginning with 0 and 1. It appears frequently in nature, including in the arrangement of leaves around a stem, the spiral of a nautilus shell, and the branching of trees. The ratio of consecutive Fibonacci numbers converges to the golden ratio, approximately 1.618.
+
+Sustainable architecture seeks to minimize the environmental impact of buildings through efficient design, material selection, and energy use. Passive solar design uses the sun's position and local climate to heat and cool buildings naturally. Green roofs and walls improve urban biodiversity, reduce stormwater runoff, and lower ambient temperatures in cities.
+
+The Renaissance was a period of European cultural, artistic, political, and intellectual rebirth that began in Italy during the 14th century. Humanism, a philosophical stance emphasizing the value of human reason and individualism, was central to Renaissance thought. Artists such as Leonardo da Vinci and Michelangelo produced works that remain iconic landmarks of Western culture.
+
+Immunology is the branch of biomedical science concerned with all aspects of the immune system. Innate immunity provides immediate, non-specific defence against pathogens, while adaptive immunity generates specific responses to antigens over time. Monoclonal antibodies, developed through advances in immunological research, are now used to treat cancers, autoimmune disorders, and infectious diseases.
+
+Containerised shipping transformed global trade after Malcolm McLean introduced the standardised steel intermodal container in 1956. By allowing cargo to move seamlessly between ships, trains, and trucks without repackaging, containers dramatically cut loading times and costs. Today more than 90 percent of non-bulk world cargo is moved by sea, the majority in standard 20-foot equivalent unit containers.
+
+Quantum computing harnesses quantum-mechanical phenomena such as superposition and entanglement to perform computations that classical computers cannot efficiently replicate. Qubits can represent 0 and 1 simultaneously, enabling certain algorithms to solve exponential-time problems in polynomial time. Practical fault-tolerant quantum computers remain a significant engineering challenge.
+
+The Norwegian welfare state is one of the most comprehensive in the world, providing universal healthcare, free higher education, generous parental leave, and a robust public pension system. Funded primarily through taxation and petroleum revenues, it consistently ranks among the highest in human development indices. The model balances market efficiency with social solidarity.
+
+Climate change refers to long-term shifts in global temperatures and weather patterns, primarily caused since the mid-20th century by human activities releasing greenhouse gases such as carbon dioxide and methane. Rising sea levels, more frequent extreme weather events, and shifts in agricultural zones are among the observed impacts. The Paris Agreement of 2015 committed nations to limiting global warming to 1.5 degrees Celsius above pre-industrial levels.
+
+The human genome contains approximately 3 billion base pairs of DNA encoding roughly 20,000 protein-coding genes. The Human Genome Project, completed in 2003, was an international research effort to sequence and map all human genes. Advances in genomics have opened new avenues for personalised medicine, genetic disease diagnosis, and the study of human evolutionary history.
+
+Behavioural economics integrates insights from psychology into economic models to better explain how individuals make decisions. Concepts such as loss aversion, anchoring, and status quo bias reveal systematic deviations from classical rational choice theory. Richard Thaler and Daniel Kahneman received Nobel Prizes in Economics for foundational contributions to this field.
+
+The Norwegian language belongs to the North Germanic branch of the Indo-European language family and is closely related to Danish and Swedish. Two written standards exist: Bokmål, used by the majority of the population, and Nynorsk, which draws more heavily on rural dialects. Norway is officially bilingual, with both standards having equal legal status in public administration.
+
+Fermentation is a metabolic process in which microorganisms such as yeast or bacteria convert sugars into alcohol, organic acids, or gases without requiring oxygen. It is fundamental to the production of bread, beer, wine, cheese, yoghurt, and many fermented vegetables. Industrial fermentation is also employed in the manufacture of biofuels, pharmaceuticals, and industrial enzymes.
+
+Topology is the branch of mathematics concerned with the properties of geometric objects that are preserved under continuous deformations such as stretching or bending but not tearing or gluing. It studies abstract structures such as manifolds, knots, and surfaces. The famous Königsberg bridge problem, solved by Leonhard Euler in 1736, is considered the first theorem of graph theory and a precursor to topology.
+
+The printing press, invented by Johannes Gutenberg around 1440, enabled the mass production of books and dramatically accelerated the spread of knowledge across Europe. Before movable type, manuscripts were copied by hand, making books rare and expensive. The press played a pivotal role in the Protestant Reformation by allowing rapid distribution of theological texts.
+
+Hydropower currently provides approximately 16 percent of global electricity generation, making it the largest source of renewable energy. Norway generates over 90 percent of its electricity from hydroelectric plants, leveraging its abundant glacial rivers and elevation differences. Pumped-storage hydropower is increasingly used to balance fluctuating output from solar and wind installations.
+
+The International Space Station is a modular space station in low Earth orbit, jointly operated by NASA, Roscosmos, ESA, JAXA, and CSA. It has been continuously inhabited since November 2000 and serves as a microgravity research laboratory. Experiments conducted aboard study biology, physics, astronomy, meteorology, and the physiological effects of long-duration spaceflight on the human body.

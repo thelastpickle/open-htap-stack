@@ -80,8 +80,9 @@ function Sidebar() {
       </nav>
 
       <p className="text-on-surface-variant/60 border-t border-white/5 pt-4 text-[9px] leading-relaxed">
-        Cassandra for the live fleet, Presto for analytics over the same rows, Spark for batch. One
-        store, no ETL between them.
+        Cassandra for the live fleet, Presto for analytics over the same rows, and Spark for batch by
+        two routes: through the request path, and straight off the SSTable files. One store, no ETL
+        between them.
       </p>
     </aside>
   )

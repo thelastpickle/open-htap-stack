@@ -28,7 +28,8 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        # A three-engine benchmark or a bulk vector index can outlast the default 60s.
-        proxy_read_timeout 300s;
+        # The four-path comparison runs the engines in sequence, and a fleet-wide
+        # aggregate over every event ingested takes minutes per analytical engine.
+        proxy_read_timeout 900s;
     }
 }

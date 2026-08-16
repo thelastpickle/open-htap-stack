@@ -17,11 +17,7 @@ interface EngineResult extends QueryResult {
   error: string | null
 }
 
-interface BenchmarkResponse {
-  cassandra: EngineResult
-  presto: EngineResult
-  spark: EngineResult
-}
+type BenchmarkResponse = Record<Engine, EngineResult>
 
 interface VectorHit {
   entity_id: string
@@ -39,39 +35,69 @@ interface VectorResponse {
 }
 
 type Tab = 'sql' | 'ai' | 'compare'
-type Engine = 'cassandra' | 'presto' | 'spark'
+type Engine = 'cassandra' | 'presto' | 'spark' | 'spark_bulk'
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
   { key: 'sql', label: 'SQL console', icon: 'terminal' },
   { key: 'ai', label: 'Vector search', icon: 'neurology' },
-  { key: 'compare', label: 'Three-engine compare', icon: 'compare_arrows' },
+  { key: 'compare', label: 'Compare engines', icon: 'compare_arrows' },
 ]
 
-/** What each engine is for, and how the backend reaches it. */
+/** What each engine is for, and how it reaches the data. */
 const ENGINES: { key: Engine; label: string; role: string; colour: string }[] = [
   {
     key: 'cassandra',
     label: 'Cassandra',
-    role: 'Transactional — CQL, no joins or ordering, but a point read costs one partition',
+    role: 'Transactional · CQL request path. A point read costs one partition; no joins, no ordering on arbitrary columns, no grouping.',
     colour: 'var(--color-primary)',
   },
   {
     key: 'presto',
     label: 'Presto',
-    role: 'Analytical — full SQL over the same rows through the Cassandra connector',
+    role: 'Analytical · full SQL, distributed scan over the same rows through the CQL request path.',
     colour: 'var(--color-secondary)',
   },
   {
     key: 'spark',
     label: 'Spark SQL',
-    role: 'Batch — SparkSQL over the same rows through the Cassandra connector',
+    role: 'Batch · SparkSQL through the spark-cassandra-connector, also over the CQL request path.',
     colour: 'var(--color-accent)',
+  },
+  {
+    key: 'spark_bulk',
+    label: 'Spark bulk reader',
+    role: 'Batch · SparkSQL reading SSTable files directly from a coordinated snapshot via the Sidecar. Never touches the request path, so it cannot contend with OLTP latency. Rows are consistent as of the snapshot.',
+    colour: 'var(--color-positive)',
   },
 ]
 
+/**
+ * Two queries, because one query cannot show what the engines are for.  The
+ * bounded read is where the transactional path wins; the fleet-wide aggregate is
+ * where it cannot compete, and where reading SSTables directly pays off.
+ */
+const COMPARE_PRESETS = [
+  {
+    key: 'latest',
+    label: 'Latest state',
+    hint: 'One bounded read of the current fleet — the shape Cassandra is built for',
+    sql: 'SELECT entity_id, speed_mps, altitude_m, risk_score\nFROM drone_latest_status\nWHERE is_flying = true\nLIMIT 10',
+  },
+  {
+    key: 'aggregate',
+    label: 'Fleet-wide aggregate',
+    hint: 'Every event ever ingested, grouped — CQL cannot express this at all. Takes minutes.',
+    sql:
+      'SELECT event_type, count(*) AS event_count,\n' +
+      '       min(temp_internal_c) AS coldest, max(temp_internal_c) AS hottest\n' +
+      'FROM events\n' +
+      'GROUP BY event_type\n' +
+      'ORDER BY event_type\n' +
+      'LIMIT 5',
+  },
+] as const
+
 const DEFAULT_SQL = 'SELECT entity_id, speed_mps, altitude_m, risk_score\nFROM drone_latest_status\nLIMIT 10'
-const DEFAULT_COMPARE_SQL =
-  'SELECT entity_id, speed_mps, altitude_m, risk_score\nFROM drone_latest_status\nWHERE is_flying = true\nLIMIT 10'
 
 const VECTOR_EXAMPLES = [
   'sovereign wealth fund',
@@ -191,7 +217,8 @@ function EngineCard({
 }
 
 function ComparePanel() {
-  const [sql, setSql] = useState(DEFAULT_COMPARE_SQL)
+  const [preset, setPreset] = useState<string>(COMPARE_PRESETS[0].key)
+  const [sql, setSql] = useState<string>(COMPARE_PRESETS[0].sql)
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<BenchmarkResponse | null>(null)
 
@@ -212,6 +239,7 @@ function ComparePanel() {
     return {
       ...engine,
       ms: result && result.available && !result.error ? result.query_time_ms : null,
+      failed: Boolean(result?.available && result.error),
     }
   })
   const slowest = Math.max(...timings.map((t) => t.ms ?? 0), 1)
@@ -221,12 +249,36 @@ function ComparePanel() {
       <div className="glass-panel overflow-hidden rounded-xl">
         <div className="flex flex-wrap items-center gap-4 border-b border-white/5 bg-surface-container-high px-6 py-3">
           <span className="text-primary text-[10px] font-black uppercase tracking-widest">
-            One query, three engines
+            One query, four access paths
           </span>
           <span className="text-on-surface-variant text-[10px] uppercase tracking-wider opacity-60">
             Each engine gets the statement in its own dialect; the rewrite is shown with its result
           </span>
         </div>
+
+        <div className="flex flex-wrap items-center gap-2 border-b border-white/5 px-6 py-3">
+          {COMPARE_PRESETS.map((option) => (
+            <button
+              key={option.key}
+              onClick={() => {
+                setPreset(option.key)
+                setSql(option.sql)
+              }}
+              title={option.hint}
+              className={`rounded px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                preset === option.key
+                  ? 'bg-primary text-on-primary'
+                  : 'bg-surface-container-highest text-on-surface-variant hover:text-primary'
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+          <span className="text-on-surface-variant/60 ml-2 text-[10px]">
+            {COMPARE_PRESETS.find((option) => option.key === preset)?.hint}
+          </span>
+        </div>
+
         <label htmlFor="compare-sql" className="sr-only">
           SQL to compare
         </label>
@@ -248,7 +300,7 @@ function ComparePanel() {
           name={run.isPending ? 'sync' : 'compare_arrows'}
           className={run.isPending ? 'animate-spin' : ''}
         />
-        {run.isPending ? 'Running on all three engines…' : 'Run on all three engines'}
+        {run.isPending ? 'Running on all four paths…' : 'Run on all four paths'}
       </button>
 
       {error && (
@@ -260,7 +312,7 @@ function ComparePanel() {
 
       {results && (
         <>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             {ENGINES.map((engine) => (
               <EngineCard
                 key={engine.key}
@@ -281,7 +333,11 @@ function ComparePanel() {
                 <div className="flex justify-between text-[10px] font-bold">
                   <span style={{ color: timing.colour }}>{timing.label}</span>
                   <span className="text-on-surface-variant tabular-nums">
-                    {timing.ms != null ? formatMs(timing.ms) : 'unavailable'}
+                    {timing.ms != null
+                      ? formatMs(timing.ms)
+                      : timing.failed
+                        ? 'cannot answer this query'
+                        : 'unavailable'}
                   </span>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-white/5">
@@ -295,13 +351,29 @@ function ComparePanel() {
                 </div>
               </div>
             ))}
-            <p className="text-on-surface-variant border-t border-white/5 pt-4 text-xs leading-relaxed">
-              All three engines read the same Cassandra rows, with nothing copied between them. The
-              timings say which access path suits which question: Cassandra answers by partition,
-              Presto plans a distributed scan, Spark starts a job. Change the query and the ordering
-              changes with it — a single-partition lookup and a fleet-wide aggregate do not favour
-              the same engine.
-            </p>
+            <div className="text-on-surface-variant space-y-3 border-t border-white/5 pt-4 text-xs leading-relaxed">
+              <p>
+                All four paths read the same Cassandra rows, with nothing copied between them. Three
+                of them go through the CQL request path and share it with the live ingest; the bulk
+                reader goes to the SSTable files instead, from a coordinated snapshot taken through
+                the Sidecar, so its scan cannot contend with OLTP latency. That property holds by
+                construction, not by tuning, and it is what the timings here are really about.
+              </p>
+              <p>
+                An engine reporting an error has not failed: it has told you the query is not for it.
+                CQL groups only by primary-key columns, which is exactly why the analytical paths
+                exist. Change the query and the ordering changes with it — a single-partition lookup
+                and a fleet-wide aggregate do not favour the same engine, and no single number
+                decides between them.
+              </p>
+              <p>
+                On the aggregate, watch the counts rather than only the clock. The two paths that read
+                through Cassandra see the table grow underneath them while they scan, so their totals
+                differ; the bulk reader answers from one snapshot, so its groups are consistent with
+                each other. That is point-in-time consistency, and it is the other half of what
+                reading SSTables directly buys.
+              </p>
+            </div>
           </div>
         </>
       )}
@@ -419,6 +491,7 @@ export default function ExplorePage() {
                                   ? option.role
                                   : `${option.label} is not currently reachable`
                               }
+                              aria-pressed={engine === option.key}
                               className={`rounded px-3 py-1 text-[9px] font-black uppercase tracking-wider transition-colors ${
                                 engine === option.key
                                   ? 'bg-primary text-on-primary'
@@ -527,6 +600,13 @@ export default function ExplorePage() {
                       <p className="text-primary font-bold">drone_events_by_entity</p>
                       <p className="text-on-surface-variant">
                         Per-asset history, clustered by event_time descending
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-primary font-bold">events</p>
+                      <p className="text-on-surface-variant">
+                        Every event ingested, one row each — millions of them. The table to aim an
+                        analytical path at.
                       </p>
                     </div>
                     <p className="text-on-surface-variant/70 border-t border-white/5 pt-3">

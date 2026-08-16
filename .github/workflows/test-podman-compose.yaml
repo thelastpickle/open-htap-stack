@@ -511,21 +511,40 @@ jobs:
               print(f"jq-path: {type(error).__name__}: {error}", file=sys.stderr)
           PY
           cat > "$TMP_DIR/check-benchmark.py" << 'PY'
-          # Fail unless all three engines answered the benchmark with rows.
+          # check-benchmark.py <engine that must answer> ...
+          #
+          # Every engine must be reachable.  Only the engines named on the command
+          # line have to answer the query, because not every query is for every
+          # engine: CQL cannot group by a non-key column, and the aggregate below
+          # relies on it saying so.
           import json, sys
+          required = set(sys.argv[1:])
           engines = json.load(sys.stdin)
-          failed = [
-              f"{name}: {result['error'] or 'no rows'}"
-              for name, result in engines.items()
-              if not result["available"] or result["error"] or result["row_count"] == 0
-          ]
-          if failed:
-              print("::error::engines failed the benchmark: " + "; ".join(failed))
+          problems = []
+          for name, result in engines.items():
+              if not result["available"]:
+                  problems.append(f"{name} unreachable: {result['error']}")
+              elif name in required and (result["error"] or result["row_count"] == 0):
+                  problems.append(f"{name}: {result['error'] or 'no rows'}")
+          if problems:
+              print("::error::benchmark failed: " + "; ".join(problems))
               sys.exit(1)
-          print("✓ " + ", ".join(f"{n} {r['query_time_ms']}ms" for n, r in engines.items()))
+          for name, result in engines.items():
+              answered = not result["error"] and result["row_count"]
+              print(
+                  f"  {name}: {result['query_time_ms']}ms, {result['row_count']} rows"
+                  if answered
+                  else f"  {name}: declined this query — {result['error']}"
+              )
           PY
-          cat > "$TMP_DIR/benchmark.json" << 'JSON'
+          # The two presets the dashboard offers.  The bounded read every path can
+          # answer; the aggregate is the one CQL cannot express, which is the point
+          # of having the other three.
+          cat > "$TMP_DIR/benchmark-bounded.json" << 'JSON'
           {"sql": "SELECT entity_id, speed_mps, altitude_m FROM drone_latest_status LIMIT 5", "limit": 5}
+          JSON
+          cat > "$TMP_DIR/benchmark-aggregate.json" << 'JSON'
+          {"sql": "SELECT event_type, count(*) AS event_count, min(temp_internal_c) AS coldest, max(temp_internal_c) AS hottest FROM events GROUP BY event_type ORDER BY event_type LIMIT 5", "limit": 5}
           JSON
           cat > "$TMP_DIR/vector-search.json" << 'JSON'
           {"query": "hydropower and renewable energy", "limit": 3}
@@ -560,12 +579,43 @@ jobs:
           curl -s http://localhost:8000/api/overview/kpis | python3 -m json.tool | head -20
           echo "✓ KPIs populated"
 
-          echo -e "\n=== One query, three engines ==="
-          # Spark starts a job for its first query, so allow a generous window.
-          curl -s --max-time 240 -X POST http://localhost:8000/api/query/benchmark \
-            -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark.json" > "$TMP_DIR/benchmark-result.json"
-          python3 -m json.tool < "$TMP_DIR/benchmark-result.json"
-          python3 "$TMP_DIR/check-benchmark.py" < "$TMP_DIR/benchmark-result.json"
+          echo -e "\n=== One bounded read, all four access paths ==="
+          # Spark starts a job for its first query, and the bulk reader takes a
+          # snapshot before it reads, so allow a generous window.
+          curl -s --max-time 600 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-bounded.json" \
+            > "$TMP_DIR/bounded-result.json"
+          python3 -m json.tool < "$TMP_DIR/bounded-result.json"
+          python3 "$TMP_DIR/check-benchmark.py" cassandra presto spark spark_bulk \
+            < "$TMP_DIR/bounded-result.json"
+          echo "✓ Every access path answered the bounded read"
+
+          echo -e "\n=== Fleet-wide aggregate: the query CQL cannot express ==="
+          # Minutes, not seconds: this groups every event ingested so far, on three
+          # paths in sequence.  Cassandra is expected to decline it, and the
+          # checker is told so.
+          curl -s --max-time 1800 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-aggregate.json" \
+            > "$TMP_DIR/aggregate-result.json"
+          python3 -m json.tool < "$TMP_DIR/aggregate-result.json"
+          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk \
+            < "$TMP_DIR/aggregate-result.json"
+          grep -q "PRIMARY KEY" "$TMP_DIR/aggregate-result.json" \
+            || { echo "::error::Cassandra was expected to decline the GROUP BY; it did not"; exit 1; }
+          echo "✓ The analytical paths answered the aggregate, and Cassandra explained why it cannot"
+
+          echo -e "\n=== Every snapshot the bulk reader takes is time-bounded ==="
+          # A snapshot hard-links live SSTables, so one without an expiry keeps them
+          # from being compacted away for ever.  The reader is configured with a TTL
+          # that Cassandra enforces, so each of its snapshots must carry an
+          # expiration time; listsnapshots prints that in the last column.
+          podman exec cassandra nodetool listsnapshots 2>&1 | tail -20
+          podman exec cassandra nodetool listsnapshots 2>/dev/null \
+            | grep htap_dashboard > "$TMP_DIR/snapshots.txt" || true
+          UNBOUNDED=$(awk "{ if (\$NF ~ /^[0-9]{4}-/) next; print }" "$TMP_DIR/snapshots.txt" | wc -l | tr -d " ")
+          [ "${UNBOUNDED:-0}" -eq 0 ] \
+            || { echo "::error::$UNBOUNDED dashboard snapshots have no expiry"; cat "$TMP_DIR/snapshots.txt"; exit 1; }
+          echo "✓ $(wc -l < "$TMP_DIR/snapshots.txt" | tr -d " ") snapshot(s) present, all with an expiry"
 
           echo -e "\n=== Vector search over Cassandra 5 SAI ==="
           curl -sf -X POST http://localhost:8000/api/vector/index-all \

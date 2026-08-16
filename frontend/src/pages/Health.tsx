@@ -177,7 +177,9 @@ export default function HealthPage() {
         <p className="text-on-surface-variant mt-1 text-xs">
           One representative query per path, timed end to end from the backend. A dash means the path
           cannot answer yet — the vector search needs its embeddings built first, from the Explore
-          page.
+          page. The Spark paths are not probed here: each one starts a job, and the bulk reader takes
+          a Cassandra snapshot, so they are measured on demand from Explore rather than every ten
+          seconds.
         </p>
         <div className="mt-6 grid grid-cols-1 gap-6 md:grid-cols-3">
           {LATENCY_TIERS.map((tier) => {

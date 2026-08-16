@@ -23,3 +23,6 @@ venv/
 .idea/
 .vscode/
 *.swp
+
+# Local compose override (see the file header)
+podman-compose.local.yml

@@ -156,7 +156,10 @@ services:
         # spark-sql in this container, which the CI does.  And spark.cores.max caps
         # what it takes from the worker: a standalone application otherwise holds
         # every core for its lifetime, and the next job to arrive waits for ever
-        # with "Initial job has not accepted any resources".  The long keepAlive holds the Cassandra
+        # with "Initial job has not accepted any resources".  Half the cores, not a
+        # fixed two: a fixed cap silently throttles the analytical paths on any host
+        # bigger than the smallest one, and measured here a hard 2 made the same
+        # aggregate take 130s where half the box took 53s.  The long keepAlive holds the Cassandra
         # session of the connector open between queries: the dashboard queries in
         # bursts, and rebuilding a driver session per burst would cost time and add
         # a failure mode for nothing.
@@ -165,8 +168,10 @@ services:
         # comments included, ends the string and truncates the script.  And compose
         # interpolates a dollar-brace reference anywhere in this file, comments
         # included, so a variable meant for the shell needs its dollar doubled.
-        echo "Starting the Spark Thrift Server on 10000…";
-        /opt/spark/sbin/start-thriftserver.sh --master spark://spark:7077 --hiveconf "javax.jdo.option.ConnectionURL=jdbc:derby:;databaseName=/tmp/thriftserver-metastore;create=true" --hiveconf hive.server2.authentication=NOSASL --hiveconf hive.server2.thrift.port=10000 --hiveconf hive.server2.thrift.bind.host=0.0.0.0 --conf spark.cassandra.connection.host=cassandra --conf spark.cassandra.connection.port=9042 --conf spark.cores.max=2 --conf spark.executor.cores=2 --conf spark.cassandra.connection.keepAliveMS=3600000;
+        THRIFT_CORES=$$(( $$(nproc) / 2 ));
+        if [ "$${THRIFT_CORES}" -lt 2 ]; then THRIFT_CORES=2; fi;
+        echo "Starting the Spark Thrift Server on 10000, with $${THRIFT_CORES} of $$(nproc) cores…";
+        /opt/spark/sbin/start-thriftserver.sh --master spark://spark:7077 --hiveconf "javax.jdo.option.ConnectionURL=jdbc:derby:;databaseName=/tmp/thriftserver-metastore;create=true" --hiveconf hive.server2.authentication=NOSASL --hiveconf hive.server2.thrift.port=10000 --hiveconf hive.server2.thrift.bind.host=0.0.0.0 --conf spark.cassandra.connection.host=cassandra --conf spark.cassandra.connection.port=9042 --conf "spark.cores.max=$${THRIFT_CORES}" --conf "spark.executor.cores=$${THRIFT_CORES}" --conf spark.cassandra.connection.keepAliveMS=3600000;
 
         tail -F /opt/spark/logs/* || tail -f /dev/null
       '

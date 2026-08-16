@@ -12,12 +12,24 @@ interface QueryResult {
   sql?: string | null
 }
 
+/** What a single-partition read cost while this engine was working. */
+interface OltpImpact {
+  p50_ms: number
+  p95_ms: number
+  max_ms: number
+  samples: number
+  failures: number
+}
+
 interface EngineResult extends QueryResult {
   available: boolean
   error: string | null
+  oltp?: OltpImpact | null
 }
 
-type BenchmarkResponse = Record<Engine, EngineResult>
+type BenchmarkResponse = Record<Engine, EngineResult> & {
+  oltp_baseline?: OltpImpact | null
+}
 
 interface VectorHit {
   entity_id: string
@@ -72,21 +84,39 @@ const ENGINES: { key: Engine; label: string; role: string; colour: string }[] = 
 ]
 
 /**
- * Two queries, because one query cannot show what the engines are for.  The
- * bounded read is where the transactional path wins; the fleet-wide aggregate is
- * where it cannot compete, and where reading SSTables directly pays off.
+ * Three queries of deliberately different size, because one query cannot show
+ * what four access paths are for, and because the size is most of the answer.
+ * The bounded read is where the transactional path wins; grouping the fleet is
+ * the smallest question CQL cannot express at all; the full history is the one
+ * where reading SSTables directly pays off, and it is opt-in because on a
+ * single node it is measured in minutes rather than seconds.
  */
 const COMPARE_PRESETS = [
   {
     key: 'latest',
     label: 'Latest state',
+    cost: 'milliseconds',
     hint: 'One bounded read of the current fleet — the shape Cassandra is built for',
     sql: 'SELECT entity_id, speed_mps, altitude_m, risk_score\nFROM drone_latest_status\nWHERE is_flying = true\nLIMIT 10',
   },
   {
-    key: 'aggregate',
-    label: 'Fleet-wide aggregate',
-    hint: 'Every event ever ingested, grouped — CQL cannot express this at all. Takes minutes.',
+    key: 'group',
+    label: 'Group the fleet',
+    cost: 'under a second',
+    hint: 'The current fleet, grouped — the smallest question CQL cannot express at all',
+    sql:
+      'SELECT event_type, count(*) AS assets,\n' +
+      '       min(temp_internal_c) AS coldest, max(temp_internal_c) AS hottest\n' +
+      'FROM drone_latest_status\n' +
+      'GROUP BY event_type\n' +
+      'ORDER BY event_type\n' +
+      'LIMIT 5',
+  },
+  {
+    key: 'history',
+    label: 'Every event ever ingested',
+    cost: 'minutes',
+    hint: 'The whole history, tens of millions of rows, scanned on one node while it ingests',
     sql:
       'SELECT event_type, count(*) AS event_count,\n' +
       '       min(temp_internal_c) AS coldest, max(temp_internal_c) AS hottest\n' +
@@ -151,16 +181,69 @@ function ResultTable({ result }: { result: QueryResult }) {
   )
 }
 
+/**
+ * Below this many samples the window was too short to describe with percentiles,
+ * and quoting a p95 of one reading would be worse than quoting nothing.  A query
+ * that finishes inside a few probe intervals has not had time to disturb
+ * anything, which is itself the answer.
+ */
+const MIN_PROBE_SAMPLES = 4
+
+/**
+ * The price this path charged the transactional one, next to the baseline it was
+ * measured against.  A path that never touches the CQL request path should sit on
+ * its baseline; one that scans through it should not.
+ */
+function OltpFooter({ oltp, baseline }: { oltp?: OltpImpact | null; baseline?: OltpImpact | null }) {
+  if (!oltp?.samples) return null
+  const worse = baseline?.p95_ms ? oltp.p95_ms / baseline.p95_ms : null
+
+  if (oltp.samples < MIN_PROBE_SAMPLES) {
+    return (
+      <div className="text-on-surface-variant border-t border-white/5 px-6 py-3 text-[9px] leading-relaxed">
+        <p className="font-bold uppercase tracking-wider">Point read while it ran</p>
+        <p className="mt-1 opacity-60">
+          Answered inside {oltp.samples} probe {oltp.samples === 1 ? 'interval' : 'intervals'} — too
+          quick to have disturbed anything measurably.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="text-on-surface-variant border-t border-white/5 px-6 py-3 text-[9px] leading-relaxed">
+      <p className="font-bold uppercase tracking-wider">Point read while it ran</p>
+      <p className="mt-1 tabular-nums">
+        p50 {oltp.p50_ms} ms · p95 {oltp.p95_ms} ms · max {oltp.max_ms} ms
+        <span className="opacity-60"> over {oltp.samples} reads</span>
+      </p>
+      {baseline?.samples ? (
+        <p className="mt-0.5 tabular-nums opacity-60">
+          idle baseline p50 {baseline.p50_ms} ms · p95 {baseline.p95_ms} ms
+          {worse ? ` — p95 ×${worse.toFixed(1)}` : ''}
+        </p>
+      ) : null}
+      {oltp.failures > 0 && (
+        <p className="text-tertiary mt-0.5 font-bold">
+          {oltp.failures} point {oltp.failures === 1 ? 'read' : 'reads'} did not return
+        </p>
+      )}
+    </div>
+  )
+}
+
 function EngineCard({
   label,
   role,
   colour,
   result,
+  baseline,
 }: {
   label: string
   role: string
   colour: string
   result: EngineResult | undefined
+  baseline?: OltpImpact | null
 }) {
   if (!result) return null
   const succeeded = result.available && !result.error
@@ -212,6 +295,8 @@ function EngineCard({
           <ResultTable result={result} />
         </div>
       )}
+
+      <OltpFooter oltp={result.oltp} baseline={baseline} />
     </div>
   )
 }
@@ -252,7 +337,7 @@ function ComparePanel() {
             One query, four access paths
           </span>
           <span className="text-on-surface-variant text-[10px] uppercase tracking-wider opacity-60">
-            Each engine gets the statement in its own dialect; the rewrite is shown with its result
+            One at a time, each in its own dialect; the rewrite is shown with its result
           </span>
         </div>
 
@@ -272,6 +357,7 @@ function ComparePanel() {
               }`}
             >
               {option.label}
+              <span className="ml-1.5 font-normal normal-case opacity-60">{option.cost}</span>
             </button>
           ))}
           <span className="text-on-surface-variant/60 ml-2 text-[10px]">
@@ -320,6 +406,7 @@ function ComparePanel() {
                 role={engine.role}
                 colour={engine.colour}
                 result={results[engine.key]}
+                baseline={results.oltp_baseline}
               />
             ))}
           </div>
@@ -353,24 +440,34 @@ function ComparePanel() {
             ))}
             <div className="text-on-surface-variant space-y-3 border-t border-white/5 pt-4 text-xs leading-relaxed">
               <p>
-                All four paths read the same Cassandra rows, with nothing copied between them. Three
-                of them go through the CQL request path and share it with the live ingest; the bulk
-                reader goes to the SSTable files instead, from a coordinated snapshot taken through
-                the Sidecar, so its scan cannot contend with OLTP latency. That property holds by
-                construction, not by tuning, and it is what the timings here are really about.
+                These are not benchmark results. This is one Cassandra node on one machine, sharing
+                its cores with Presto, Spark and a live ingest, and the paths are run one at a time so
+                each is timed alone. Read the figures as a floor on what the mechanism costs here, not
+                as a measure of any engine: given more nodes the three analytical paths scale out and
+                the transactional one does not change at all, which is the whole point of separating
+                them.
               </p>
               <p>
-                An engine reporting an error has not failed: it has told you the query is not for it.
-                CQL groups only by primary-key columns, which is exactly why the analytical paths
-                exist. Change the query and the ordering changes with it — a single-partition lookup
-                and a fleet-wide aggregate do not favour the same engine, and no single number
-                decides between them.
+                A path reporting an error has not failed: it has told you the query is not for it. CQL
+                groups only by primary-key columns, which is exactly why the analytical paths exist.
+                Change the size of the question and the ordering changes with it — a single-partition
+                lookup, a grouped read of the current fleet, and a scan of the whole history do not
+                favour the same path, and no single number decides between them.
               </p>
               <p>
-                On the aggregate, watch the counts rather than only the clock. The two paths that read
-                through Cassandra see the table grow underneath them while they scan, so their totals
-                differ; the bulk reader answers from one snapshot, so its groups are consistent with
-                each other. That is point-in-time consistency, and it is the other half of what
+                The point read under each result is the price that path charged the transactional one,
+                sampled every 250&nbsp;ms while it ran, against the same read taken while the stack was
+                otherwise idle. Three of these paths go through the CQL request path and share it with
+                the live ingest, so they show up there. The bulk reader reads SSTable files from a
+                coordinated snapshot through the Sidecar instead: taking that snapshot is a brief
+                hardlink pass on the node, which you may see as a single spike, and the scan that
+                follows touches the request path not at all.
+              </p>
+              <p>
+                On the grouped queries, watch the counts rather than only the clock. The two paths that
+                read through Cassandra see the table grow underneath them while they scan, so their
+                totals differ; the bulk reader answers from one snapshot, so its groups are consistent
+                with each other. That is point-in-time consistency, and it is the other half of what
                 reading SSTables directly buys.
               </p>
             </div>

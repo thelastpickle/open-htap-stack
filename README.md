@@ -66,11 +66,13 @@ started; nothing is seeded or pre-rendered.
 1. **Overview** — the fleet, the ingest rate, and the events already stored.
 2. **Map** — live positions against restricted airspace. Click an asset for its recorded flight path,
    read back out of Cassandra.
-3. **Explore → Compare engines** — run one query on all four access paths at once: Cassandra, Presto,
-   SparkSQL through the Cassandra connector, and the Analytics bulk reader going straight to SSTable
-   files through the Sidecar. This is the argument of the whole stack in one screen: same data, four
-   paths, no ETL between them. Switch to the fleet-wide aggregate preset and Cassandra declines the
-   query outright — which is the clearest statement of why the other three exist.
+3. **Explore → Compare engines** — run one query down all four access paths, one at a time:
+   Cassandra, Presto, SparkSQL through the Cassandra connector, and the Analytics bulk reader going
+   straight to SSTable files through the Sidecar. This is the argument of the whole stack in one
+   screen: same data, four paths, no ETL between them. Switch to the *Group the fleet* preset and
+   Cassandra declines the query outright — the clearest statement of why the other three exist.
+   Under each result is the point-read latency measured while that path was working, against an idle
+   baseline, so the isolation the bulk reader claims is shown rather than asserted.
 4. **Explore → Vector search** — semantic search over the assets' text payloads, through Cassandra 5
    SAI, with each hit's live position fetched by point read.
 5. **Settings → Trigger breach scenario** — write a real alert and watch the map, the KPIs and the

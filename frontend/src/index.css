@@ -1,0 +1,115 @@
+/* HTAP Mission Control — dark theme design tokens. */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@import 'tailwindcss';
+
+/* Tailwind v4 reads its palette and fonts from here, so `bg-surface-container`
+   and `font-headline` are generated utilities rather than hand-written classes. */
+@theme {
+  --color-background: #0a0e14;
+  --color-surface: #0a0e14;
+  --color-surface-container: #151a21;
+  --color-surface-container-low: #0f141a;
+  --color-surface-container-lowest: #000000;
+  --color-surface-container-high: #1b2028;
+  --color-surface-container-highest: #20262f;
+
+  --color-primary: #99f7ff;
+  --color-primary-dim: #00e2ee;
+  --color-on-primary: #005f64;
+
+  --color-secondary: #feaa00;
+  --color-on-secondary: #503300;
+
+  --color-tertiary: #ff7162;
+  --color-on-tertiary: #4a0001;
+
+  --color-accent: #a78bfa;
+  --color-positive: #10b981;
+
+  --color-on-background: #f1f3fc;
+  --color-on-surface: #f1f3fc;
+  --color-on-surface-variant: #a8abb3;
+  --color-outline: #72757d;
+  --color-outline-variant: #44484f;
+
+  --font-headline: 'Space Grotesk', sans-serif;
+  --font-body: 'Inter', sans-serif;
+  --font-label: 'Inter', sans-serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--color-background);
+  color: var(--color-on-background);
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background-color: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+/* A translucent panel, used for every card that sits over the background. */
+.glass-panel {
+  background: color-mix(in srgb, var(--color-surface-container) 60%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-outline-variant);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-outline);
+}
+
+/* Leaflet renders its own container; keep it on the dark background. */
+.leaflet-container {
+  background: var(--color-surface-container-lowest) !important;
+  font-family: var(--font-body) !important;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
+
+/* Respect a reader who has asked for less motion: the dashboard's pulses and
+   spinners are decoration, and the numbers they sit beside carry the meaning. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

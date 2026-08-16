@@ -1,0 +1,34 @@
+# Rendered at container start by the nginx image's entrypoint, which substitutes
+# NGINX_LOCAL_RESOLVERS with the container's own DNS servers.
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # The dashboard is a single-page app: any path that is not a real file has to
+    # return index.html so the router can handle it.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # The API is proxied so the browser sees one origin and needs no CORS, and the
+    # frontend needs no backend address compiled into it.
+    location /api/ {
+        # nginx resolves a literal upstream name once, at start-up, and then holds
+        # that address for ever — so restarting the backend would leave this
+        # proxying to an address nothing answers on.  Naming the resolver and
+        # passing the upstream through a variable defers the lookup to request
+        # time, with the TTL below.
+        resolver ${NGINX_LOCAL_RESOLVERS} valid=10s;
+        set $upstream http://backend:8000;
+        proxy_pass $upstream;
+
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        # A three-engine benchmark or a bulk vector index can outlast the default 60s.
+        proxy_read_timeout 300s;
+    }
+}

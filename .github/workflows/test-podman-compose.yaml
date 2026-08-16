@@ -15,46 +15,92 @@ concurrency:
 
 jobs:
   test-compose:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    
+    # Pinned deliberately: ubuntu-latest changes the preinstalled container tooling
+    # without notice, and Ubuntu 26.04 is already in public preview.  This job exists
+    # to catch drift in the stack's own dependencies, not in the runner image.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           lfs: true
 
-      - name: Install Podman and Podman Compose
+      - name: Set up Podman and Podman Compose
         run: |
-          sudo apt-get update
-          sudo apt-get install -y podman podman-compose
+          # Use the podman the runner image already provides.  Since image
+          # 20260810.271 that is a pinned static bundle under /usr/local/bin (podman
+          # 5.x plus crun, conmon, netavark, aardvark-dns and pasta), shipped with the
+          # /etc/containers drop-ins and the AppArmor profile that rootless podman
+          # needs on Ubuntu.  Installing Ubuntu's own podman package on top of it
+          # leaves two podman versions sharing one storage root and replaces those
+          # drop-ins.  ref https://github.com/actions/runner-images/pull/14412
+          command -v podman > /dev/null \
+            || { echo "::error::no podman on this runner image; install one here"; exit 1; }
           podman --version
-          podman compose --version
-          
-          # Start Podman socket for rootless mode
-          systemctl --user start podman.socket
-          systemctl --user status podman.socket
-          
-          # Set Docker host to use Podman socket
-          echo "DOCKER_HOST=unix:///run/user/$(id -u)/podman/podman.sock" >> $GITHUB_ENV
+          podman info
+
+          # Ubuntu 24.04 packages podman-compose 1.0.6, which predates podman 5 and
+          # ignores the depends_on conditions; take a current release from PyPI.
+          pipx install podman-compose==1.6.0
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          export PATH="$HOME/.local/bin:$PATH"
+
+          # Pin the provider.  podman's lookup otherwise prefers the docker-compose CLI
+          # plugin the image also carries, which speaks to a Docker-compatible socket
+          # that nothing serves here.  podman-compose shells out to the podman CLI, so
+          # one podman owns the containers and podman ps and podman logs can still see
+          # what compose created.
+          PODMAN_COMPOSE_PROVIDER="$(command -v podman-compose)"
+          echo "PODMAN_COMPOSE_PROVIDER=$PODMAN_COMPOSE_PROVIDER" >> $GITHUB_ENV
+          export PODMAN_COMPOSE_PROVIDER
+          podman compose version
 
       - name: Build services
         run: |
-          podman compose -f podman-compose.yml build --no-cache
+          # The scheduled run builds without cache on purpose, to exercise the
+          # unpinned dependencies the images download.  Those downloads are the least
+          # reliable part of the build, so retry; a retry reuses the layers the
+          # previous attempt already committed.
+          for attempt in 1 2 3; do
+            no_cache=""
+            if [ "$attempt" = 1 ]; then no_cache="--no-cache"; fi
+            if podman compose -f podman-compose.yml build $no_cache; then
+              exit 0
+            fi
+            if [ "$attempt" != 3 ]; then
+              echo "::warning::build attempt $attempt failed, retrying in 30s"
+              sleep 30
+            fi
+          done
+          echo "::error::podman compose build failed after 3 attempts"
+          exit 1
         timeout-minutes: 20
-      - name: Start all services
+
+      - name: Create containers
         run: |
           # Clear Ivy resolver metadata that may have stale references
           # Keep the actual jars and ivy.xml files
-          find spark/ivy/cache -name "ivydata-*.properties" -delete || true
           find spark/ivy/cache -name "*.properties" -delete || true
           chmod -R 777 cassandra-data spark/ivy
-          podman compose -f podman-compose.yml up -d
-        timeout-minutes: 20
 
-      - name: Wait for services to be healthy and verify
+          # Create every container from the compose file, and start none of them.
+          # The runner image's podman is a static build with no systemd, so it
+          # silently skips scheduling the healthcheck timers and every container
+          # stays in "starting" for ever; any compose provider that honours
+          # depends_on: condition: service_healthy then waits for ever too.  So the
+          # next two steps do the ordering, and wait on the services themselves
+          # rather than on podman's opinion of their health.
+          podman compose -f podman-compose.yml up -d --no-start
+          podman ps -a
+        timeout-minutes: 10
+
+      - name: Start Kafka and Cassandra
         run: |
-          echo "=== Waiting for Kafka to be healthy ==="
+          podman start kafka cassandra
+
+          echo -e "\n=== Waiting for Kafka to be healthy ==="
           timeout 720 bash -c 'until podman exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --list >/dev/null 2>&1; do echo "Waiting for Kafka..."; sleep 5; done'
           echo "✓ Kafka is healthy"
 
@@ -63,8 +109,15 @@ jobs:
           echo "✓ Cassandra is healthy"
 
           echo -e "\n=== Waiting for Cassandra Sidecar to be healthy ==="
-          timeout 60 bash -c 'until curl -sf http://localhost:9043/api/v1/__health >/dev/null 2>&1; do echo "Waiting for Sidecar..."; sleep 5; done'
+          timeout 120 bash -c 'until curl -sf http://localhost:9043/api/v1/__health >/dev/null 2>&1; do echo "Waiting for Sidecar..."; sleep 5; done'
           echo "✓ Cassandra Sidecar is healthy"
+        timeout-minutes: 15
+
+      - name: Start remaining services and verify
+        run: |
+          # the same order the compose file's depends_on describes: cassandra and
+          # kafka are ready by now, so spark, then presto, then the ingress services
+          podman start spark presto data-producer data-cassandra-sink
 
           echo -e "\n=== Waiting for Spark to be ready ==="
           timeout 120 bash -c 'until curl -sf http://localhost:8080 >/dev/null 2>&1; do echo "Waiting for Spark..."; sleep 5; done'
@@ -264,7 +317,8 @@ jobs:
           
           # Stop ingress and truncate the table
           echo "Stopping data-cassandra-sink and truncating demo.events table..."
-          podman compose -f podman-compose.yml down data-cassandra-sink
+          # a manual stop, so the restart policy does not bring the sink back
+          podman stop data-cassandra-sink
           podman exec cassandra cqlsh cassandra -e "TRUNCATE demo.events;"
           
           # Verify table is empty
@@ -437,23 +491,17 @@ jobs:
       - name: Show service logs on failure
         if: failure()
         run: |
-          echo "=== Kafka logs ==="
-          podman logs kafka || true
-          
-          echo -e "\n=== Cassandra logs ==="
-          podman logs cassandra || true
-          
-          echo -e "\n=== Spark logs ==="
-          podman logs spark || true
-          
-          echo -e "\n=== Presto logs ==="
-          podman logs presto || true
-          
-          echo -e "\n=== Data Producer logs ==="
-          podman logs data-producer || true
-          
-          echo -e "\n=== Data Cassandra Sink logs ==="
-          podman logs data-cassandra-sink || true
+          echo "=== Tooling ==="
+          podman --version
+          podman compose version || true
+
+          echo -e "\n=== Containers ==="
+          podman ps -a
+
+          for service in kafka cassandra spark presto data-producer data-cassandra-sink; do
+            echo -e "\n=== $service logs ==="
+            podman logs "$service" || true
+          done
 
       - name: Cleanup
         if: always()

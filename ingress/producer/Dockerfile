@@ -1,11 +1,13 @@
 FROM python:3.12-slim
 
-RUN apt-get update && apt-get install -y wget unzip
-RUN pip install --no-cache-dir kafka-python-ng==2.2.2 numpy==1.26.4 lz4==4.3.3 cassandra-driver==3.29.2
+RUN apt-get -o Acquire::Retries=5 update && apt-get install -y wget unzip
+RUN pip install --no-cache-dir --retries 5 kafka-python-ng==2.2.2 numpy==1.26.4 lz4==4.3.3 cassandra-driver==3.29.2
 
 WORKDIR /app
 
-RUN wget -qc http://mattmahoney.net/dc/enwik9.zip
+# 322 MB from a single small host; retry rather than fail the build over it
+RUN wget -qc --https-only --tries=5 --waitretry=15 --retry-connrefused --timeout=60 \
+    https://mattmahoney.net/dc/enwik9.zip
 RUN unzip enwik9.zip
 RUN rm enwik9.zip
 

@@ -15,6 +15,7 @@ import os
 import time
 import math
 import uuid
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Optional, List, Sequence, Tuple
@@ -139,9 +140,20 @@ class TextSampler:
         if n_sent is None:
             n_sent = int(self._rng.integers(1, 4))  # 1..3
         pos = int(self._rng.integers(0, self._size))
+        return self._extract_stable(pos, n_sent)
+
+    def sample_stable(self, seed: int) -> str:
+        """Sample a few sentences from a deterministic offset based on a seed."""
+        if self._size < 32:
+            return ""
+        local_rng = np.random.default_rng(seed)
+        n_sent = int(local_rng.integers(1, 4))
+        pos = int(local_rng.integers(0, self._size))
+        return self._extract_stable(pos, n_sent)
+
+    def _extract_stable(self, pos: int, n_sent: int) -> str:
         start = self._find_sentence_start(pos)
         txt = self._take_sentences(start, n_sent)
-        # Keep it clean-ish (optional): collapse whitespace
         return " ".join(txt.split())
 
 
@@ -182,6 +194,13 @@ class FleetConfig:
     n_entities: int = 5000
     seed: int = 42
 
+    # Area the fleet operates in.  Defaults to greater Oslo, which is where the
+    # demo's restricted zones are.
+    center_lat: float = 59.91
+    center_lon: float = 10.75
+    lat_spread_deg: float = 0.06   # ~6.7 km north-south
+    lon_spread_deg: float = 0.12   # ~8 km east-west at this latitude
+
     # Path shape parameters
     scale_m_min: float = 500.0
     scale_m_max: float = 50_000.0
@@ -210,8 +229,9 @@ class FleetConfig:
     internal_load_delta_c: float = 12.0
     internal_noise_sigma_c: float = 0.05
 
-    # Rare internal anomaly
-    anomaly_rate_per_s: float = 2e-6     # ~0.17/day per entity at 2e-6
+    # Internal temperature anomalies.  Each lasts a few tens of seconds, and the
+    # arrival rate is derived from the target fraction, so the share of the fleet
+    # running hot at any moment tracks the demo's outlier setting.
     anomaly_dur_min_s: float = 10.0
     anomaly_dur_max_s: float = 60.0
     anomaly_delta_min_c: float = 15.0
@@ -248,53 +268,34 @@ class FleetState:
         self._initialize_text_cache(n)
 
     def _initialize_geographic_origins(self, n: int) -> None:
-        """Initialize entity origin coordinates and coordinate conversion factors."""
-        # Origins: keep away from poles for numeric stability (demo convenience)
-        self.lat0 = self.rng.uniform(-70.0, 70.0, n).astype(np.float64)
-        self.lon0 = self.rng.uniform(-180.0, 180.0, n).astype(np.float64)
-        
-        # Coordinate conversion factors
+        """Scatter entity origins over the configured area.
+
+        The default is greater Oslo, which keeps the whole fleet on one map view
+        and inside reach of the demo's restricted zones.  Override the centre and
+        spread through the environment to move the fleet elsewhere.
+        """
+        cfg = self.cfg
+        self.lat0 = self.rng.uniform(
+            cfg.center_lat - cfg.lat_spread_deg, cfg.center_lat + cfg.lat_spread_deg, n
+        ).astype(np.float64)
+        self.lon0 = self.rng.uniform(
+            cfg.center_lon - cfg.lon_spread_deg, cfg.center_lon + cfg.lon_spread_deg, n
+        ).astype(np.float64)
+
+        # Metres-per-degree conversion, per entity so it stays right as the fleet
+        # spreads in latitude.
         self.inv_m_per_deg_lat = 1.0 / 111_320.0
         self.inv_m_per_deg_lon = 1.0 / (111_320.0 * np.cos(np.deg2rad(self.lat0)).clip(0.2, None))
 
     def _initialize_observer_assignments(self, n: int) -> None:
-        """Assign observers to entities with geographic affinity (80% regional, 20% random)."""
-        # Observer assignment: 1:100 observer:entity ratio
+        """Assign one observer per 100 entities, in contiguous blocks.
+
+        Entity origins are already clustered in one area, so the observer's job
+        here is only to give queries a second grouping dimension alongside
+        entity_id.  Contiguous blocks make that grouping predictable.
+        """
         n_observers = max(1, n // 100)
-        
-        # Define geographic regions (simple lat/lon grid)
-        n_regions = max(1, n_observers // 2)  # ~2 observers per region on average
-        region_lat_bounds = np.linspace(-70.0, 70.0, int(np.sqrt(n_regions)) + 1)
-        region_lon_bounds = np.linspace(-180.0, 180.0, int(np.sqrt(n_regions)) + 1)
-        
-        # Assign each entity to a region based on its origin
-        entity_region_lat_idx = np.searchsorted(region_lat_bounds[:-1], self.lat0, side='right') - 1
-        entity_region_lon_idx = np.searchsorted(region_lon_bounds[:-1], self.lon0, side='right') - 1
-        entity_region_lat_idx = np.clip(entity_region_lat_idx, 0, len(region_lat_bounds) - 2)
-        entity_region_lon_idx = np.clip(entity_region_lon_idx, 0, len(region_lon_bounds) - 2)
-        
-        # Create observer pool per region
-        observers_per_region = {}
-        for lat_idx in range(len(region_lat_bounds) - 1):
-            for lon_idx in range(len(region_lon_bounds) - 1):
-                region_key = (lat_idx, lon_idx)
-                # Assign 1-3 observers per region
-                n_obs_in_region = min(3, max(1, n_observers // n_regions))
-                observers_per_region[region_key] = [
-                    f"observer-{self.rng.integers(0, n_observers):04d}"
-                    for _ in range(n_obs_in_region)
-                ]
-        
-        # Assign observer_id to each entity (80% geographically bound, 20% random)
-        self.observer_ids = []
-        for i in range(n):
-            if self.rng.random() < 0.8:  # 80% geographically bound
-                region_key = (int(entity_region_lat_idx[i]), int(entity_region_lon_idx[i]))
-                regional_observers = observers_per_region.get(region_key, [f"observer-{0:04d}"])
-                observer_id = self.rng.choice(regional_observers)
-            else:  # 20% random
-                observer_id = f"observer-{self.rng.integers(0, n_observers):04d}"
-            self.observer_ids.append(observer_id)
+        self.observer_ids = [f"observer-{min(i // 100, n_observers - 1):04d}" for i in range(n)]
 
     def _initialize_motion_parameters(self, n: int) -> None:
         """Initialize parametric motion path parameters (harmonics, drift, phases)."""
@@ -362,6 +363,7 @@ class FleetState:
         """Initialize optional per-entity text payload cache."""
         self.text_cache: List[str] = [""] * n
         self.next_text_t = np.zeros(n, dtype=np.float64)
+        self.text_revision = np.zeros(n, dtype=np.int64)
 
     def _ou_step(self, x: np.ndarray, dt: np.ndarray, tau: float, sigma: float) -> np.ndarray:
         """
@@ -408,12 +410,26 @@ class FleetState:
 
         return t_ext.astype(np.float32)
 
+    def _anomaly_rate_per_s(self, outlier_fraction: float) -> float:
+        """Arrival rate that holds ``outlier_fraction`` of the fleet in anomaly.
+
+        An entity is hot for a mean duration d, so with arrivals at rate r the
+        long-run share hot is rd/(1+rd).  Solving for r gives the rate that lands
+        on the requested fraction.
+        """
+        target = min(max(outlier_fraction, 0.0), 0.99)
+        if target <= 0.0:
+            return 0.0
+        mean_duration_s = (self.cfg.anomaly_dur_min_s + self.cfg.anomaly_dur_max_s) / 2.0
+        return target / (mean_duration_s * (1.0 - target))
+
     def step(
         self,
         ids: np.ndarray,
         now_ts: float,
         text_sampler: Optional[TextSampler] = None,
         text_refresh_range_s: Tuple[float, float] = (5.0, 30.0),
+        outlier_fraction: float = 0.05,
     ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Sequence[str]]:
         """
         Advance and return telemetry for the given entity indices.
@@ -480,7 +496,7 @@ class FleetState:
 
         # Anomaly start (rare)
         # P(start in dt) ~ 1 - exp(-lambda dt)
-        p_start = 1.0 - np.exp(-cfg.anomaly_rate_per_s * dt.astype(np.float64))
+        p_start = 1.0 - np.exp(-self._anomaly_rate_per_s(outlier_fraction) * dt.astype(np.float64))
         can_start = self.anom_end[ids] <= now_ts
         u = self.rng.random(size=ids.shape[0])
         start_mask = (u < p_start) & can_start
@@ -509,7 +525,13 @@ class FleetState:
                 min_s, max_s = text_refresh_range_s
                 idxs = ids[refresh_mask]
                 for idx in idxs.tolist():
-                    self.text_cache[idx] = text_sampler.sample()
+                    # Seed on the entity *and* its refresh count, so a refresh
+                    # actually yields new text.  Seeding on the entity alone gave
+                    # every entity one fixed snippet for the process's lifetime.
+                    self.text_revision[idx] += 1
+                    self.text_cache[idx] = text_sampler.sample_stable(
+                        idx * 1_000_003 + self.text_revision[idx]
+                    )
                 self.next_text_t[idxs] = now_ts + self.rng.uniform(min_s, max_s, size=idxs.shape[0])
             texts: Sequence[str] = [self.text_cache[i] for i in ids.tolist()]
         else:
@@ -530,125 +552,217 @@ def _dumps(obj: dict) -> bytes:
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+
+
+# -----------------------------
+# Live settings
+# -----------------------------
+
+class LiveSettings:
+    """The demo controls, polled from the dashboard backend.
+
+    The Settings page holds the authoritative values in the backend's memory;
+    this thread copies them in.  A backend that is absent, slow or broken leaves
+    the producer on the values it already had, so data generation never depends
+    on the dashboard being up.
+    """
+
+    def __init__(self, events_per_sec: int, n_entities: int, outlier_percent: float):
+        self._lock = threading.Lock()
+        self.events_per_sec = events_per_sec
+        self.n_entities = n_entities
+        self.outlier_percent = outlier_percent
+        self.paused = False
+
+    def snapshot(self) -> Tuple[int, int, float, bool]:
+        with self._lock:
+            return (self.events_per_sec, self.n_entities, self.outlier_percent, self.paused)
+
+    def apply(self, payload: dict) -> None:
+        with self._lock:
+            previous = (self.events_per_sec, self.n_entities, self.outlier_percent, self.paused)
+            self.events_per_sec = max(1, int(payload.get("events_per_sec", self.events_per_sec)))
+            self.n_entities = max(1, int(payload.get("drones_enabled", self.n_entities)))
+            self.outlier_percent = float(payload.get("outlier_percent", self.outlier_percent))
+            self.paused = bool(payload.get("paused", self.paused))
+            current = (self.events_per_sec, self.n_entities, self.outlier_percent, self.paused)
+        if current != previous:
+            print(
+                f"[producer] settings updated: eps={current[0]} n_entities={current[1]} "
+                f"outlier_percent={current[2]} paused={current[3]}"
+            )
+
+
+def _poll_settings(url: str, live: LiveSettings, stop: threading.Event, interval_s: float) -> None:
+    """Poll the settings endpoint until asked to stop."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    last_error = ""
+    while not stop.wait(interval_s):
+        try:
+            with urllib.request.urlopen(url, timeout=5) as resp:
+                body = _json.loads(resp.read().decode("utf-8"))
+            live.apply(body.get("settings", {}))
+            last_error = ""
+        except Exception as e:
+            # Log a repeated failure once, so a backend that is simply not running
+            # does not fill the log.
+            message = f"{type(e).__name__}: {e}"
+            if message != last_error:
+                print(f"[producer] settings poll failed, keeping current values ({message})")
+                last_error = message
+
+
+# -----------------------------
+# Producer main
+# -----------------------------
+
 def main() -> None:
     bootstrap = env_str("KAFKA_BOOTSTRAP", "kafka:19092")
     topic = env_str("TOPIC", "demo-events")
 
-    # mbp m3 handles up to ~11k/s
-    eps = max(1, env_int("EVENTS_PER_SEC", 2000))
-    n_entities = max(1, env_int("N_ENTITIES", 5000))
+    # An Apple M3 laptop sustains roughly 11k events/s through this loop.
+    live = LiveSettings(
+        events_per_sec=max(1, env_int("EVENTS_PER_SEC", 2000)),
+        n_entities=max(1, env_int("N_ENTITIES", 100)),
+        outlier_percent=env_float("OUTLIER_PERCENT", 5.0),
+    )
 
-    # send loop cadence (lower => lower latency; higher => fewer wakeups)
-    period_ms = max(5, env_int("BATCH_PERIOD_MS", 50))
-    period_s = period_ms / 1000.0
-    batch_n = max(1, int(eps * period_s))
+    # The fleet's arrays are allocated once, for the largest size the dashboard
+    # may ask for, and live changes only vary how many of them are used.
+    max_entities = max(live.n_entities, env_int("MAX_ENTITIES", 2000))
+    fleet = FleetState(
+        FleetConfig(
+            n_entities=max_entities,
+            seed=env_int("FLEET_SEED", 42),
+            center_lat=env_float("FLEET_CENTER_LAT", 59.91),
+            center_lon=env_float("FLEET_CENTER_LON", 10.75),
+            lat_spread_deg=env_float("FLEET_LAT_SPREAD_DEG", 0.06),
+            lon_spread_deg=env_float("FLEET_LON_SPREAD_DEG", 0.12),
+        )
+    )
+    entity_ids = [f"asset-{i:06d}" for i in range(max_entities)]
+    entity_keys = [eid.encode("utf-8") for eid in entity_ids]
 
-    # Kafka tuning for throughput demos (adjust to your broker)
-    linger_ms = env_int("KAFKA_LINGER_MS", 20)
-    batch_size = env_int("KAFKA_BATCH_SIZE", 32768)
-    acks = env_int("KAFKA_ACKS", 0)  # 0 for max throughput (lossy), 1/all for stronger guarantees
-    compression = os.getenv("KAFKA_COMPRESSION")  # e.g. gzip, lz4, snappy, zstd (broker/client dependent)
+    stop_polling = threading.Event()
+    settings_url = env_str("SETTINGS_URL", "")
+    if settings_url:
+        threading.Thread(
+            target=_poll_settings,
+            args=(settings_url, live, stop_polling, env_float("SETTINGS_POLL_INTERVAL_S", 10.0)),
+            daemon=True,
+            name="settings-poller",
+        ).start()
+        print(f"[producer] polling {settings_url} for live settings")
 
-    try_create_topic(bootstrap, topic, partitions=env_int("TOPIC_PARTITIONS", 12), replication=env_int("TOPIC_RF", 1))
+    # Send-loop cadence: shorter means smoother motion and more wakeups.
+    period_s = max(5, env_int("BATCH_PERIOD_MS", 50)) / 1000.0
 
+    # Kafka tuning for throughput demos.  acks=0 is lossy by design: this is
+    # generated telemetry, and the demo values sustained rate over durability.
     producer = KafkaProducer(
         bootstrap_servers=bootstrap,
-        linger_ms=linger_ms,
-        batch_size=batch_size,
-        acks=acks,
-        compression_type=compression,
+        linger_ms=env_int("KAFKA_LINGER_MS", 20),
+        batch_size=env_int("KAFKA_BATCH_SIZE", 32768),
+        acks=env_int("KAFKA_ACKS", 0),
+        compression_type=os.getenv("KAFKA_COMPRESSION"),
         max_in_flight_requests_per_connection=5,
         retries=0,
     )
+    try_create_topic(
+        bootstrap, topic,
+        partitions=env_int("TOPIC_PARTITIONS", 12),
+        replication=env_int("TOPIC_RF", 1),
+    )
 
-    # Text source (optional)
     text_file = os.getenv("TEXT_FILE", "")
-    text_sampler: Optional[TextSampler] = None
-    if text_file:
-        text_sampler = TextSampler(text_file, seed=env_int("TEXT_SEED", 1))
-        print(f"[producer] text_sampler enabled: {text_file}")
+    text_sampler = TextSampler(text_file, seed=env_int("TEXT_SEED", 1)) if text_file else None
+    if text_sampler is not None:
+        print(f"[producer] text payloads sampled from {text_file}")
+    text_refresh = (env_float("TEXT_REFRESH_MIN_S", 5.0), env_float("TEXT_REFRESH_MAX_S", 30.0))
 
-    text_refresh_min = env_float("TEXT_REFRESH_MIN_S", 5.0)
-    text_refresh_max = env_float("TEXT_REFRESH_MAX_S", 30.0)
-
-    fleet = FleetState(FleetConfig(n_entities=n_entities, seed=env_int("FLEET_SEED", 42)))
-
-    # Precompute entity identifiers/keys (saves per-event string formatting at high EPS)
-    entity_ids = [f"asset-{i:06d}" for i in range(n_entities)]
-    entity_keys = [eid.encode("utf-8") for eid in entity_ids]
-
-    # Round-robin entity selection for stable per-entity cadence
-    ptr = 0
-
-    sent = 0
-    total = 0
+    report_every_s = env_float("REPORT_EVERY_S", 5.0)
+    ptr = 0                 # round-robin cursor, for an even per-entity cadence
+    total_sent = 0
+    window_sent = 0
     last_report = time.time()
 
     print(
-        "[producer] started "
-        f"bootstrap={bootstrap} topic={topic} eps={eps} n_entities={n_entities} "
-        f"batch_period_ms={period_ms} batch_n={batch_n} acks={acks} compression={compression}"
+        f"[producer] started bootstrap={bootstrap} topic={topic} "
+        f"eps={live.events_per_sec} n_entities={live.n_entities} "
+        f"max_entities={max_entities} batch_period_ms={int(period_s * 1000)}"
     )
 
     try:
         while True:
             loop_start = time.time()
-            now_ts = loop_start
+            eps, n_entities, outlier_percent, paused = live.snapshot()
+
+            if paused:
+                time.sleep(period_s)
+                continue
+
+            # The fleet arrays are sized for max_entities, so a request for more
+            # is capped rather than allowed to index past the end.
+            n_entities = min(n_entities, max_entities)
+            batch_n = max(1, int(eps * period_s))
 
             ids = (np.arange(ptr, ptr + batch_n, dtype=np.int64) % n_entities)
             ptr = int((ptr + batch_n) % n_entities)
 
             lat, lon, z_m, t_ext, t_in, texts = fleet.step(
                 ids,
-                now_ts=now_ts,
+                now_ts=loop_start,
                 text_sampler=text_sampler,
-                text_refresh_range_s=(text_refresh_min, text_refresh_max),
+                text_refresh_range_s=text_refresh,
+                outlier_fraction=outlier_percent / 100.0,
             )
 
-            # Emit events
-            ts = datetime.now(timezone.utc)
+            # Spread the batch's events across the window they represent rather
+            # than stamping them all at the same instant.  The event_id is a
+            # timeuuid, and the sink derives event_time from it, so identical
+            # stamps would collapse an asset's history into one point and leave
+            # the ordering within a batch undefined.
+            stamp_step_s = period_s / ids.shape[0]
             for k in range(ids.shape[0]):
-                eid_idx = int(ids[k])
-                entity_id = entity_ids[eid_idx]
-                evt = {
-                    "event_id": str(uuid_from_time(ts)),
-                    "entity_id": entity_id,
-                    "observer_id": fleet.observer_ids[eid_idx],
-                    "event_type": EVENT_TYPES[eid_idx % len(EVENT_TYPES)],
-                    "position": {"lat": float(lat[k]), "lon": float(lon[k])},
-                    "z_m": float(z_m[k]),
-                    "temp_external_c": float(t_ext[k]),
-                    "temp_internal_c": float(t_in[k]),
-                    "text": texts[k],
-                }
-                producer.send(topic, key=entity_keys[eid_idx], value=_dumps(evt))
-                sent += 1
+                index = int(ids[k])
+                producer.send(
+                    topic,
+                    key=entity_keys[index],
+                    value=_dumps({
+                        "event_id": str(uuid_from_time(loop_start + k * stamp_step_s)),
+                        "entity_id": entity_ids[index],
+                        "observer_id": fleet.observer_ids[index],
+                        "event_type": EVENT_TYPES[index % len(EVENT_TYPES)],
+                        "position": {"lat": float(lat[k]), "lon": float(lon[k])},
+                        "z_m": float(z_m[k]),
+                        "temp_external_c": float(t_ext[k]),
+                        "temp_internal_c": float(t_in[k]),
+                        "text": texts[k],
+                    }),
+                )
+            window_sent += ids.shape[0]
 
-            # Periodic flush is usually unnecessary; producer batches automatically.
-            # producer.poll(0) is not in kafka-python; send() triggers background I/O.
-
-            # rate control
             elapsed = time.time() - loop_start
             if elapsed < period_s:
                 time.sleep(period_s - elapsed)
 
-            # report
-            t = time.time()
-            total += sent
-            if t - last_report >= 5.0:
-                print(f"[producer] sent_total={total} (~{sent/(t-last_report):.0f}/s)")
-                sent = 0
-                last_report = t
+            now = time.time()
+            if now - last_report >= report_every_s:
+                total_sent += window_sent
+                print(f"[producer] sent_total={total_sent} (~{window_sent / (now - last_report):.0f}/s)")
+                window_sent = 0
+                last_report = now
 
     finally:
+        stop_polling.set()
         try:
             producer.flush(10)
-        except Exception:
-            pass
-        try:
             producer.close()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[producer] shutdown error: {e}")
         if text_sampler is not None:
             text_sampler.close()
 

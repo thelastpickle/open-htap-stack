@@ -7,10 +7,12 @@ ENV CASSANDRA_NIGHTLY_TGZ_URL="https://archive.apache.org/dist/cassandra/5.0.8/a
 ENV CASSANDRA_HOME=/opt/cassandra
 ENV PATH="${CASSANDRA_HOME}/bin:${PATH}"
 
-RUN apt-get update \
+# retries: these reach the Ubuntu archive and Launchpad, and the scheduled CI build
+# runs without a layer cache, so a transient fetch failure fails the whole build
+RUN apt-get -o Acquire::Retries=5 update \
     && apt-get install -y --no-install-recommends software-properties-common \
     && add-apt-repository ppa:deadsnakes/ppa -y \
-    && apt-get update \
+    && apt-get -o Acquire::Retries=5 update \
     && apt-get install -y --no-install-recommends bash curl ca-certificates python3.11 procps netcat-openbsd sudo \
     && rm -rf /var/lib/apt/lists/*
 
@@ -22,7 +24,7 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
 
 RUN mkdir -p /opt \
     && echo "Downloading: ${CASSANDRA_NIGHTLY_TGZ_URL}" \
-    && curl -fsSL "${CASSANDRA_NIGHTLY_TGZ_URL}" -o /tmp/cassandra.tgz \
+    && curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors "${CASSANDRA_NIGHTLY_TGZ_URL}" -o /tmp/cassandra.tgz \
     && tar -xzf /tmp/cassandra.tgz -C /opt \
     && rm /tmp/cassandra.tgz \
     && mv /opt/apache-cassandra-* "${CASSANDRA_HOME}"

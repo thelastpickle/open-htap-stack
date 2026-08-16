@@ -1,25 +1,29 @@
 # Mission Control — the dashboard
 
 A web dashboard over the running stack, at <http://localhost:4000>. It exists to make one claim
-visible: that the transactional store, the analytical engine and the batch engine are reading the
-same rows, at the same moment, with nothing copied between them.
+visible: that the transactional store, the analytical engine and both batch paths are reading the
+same data, at the same moment, with nothing copied between them.
 
 Everything on every page is a query against the running stack. There are no fixtures, no seeded
 screenshots and no invented numbers. Where a figure cannot be measured the page shows a dash.
 
 ```
-                 browser :4000
-                       │
-                  nginx │ serves the bundle, proxies /api
-                       ▼
-              FastAPI backend :8000
-                 │       │       │
-      CQL ───────┘       │       └─────── HiveServer2
-                    Presto HTTP                 │
-         ┌─────────────┐ │ ┌───────────────┐    │
-         │  Cassandra  │◄┴─┤    Presto     │    │
-         │             │◄──┤ Spark (Thrift)│◄───┘
-         └─────────────┘   └───────────────┘
+                        browser :4000
+                              │
+                         nginx │ serves the bundle, proxies /api
+                              ▼
+                     FastAPI backend :8000
+              CQL ──────┬──────┬────── HiveServer2
+                        │  Presto HTTP        │
+                        ▼      ▼              ▼
+                 ┌───────────────────┐   ┌──────────────┐
+                 │     Cassandra     │◄──┤    Presto    │
+                 │                   │   └──────────────┘
+                 │  request path ◄───────┤ Spark        │ connector
+                 │  SSTable files ◄──────┤ (Thrift)     │ bulk reader
+                 └───────────────────┘   └──────────────┘
+                        ▲                       │
+                        └── Sidecar: snapshot ──┘
 ```
 
 ## The pages
@@ -29,27 +33,39 @@ screenshots and no invented numbers. Where a figure cannot be measured the page 
 | **Overview** | Fleet KPIs, ingestion volume, service health, the latest alerts            | One bounded scan of `drone_latest_status`, plus the `ingestion_counts` counters    |
 | **Map**      | Live positions, restricted airspace, and an asset's recorded flight path    | `drone_latest_status` for positions; `drone_events_by_entity` for the path         |
 | **Alerts**   | Zone-proximity and breach alerts, newest first                             | `alerts_by_bucket`, read one hourly partition at a time                           |
-| **Explore**  | SQL console, vector search, and the three-engine comparison                 | Whichever engine you pick; all three read the same Cassandra tables               |
+| **Explore**  | SQL console, vector search, and the four-path comparison                    | Whichever path you pick; all four read the same Cassandra data                    |
 | **Health**   | Per-service reachability and latency by access path                        | A TCP probe per service, and one timed query per path                             |
 | **Settings** | Fleet size, event rate, outlier share, pause, and the breach scenario      | Held in the backend; the data producer polls and adopts them                      |
 
 ## The comparison that matters
 
-Explore → **Three-engine compare** runs one statement on all three engines and reports what each
+Explore → **Compare engines** runs one statement on all four access paths and reports what each
 took. The statement is rewritten per dialect, and the rewrite is shown above each result, so the
 comparison is inspectable rather than asserted.
 
-The engines are not interchangeable, and that is the point:
+The paths are not interchangeable, and that is the point:
 
-- **Cassandra** answers by partition. A point read is a few milliseconds; it has no joins, no
-  ordering on arbitrary columns and no aggregates beyond counting.
-- **Presto** plans a distributed scan over the same rows through its Cassandra connector. Full SQL,
-  a couple of hundred milliseconds for this data.
-- **Spark** starts a job. Full SQL again, seconds rather than milliseconds for a query this small,
-  and the engine you want when the query is large rather than quick.
+| Path | How it reads | What it is for |
+| --- | --- | --- |
+| **Cassandra** | CQL request path | Point reads and bounded partition reads. No joins, no ordering on arbitrary columns, and grouping only by primary-key columns. |
+| **Presto** | CQL request path | Full SQL, distributed scan. Shares the coordinator with live ingest. |
+| **Spark SQL** | CQL request path, via spark-cassandra-connector | Full SQL in a Spark job. Per-partition work, and anything you want to hand to Spark afterwards. |
+| **Spark bulk reader** | SSTable files, via the Sidecar | Reads a coordinated snapshot straight off disk. Never enters the request path, so a scan here cannot contend with OLTP latency. |
 
-Change the query and the ordering changes with it. That is the honest result, and a more useful one
-than a single number.
+Two presets, because one query cannot show what four paths are for:
+
+- **Latest state** — one bounded read of `drone_latest_status`. Cassandra answers in single-digit
+  milliseconds; everything else pays for planning or for starting a job.
+- **Fleet-wide aggregate** — `GROUP BY` over every event ever ingested. Cassandra refuses it, and the
+  refusal is the lesson: *"Group by is currently only supported on the columns of the PRIMARY KEY"*.
+  The three analytical paths take minutes and agree on the answer.
+
+Two things are worth watching on the aggregate beyond the clock. The paths that read through
+Cassandra see the table grow underneath them while they scan, so their totals differ from each other;
+the bulk reader answers from one snapshot, so its groups are consistent with each other. And the bulk
+reader is not necessarily the fastest — at this scale, on one node, it is not. Its claim is isolation
+and point-in-time consistency, not raw speed, and the dashboard says so rather than implying a
+victory it has not won.
 
 ## Vector search
 
@@ -74,6 +90,25 @@ ranked and reproducible.
    table invisible to Presto, taking the analytical half of the demo with it.
 2. An embedding is 1536 floats. Keeping it out of the row the map reads every few seconds keeps that
    read small.
+
+## Why the spark service republishes two resources
+
+The Thrift Server starts with two families of jars resolved by `--packages`: the CQL connector and
+the Analytics bulk reader. Spark puts those on its *application* classloader. Both libraries then load
+a resource by name from a long-lived server thread, whose context classloader is the system one, which
+cannot see a jar added to the application loader:
+
+- the Cassandra driver's `reference.conf`, which it re-reads every five minutes. A reload that cannot
+  find it produces a profile with no defaults, and the next schema refresh parks for ever on a missing
+  `advanced.control-connection.schema-agreement.timeout`.
+- the Analytics `bridges/five-zero.jar`, the per-Cassandra-version implementation the bulk reader picks
+  by `cassandra.releaseVersion`. Without it, a bulk read reports
+  `Missing Cassandra implementation for version FIVEZERO`.
+
+Both failures are time-dependent — the first queries after a restart succeed — which makes them
+unpleasant to diagnose from the dashboard alone. The spark service therefore republishes each resource
+as a jar of its own under `/opt/spark/jars`, which is on the JVM's system classpath. Only the resources
+are republished, so no class and no library version is shadowed.
 
 ## Demo controls
 

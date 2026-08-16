@@ -104,6 +104,7 @@ services:
     volumes:
       - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
       - ./spark/conf/ivysettings.xml:/opt/spark/conf/ivysettings.xml:ro
+      - ./spark/install-cassandra-libraries.sh:/opt/spark/install-cassandra-libraries.sh:ro
       - ./spark/jobs:/opt/spark/jobs:rw
       - ./cassandra-data:/var/lib/cassandra
       - ./spark/ivy:/opt/spark/work-dir/.ivy2:rw
@@ -111,6 +112,13 @@ services:
       # Set home directory for Ivy cache (needed for --packages)
       HOME: "/opt/spark/work-dir"
       PATH: "/opt/spark/bin:${PATH}"
+      # The CQL connector and the Analytics bulk reader, resolved through the Ivy
+      # cache this repository vendors.  Same coordinates as the CI SparkSQL tests.
+      CASSANDRA_SPARK_PACKAGES: >-
+        com.datastax.spark:spark-cassandra-connector_2.12:3.5.1,
+        org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,
+        org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,
+        org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0
     command: >
       bash -lc '
         set -euo pipefail;
@@ -126,21 +134,39 @@ services:
         rm -f /opt/spark/jars/guava-14.0.1.jar;
         echo "Guava upgraded to 16.0.1 successfully";
 
+        # Put the Cassandra libraries where every classloader in this container can
+        # see them.  See spark/install-cassandra-libraries.sh for why the Thrift
+        # Server needs that and a one-shot spark-submit does not.
+        # Doubled dollar so compose leaves the expansion to the shell.
+        /opt/spark/install-cassandra-libraries.sh "$${CASSANDRA_SPARK_PACKAGES}";
+
         /opt/spark/sbin/start-master.sh --host spark;
         /opt/spark/sbin/start-worker.sh spark://spark:7077;
 
-        # Thrift Server, so the dashboard can run SparkSQL over Cassandra.
-        # --packages resolves the Cassandra connector through the Ivy cache this
-        # repository vendors, the same way the CI SparkSQL tests do.  NOSASL keeps
-        # the wire protocol plain, so clients need no SASL library.  The long
-        # keepAlive holds the Cassandra session of the connector open between
-        # queries: the dashboard queries in bursts, and rebuilding a driver
-        # session per burst would cost time and add a failure mode for nothing.
-        # Mind the quoting: this whole block is one single-quoted shell string,
-        # so an apostrophe anywhere in it — including in a comment — ends the
-        # string and silently truncates the script.
+        # Thrift Server, so the dashboard can run SparkSQL over Cassandra by either
+        # path: the CQL connector, and the Analytics bulk reader that reads SSTables
+        # directly through the Sidecar.  Both are already on the system classpath by
+        # now, so no --packages here: resolving them again would put a second copy
+        # on the application classloader.  NOSASL keeps the wire protocol plain, so
+        # clients need no SASL library.
+        #
+        # Two things keep this long-lived server from monopolising the cluster it
+        # shares.  Its Derby metastore is its own, because Derby admits one JVM at a
+        # time and a server holding the default one would stop anybody running
+        # spark-sql in this container, which the CI does.  And spark.cores.max caps
+        # what it takes from the worker: a standalone application otherwise holds
+        # every core for its lifetime, and the next job to arrive waits for ever
+        # with "Initial job has not accepted any resources".  The long keepAlive holds the Cassandra
+        # session of the connector open between queries: the dashboard queries in
+        # bursts, and rebuilding a driver session per burst would cost time and add
+        # a failure mode for nothing.
+        # Two things to mind when editing this block, both of which fail quietly.
+        # It is one single-quoted shell string, so an apostrophe anywhere in it,
+        # comments included, ends the string and truncates the script.  And compose
+        # interpolates a dollar-brace reference anywhere in this file, comments
+        # included, so a variable meant for the shell needs its dollar doubled.
         echo "Starting the Spark Thrift Server on 10000…";
-        /opt/spark/sbin/start-thriftserver.sh --master spark://spark:7077 --packages com.datastax.spark:spark-cassandra-connector_2.12:3.5.1 --hiveconf hive.server2.authentication=NOSASL --hiveconf hive.server2.thrift.port=10000 --hiveconf hive.server2.thrift.bind.host=0.0.0.0 --conf spark.cassandra.connection.host=cassandra --conf spark.cassandra.connection.port=9042 --conf spark.cassandra.connection.keepAliveMS=3600000;
+        /opt/spark/sbin/start-thriftserver.sh --master spark://spark:7077 --hiveconf "javax.jdo.option.ConnectionURL=jdbc:derby:;databaseName=/tmp/thriftserver-metastore;create=true" --hiveconf hive.server2.authentication=NOSASL --hiveconf hive.server2.thrift.port=10000 --hiveconf hive.server2.thrift.bind.host=0.0.0.0 --conf spark.cassandra.connection.host=cassandra --conf spark.cassandra.connection.port=9042 --conf spark.cores.max=2 --conf spark.executor.cores=2 --conf spark.cassandra.connection.keepAliveMS=3600000;
 
         tail -F /opt/spark/logs/* || tail -f /dev/null
       '

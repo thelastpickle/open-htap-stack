@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from app.config import settings
 from app.db.cassandra_client import cassandra_client
 from app.db.presto_client import presto_client
-from app.db.spark_client import spark_client
+from app.db.spark_client import BULK_VIEW_PREFIX, spark_bulk_client, spark_client
 from app.models import (
     BenchmarkRequest,
     BenchmarkResponse,
@@ -34,11 +34,26 @@ _WRITE_KEYWORD_RE = re.compile(r"\b(" + "|".join(WRITE_KEYWORDS) + r")\b", re.IG
 _ALLOW_FILTERING_RE = re.compile(r"\s*ALLOW\s+FILTERING\s*", re.IGNORECASE)
 _LIMIT_RE = re.compile(r"\s+LIMIT\s+\d+\s*$", re.IGNORECASE)
 
-# Tables the console exposes, used to qualify bare names per engine.
+# Tables the console exposes.  Each engine reaches them under a different name, so
+# a statement is rewritten per engine before it is issued.
 DEMO_TABLES = ("drone_latest_status", "drone_events_by_entity", "drone_text_embeddings",
                "alerts_by_bucket", "ingestion_counts", "restricted_zones", "events")
-_BARE_TABLE_RE = re.compile(r"(?<![\w.])(" + "|".join(DEMO_TABLES) + r")\b", re.IGNORECASE)
-_QUALIFIED_TABLE_RE = re.compile(r"\bdemo\.(" + "|".join(DEMO_TABLES) + r")\b", re.IGNORECASE)
+
+# Only a name that follows FROM or JOIN is a table.  Matching the bare word
+# anywhere would rewrite anything that happens to share a table's name — a column,
+# or an alias: "SELECT count(*) AS events FROM events" would have its alias
+# rewritten too, and the engines would disagree about what the result column is
+# called.  A comma-separated table list is not handled, and no engine here needs
+# one.
+_TABLE_REFERENCE_RE = re.compile(
+    r"(?P<lead>\b(?:FROM|JOIN)\s+)(?:demo\.)?(?P<table>" + "|".join(DEMO_TABLES) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _rewrite_tables(sql: str, prefix: str = "") -> str:
+    """Rewrite every table reference to ``<prefix><table>``, dropping any keyspace."""
+    return _TABLE_REFERENCE_RE.sub(lambda m: f"{m.group('lead')}{prefix}{m.group('table')}", sql)
 
 
 def _validate(sql: str) -> str:
@@ -70,30 +85,41 @@ def sql_for_cassandra(sql: str, limit: int) -> str:
     """CQL demands ``LIMIT n ALLOW FILTERING`` in that order, and knows no
     keyspace prefix beyond the session's own."""
     statement = _strip_limit(_ALLOW_FILTERING_RE.sub(" ", sql).strip())
-    statement = _QUALIFIED_TABLE_RE.sub(r"\1", statement)
-    return f"{statement} LIMIT {limit} ALLOW FILTERING"
+    return f"{_rewrite_tables(statement)} LIMIT {limit} ALLOW FILTERING"
 
 
 def sql_for_presto(sql: str, limit: int) -> str:
-    """Presto reads Cassandra through its catalog, where tables live in the
+    """Presto reads Cassandra through its catalog, where the tables live in the
     ``demo`` schema.  ALLOW FILTERING is Cassandra-only and must go."""
-    statement = _ALLOW_FILTERING_RE.sub(" ", sql).strip()
-    statement = _BARE_TABLE_RE.sub(r"demo.\1", statement)
+    statement = _rewrite_tables(_ALLOW_FILTERING_RE.sub(" ", sql).strip(), prefix="demo.")
     return statement if _has_limit(statement) else f"{statement} LIMIT {limit}"
 
 
 def sql_for_spark(sql: str, limit: int) -> str:
-    """The Thrift Server registers the Cassandra tables as temp views in the
-    session's default database, so names stay unqualified."""
-    statement = _ALLOW_FILTERING_RE.sub(" ", sql).strip()
-    statement = _QUALIFIED_TABLE_RE.sub(r"\1", statement)
+    """The connector registers each table as a temp view under its own name in the
+    Thrift Server session, so names stay unqualified."""
+    statement = _rewrite_tables(_ALLOW_FILTERING_RE.sub(" ", sql).strip())
     return statement if _has_limit(statement) else f"{statement} LIMIT {limit}"
 
 
+def sql_for_spark_bulk(sql: str, limit: int) -> str:
+    """Aim the statement at the bulk reader's views rather than the connector's.
+
+    Both paths are registered in the same Thrift Server session, told apart by the
+    view name, so which one answers is decided here.
+    """
+    statement = _rewrite_tables(_ALLOW_FILTERING_RE.sub(" ", sql).strip(), prefix=BULK_VIEW_PREFIX)
+    return statement if _has_limit(statement) else f"{statement} LIMIT {limit}"
+
+
+# Order matters: it is the order the dashboard shows the engines in, and the order
+# the benchmark runs them in.  Cassandra first because it is the transactional
+# path the other three are being contrasted with.
 ENGINES = {
     "cassandra": (cassandra_client, sql_for_cassandra),
     "presto": (presto_client, sql_for_presto),
     "spark": (spark_client, sql_for_spark),
+    "spark_bulk": (spark_bulk_client, sql_for_spark_bulk),
 }
 
 

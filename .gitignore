@@ -1,5 +1,25 @@
 cassandra-data/*
 
+# The Ivy cache's jars and ivy.xml files are committed on purpose, so a build
+# resolves offline; only the resolver's own scratch files are ignored.
 spark/ivy/cache/**/*.xml.original
 spark/ivy/cache/**/ivydata-*.properties
 spark/ivy/jars
+
+# Dashboard build output and dependencies.  package-lock.json is committed, so
+# that an image built today and one built later install the same tree.
+frontend/node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

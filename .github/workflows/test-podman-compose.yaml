@@ -488,6 +488,112 @@ jobs:
 #          echo "✓ In-order session timeline verified with both seq=0 and seq=1"
 #          echo "✓ All Accord transactions completed successfully"
 
+      - name: Test Mission Control dashboard
+        run: |
+          # Scratch space for the helpers below.  RUNNER_TEMP is always set on a
+          # GitHub runner; the fallback lets this step be run by hand.
+          export TMP_DIR="${RUNNER_TEMP:-$PWD/.ci-tmp}"
+          mkdir -p "$TMP_DIR"
+
+          # Small helpers, so the polling loops below need no nested quoting.
+          cat > "$TMP_DIR/jq-path.py" << 'PY'
+          # Print one value out of a JSON document on stdin: jq-path.py total_drones
+          # Always prints exactly one token, so the polling loops below can compare it
+          # even when the endpoint answered with an error instead.
+          import json, sys
+          try:
+              document = json.load(sys.stdin)
+              for key in sys.argv[1:]:
+                  document = document[key] if isinstance(document, dict) else document[int(key)]
+              print(len(document) if isinstance(document, (list, dict)) else document)
+          except Exception as error:
+              print(0)
+              print(f"jq-path: {type(error).__name__}: {error}", file=sys.stderr)
+          PY
+          cat > "$TMP_DIR/check-benchmark.py" << 'PY'
+          # Fail unless all three engines answered the benchmark with rows.
+          import json, sys
+          engines = json.load(sys.stdin)
+          failed = [
+              f"{name}: {result['error'] or 'no rows'}"
+              for name, result in engines.items()
+              if not result["available"] or result["error"] or result["row_count"] == 0
+          ]
+          if failed:
+              print("::error::engines failed the benchmark: " + "; ".join(failed))
+              sys.exit(1)
+          print("✓ " + ", ".join(f"{n} {r['query_time_ms']}ms" for n, r in engines.items()))
+          PY
+          cat > "$TMP_DIR/benchmark.json" << 'JSON'
+          {"sql": "SELECT entity_id, speed_mps, altitude_m FROM drone_latest_status LIMIT 5", "limit": 5}
+          JSON
+          cat > "$TMP_DIR/vector-search.json" << 'JSON'
+          {"query": "hydropower and renewable energy", "limit": 3}
+          JSON
+          cat > "$TMP_DIR/demo-settings.json" << 'JSON'
+          {"drones_enabled": 40, "events_per_sec": 800, "outlier_percent": 5.0, "paused": false}
+          JSON
+
+          echo -e "\n=== Waiting for the dashboard API ==="
+          timeout 180 bash -c 'until curl -sf http://localhost:8000/api/health > /dev/null; do echo "Waiting for backend..."; sleep 5; done'
+          echo "✓ Backend is answering"
+
+          echo -e "\n=== Waiting for the dashboard to be served ==="
+          timeout 120 bash -c 'until curl -sf http://localhost:4000/ > /dev/null; do echo "Waiting for frontend..."; sleep 5; done'
+          # The frontend proxies /api to the backend, so this also proves the proxy resolves.
+          curl -sf http://localhost:4000/api/health > /dev/null \
+            || { echo "::error::the frontend is not proxying /api to the backend"; exit 1; }
+          echo "✓ Dashboard served, and proxying the API"
+
+          echo -e "\n=== Every service reachable from the backend ==="
+          curl -s http://localhost:8000/api/platform/health | tee "$TMP_DIR/platform-health.json"
+          echo
+          grep -q '"status": *"down"' "$TMP_DIR/platform-health.json" \
+            && { echo "::error::the backend cannot reach every service"; exit 1; }
+          echo "✓ All services reachable"
+
+          echo -e "\n=== KPIs derived from live data ==="
+          # The producer and the sink have been running since the earlier steps, so
+          # the fleet must be non-empty; a zero here means the dashboard is not
+          # reading what the sink wrote.
+          timeout 180 bash -c 'while true; do FLEET=$(curl -s http://localhost:8000/api/overview/kpis | python3 $TMP_DIR/jq-path.py total_drones); [ "${FLEET:-0}" -gt 0 ] && break; echo "Waiting for the dashboard to see the fleet..."; sleep 10; done'
+          curl -s http://localhost:8000/api/overview/kpis | python3 -m json.tool | head -20
+          echo "✓ KPIs populated"
+
+          echo -e "\n=== One query, three engines ==="
+          # Spark starts a job for its first query, so allow a generous window.
+          curl -s --max-time 240 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark.json" > "$TMP_DIR/benchmark-result.json"
+          python3 -m json.tool < "$TMP_DIR/benchmark-result.json"
+          python3 "$TMP_DIR/check-benchmark.py" < "$TMP_DIR/benchmark-result.json"
+
+          echo -e "\n=== Vector search over Cassandra 5 SAI ==="
+          curl -sf -X POST http://localhost:8000/api/vector/index-all \
+            || { echo "::error::could not start the vector indexer"; exit 1; }
+          # The indexer runs in the background, so poll until a search finds something.
+          timeout 300 bash -c 'while true; do HITS=$(curl -s --max-time 120 -X POST http://localhost:8000/api/vector/search -H "Content-Type: application/json" --data @$TMP_DIR/vector-search.json | python3 $TMP_DIR/jq-path.py results); [ "${HITS:-0}" -gt 0 ] && break; echo "Waiting for embeddings..."; sleep 10; done'
+          curl -s -X POST http://localhost:8000/api/vector/search \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/vector-search.json" | python3 -m json.tool | head -30
+          echo "✓ Vector search returned matches"
+
+          echo -e "\n=== Flight path from the event history ==="
+          ENTITY=$(curl -s "http://localhost:8000/api/map/live?limit=1" | python3 "$TMP_DIR/jq-path.py" drones 0 entity_id)
+          POINTS=$(curl -s "http://localhost:8000/api/map/drone/$ENTITY/trail?points=10" | python3 "$TMP_DIR/jq-path.py" points)
+          echo "$ENTITY has $POINTS recorded positions"
+          [ "$POINTS" -gt 1 ] || { echo "::error::no flight path for $ENTITY"; exit 1; }
+          echo "✓ Flight path read from drone_events_by_entity"
+
+          echo -e "\n=== Demo controls reach the producer ==="
+          curl -sf -X POST http://localhost:8000/api/settings/demo \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/demo-settings.json" \
+            || { echo "::error::could not update the demo settings"; exit 1; }
+          # The producer polls every 10s, so give it a few cycles to report the change.
+          timeout 90 bash -c 'until podman logs data-producer 2>&1 | grep -q "settings updated: eps=800"; do echo "Waiting for the producer to adopt the new settings..."; sleep 5; done'
+          echo "✓ The producer adopted the settings set through the dashboard"
+
+          echo "✓ All Mission Control checks passed"
+        timeout-minutes: 20
+
       - name: Show service logs on failure
         if: failure()
         run: |

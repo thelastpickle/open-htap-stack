@@ -43,6 +43,12 @@ Explore → **Compare engines** runs one statement on all four access paths and 
 took. The statement is rewritten per dialect, and the rewrite is shown above each result, so the
 comparison is inspectable rather than asserted.
 
+The paths run one at a time, never together, so a timing is of one path rather than of four
+competing for one host; a second comparison started while one is running is refused with a 409 for
+the same reason. While each path works, a single-partition read is sampled four times a second
+alongside it, and the same read is sampled for three seconds beforehand as an idle baseline. That
+is how the page shows what an analytical scan costs the transactional path, rather than claiming it.
+
 The paths are not interchangeable, and that is the point:
 
 | Path | How it reads | What it is for |
@@ -52,20 +58,42 @@ The paths are not interchangeable, and that is the point:
 | **Spark SQL** | CQL request path, via spark-cassandra-connector | Full SQL in a Spark job. Per-partition work, and anything you want to hand to Spark afterwards. |
 | **Spark bulk reader** | SSTable files, via the Sidecar | Reads a coordinated snapshot straight off disk. Never enters the request path, so a scan here cannot contend with OLTP latency. |
 
-Two presets, because one query cannot show what four paths are for:
+Three presets of deliberately different size, because one query cannot show what four paths are for,
+and because the size of the question is most of the answer:
 
-- **Latest state** — one bounded read of `drone_latest_status`. Cassandra answers in single-digit
-  milliseconds; everything else pays for planning or for starting a job.
-- **Fleet-wide aggregate** — `GROUP BY` over every event ever ingested. Cassandra refuses it, and the
-  refusal is the lesson: *"Group by is currently only supported on the columns of the PRIMARY KEY"*.
-  The three analytical paths take minutes and agree on the answer.
+- **Latest state**, milliseconds — one bounded read of `drone_latest_status`. Cassandra answers in
+  single-digit milliseconds; everything else pays for planning or for starting a job.
+- **Group the fleet**, under a second — `GROUP BY` over the current fleet only. This is the smallest
+  question CQL cannot express, so it is the default way to show the refusal without anybody waiting:
+  *"Group by is currently only supported on the columns of the PRIMARY KEY"*.
+- **Every event ever ingested**, minutes — the same grouping over the whole history. Opt-in, because
+  on one node it is minutes rather than seconds.
 
-Two things are worth watching on the aggregate beyond the clock. The paths that read through
-Cassandra see the table grow underneath them while they scan, so their totals differ from each other;
-the bulk reader answers from one snapshot, so its groups are consistent with each other. And the bulk
-reader is not necessarily the fastest — at this scale, on one node, it is not. Its claim is isolation
-and point-in-time consistency, not raw speed, and the dashboard says so rather than implying a
-victory it has not won.
+One measured run of the last preset, over 36.4M events on a seven-core laptop with the ingest
+running, gives the shape of it:
+
+| Path | Answered in | Point read p50 | p95 | max |
+| --- | --- | --- | --- | --- |
+| *idle baseline* | — | 2.2 ms | 2.7 ms | 2.9 ms |
+| Cassandra | declines | — | — | — |
+| Presto | 241 s | 2.6 ms | 13.5 ms | 72 ms |
+| Spark SQL, connector | 113 s | 2.9 ms | 7.0 ms | 96 ms |
+| Spark bulk reader | 147 s | 2.3 ms | 5.4 ms | 357 ms |
+
+Read the right column, not the middle one. The bulk reader is not the fastest here and the page does
+not pretend otherwise: on one node, at this scale, it is not. What it is, is the only path that
+leaves point-read latency where it found it — p50 unchanged, p95 lowest of the three — because its
+scan reads SSTable files rather than entering the request path. Its one outlier is the snapshot: hard-
+linking the live SSTables is a brief pass on the node, so expect a single spike at the start and
+nothing after it. The two paths that read through Cassandra move p95 by 2.6× and 5× instead, which
+on a single shared node is exactly what should happen.
+
+Two things are worth watching beyond the clock. The paths that read through Cassandra see the table
+grow underneath them while they scan, so their totals differ from each other — 1,833,893 against
+1,851,178 against 1,857,129 for the same group above; the bulk reader answers from one snapshot, so
+its groups are consistent with each other. And none of these figures is a benchmark: this is one node
+sharing its cores with Presto, Spark and a live ingest. Given more nodes the three analytical paths
+scale out and the transactional one does not change at all, which is the reason for separating them.
 
 ## Vector search
 

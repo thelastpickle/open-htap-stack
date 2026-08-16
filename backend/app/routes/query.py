@@ -1,8 +1,9 @@
-"""Query routes — ad-hoc SQL, the three-engine benchmark, and NL → SQL."""
+"""Query routes — ad-hoc SQL, the four-path comparison, and NL → SQL."""
 import asyncio
 import re
+import threading
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -17,6 +18,7 @@ from app.models import (
     EngineResult,
     NLQueryRequest,
     NLQueryResponse,
+    OltpImpact,
     SQLQueryRequest,
     SQLQueryResult,
 )
@@ -172,16 +174,124 @@ def execute_sql(req: SQLQueryRequest) -> SQLQueryResult:
     )
 
 
+# ──────────────────────── Comparing the four paths ────────────────────────
+
+# One comparison at a time.  Two overlapping ones would each be timed while the
+# other was running, and both sets of numbers would be wrong without saying so.
+_comparison_lock = threading.Lock()
+
+# How often the probe reads one partition while an engine works, and how long the
+# baseline window is.  4 reads a second is far below what the dashboard's own
+# polling already costs, so the probe does not itself become the noisy neighbour.
+PROBE_INTERVAL_S = 0.25
+BASELINE_WINDOW_S = 3.0
+
+
+class _OltpProbe:
+    """Read one partition, over and over, and keep the latencies.
+
+    This is how the comparison shows what an analytical query costs the
+    transactional path.  Every engine here reads the same single node, so an
+    engine that scans the whole history is expected to be felt; the bulk reader
+    is the one claiming not to, and this is what tests that claim.
+    """
+
+    def __init__(self, entity_id: str):
+        self._entity_id = entity_id
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+        self._latencies: List[float] = []
+        self._failures = 0
+
+    def __enter__(self) -> "_OltpProbe":
+        self._thread = threading.Thread(target=self._loop, name="oltp-probe", daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: Any) -> None:
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+
+    def _loop(self) -> None:
+        while not self._stop.is_set():
+            start = time.perf_counter()
+            try:
+                cassandra_client.get_drone_detail(self._entity_id)
+                self._latencies.append((time.perf_counter() - start) * 1000)
+            except Exception:
+                # A read that never came back is the most interesting outcome of
+                # all, so count it rather than letting it end the probe.
+                self._failures += 1
+            self._stop.wait(PROBE_INTERVAL_S)
+
+    def impact(self) -> OltpImpact:
+        samples = sorted(self._latencies)
+        if not samples:
+            return OltpImpact(failures=self._failures)
+
+        def at(fraction: float) -> float:
+            index = min(len(samples) - 1, int(round(fraction * (len(samples) - 1))))
+            return round(samples[index], 1)
+
+        return OltpImpact(
+            p50_ms=at(0.5),
+            p95_ms=at(0.95),
+            max_ms=round(samples[-1], 1),
+            samples=len(samples),
+            failures=self._failures,
+        )
+
+
+def _probe_subject() -> Optional[str]:
+    """An asset to point-read, or None if Cassandra cannot be asked for one."""
+    try:
+        drones = cassandra_client.get_drones(limit=1)
+    except Exception:
+        return None
+    return drones[0]["entity_id"] if drones else None
+
+
 @router.post("/benchmark", response_model=BenchmarkResponse)
 def run_benchmark(req: BenchmarkRequest) -> BenchmarkResponse:
-    """Run one logical query on all three engines and return all three timings.
+    """Run one logical question down all four paths, and report what each cost.
 
-    The engines run in sequence so they are not competing for the same host's
-    CPU while being timed.  Per-engine failures are reported in the body, so the
-    comparison still renders when one engine is down.
+    The paths run in sequence, never together, so a timing is of one path rather
+    than of four competing for one host.  While each one runs, a single-partition
+    read is sampled alongside it, so the answer carries the price it charged the
+    transactional path; the same read is sampled before anything starts, as the
+    baseline to read those against.  Per-path failures are reported in the body,
+    so the comparison still renders when one path cannot answer — which for CQL
+    and an aggregate is the point of showing it.
     """
     statement = _validate(req.sql)
-    return BenchmarkResponse(**{engine: _run(engine, statement, req.limit) for engine in ENGINES})
+
+    if not _comparison_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="A comparison is already running.  They run one at a time, "
+            "because two at once would each be timed while the other ran.",
+        )
+    try:
+        subject = _probe_subject()
+        baseline = None
+        if subject:
+            with _OltpProbe(subject) as probe:
+                time.sleep(BASELINE_WINDOW_S)
+            baseline = probe.impact()
+
+        results: Dict[str, EngineResult] = {}
+        for engine in ENGINES:
+            if not subject:
+                results[engine] = _run(engine, statement, req.limit)
+                continue
+            with _OltpProbe(subject) as probe:
+                results[engine] = _run(engine, statement, req.limit)
+            results[engine].oltp = probe.impact()
+
+        return BenchmarkResponse(oltp_baseline=baseline, **results)
+    finally:
+        _comparison_lock.release()
 
 
 # ──────────────────────── Natural language → SQL ────────────────────────

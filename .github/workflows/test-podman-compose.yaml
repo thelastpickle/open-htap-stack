@@ -116,8 +116,10 @@ jobs:
       - name: Start remaining services and verify
         run: |
           # the same order the compose file's depends_on describes: cassandra and
-          # kafka are ready by now, so spark, then presto, then the ingress services
-          podman start spark presto data-producer data-cassandra-sink
+          # kafka are ready by now, so spark, then presto, then the ingress services.
+          # The dashboard's backend and frontend go up here too; the Mission Control
+          # step below waits on them, since they are the last thing to become ready.
+          podman start spark presto data-producer data-cassandra-sink backend frontend
 
           echo -e "\n=== Waiting for Spark to be ready ==="
           timeout 120 bash -c 'until curl -sf http://localhost:8080 >/dev/null 2>&1; do echo "Waiting for Spark..."; sleep 5; done'
@@ -257,6 +259,242 @@ jobs:
           (! echo "$RESULT" | grep -qE "[a-zA-Z_]+.*[0-9]+") && { echo "❌ GROUP BY query did not return expected aggregation results"; exit 1; }
           
           echo "✓ Bulk SparkSQL queries completed and validated successfully"
+
+      - name: Test Mission Control dashboard
+        run: |
+          # Scratch space for the helpers below.  RUNNER_TEMP is always set on a
+          # GitHub runner; the fallback lets this step be run by hand.
+          export TMP_DIR="${RUNNER_TEMP:-$PWD/.ci-tmp}"
+          mkdir -p "$TMP_DIR"
+
+          # Small helpers, so the polling loops below need no nested quoting.
+          cat > "$TMP_DIR/jq-path.py" << 'PY'
+          # Print one value out of a JSON document on stdin: jq-path.py total_drones
+          # Always prints exactly one token, so the polling loops below can compare it
+          # even when the endpoint answered with an error instead.
+          import json, sys
+          try:
+              document = json.load(sys.stdin)
+              for key in sys.argv[1:]:
+                  document = document[key] if isinstance(document, dict) else document[int(key)]
+              print(len(document) if isinstance(document, (list, dict)) else document)
+          except Exception as error:
+              print(0)
+              print(f"jq-path: {type(error).__name__}: {error}", file=sys.stderr)
+          PY
+          cat > "$TMP_DIR/check-benchmark.py" << 'PY'
+          # check-benchmark.py <path that must answer> ...
+          #
+          # Every path must be reachable.  Only the paths named on the command line
+          # have to answer the query, because not every query is for every path: CQL
+          # cannot group by a non-key column, and the grouped queries below rely on
+          # it saying so.
+          #
+          # Also checks the OLTP probe, which is the comparison's evidence that an
+          # analytical scan does or does not cost the transactional path.  The idle
+          # baseline is always sampled over a fixed window, so it must be there.  A
+          # path is only required to carry samples if it ran long enough to be
+          # sampled at all: the probe reads four times a second, and a query that
+          # answers in milliseconds legitimately finishes inside one interval.
+          import json, sys
+          PROBE_INTERVAL_MS = 250
+          required = set(sys.argv[1:])
+          document = json.load(sys.stdin)
+          baseline = document.pop("oltp_baseline", None)
+          engines = document
+          problems = []
+          for name, result in engines.items():
+              probe = result.get("oltp") or {}
+              if not result["available"]:
+                  problems.append(f"{name} unreachable: {result['error']}")
+              elif name in required and (result["error"] or result["row_count"] == 0):
+                  problems.append(f"{name}: {result['error'] or 'no rows'}")
+              elif result["query_time_ms"] > 4 * PROBE_INTERVAL_MS and not probe.get("samples"):
+                  problems.append(f"{name}: ran {result['query_time_ms']}ms with no OLTP probe samples")
+          if not (baseline or {}).get("samples"):
+              problems.append("no idle OLTP baseline")
+          if problems:
+              print("::error::comparison failed: " + "; ".join(problems))
+              sys.exit(1)
+          print(f"  idle baseline: point read p50 {baseline['p50_ms']}ms, p95 {baseline['p95_ms']}ms")
+          for name, result in engines.items():
+              probe = result.get("oltp") or {}
+              cost = (
+                  f" — point read p50 {probe['p50_ms']}ms, p95 {probe['p95_ms']}ms,"
+                  f" max {probe['max_ms']}ms over {probe['samples']} reads while it ran"
+                  if probe.get("samples")
+                  else " — answered too quickly to sample"
+              )
+              answered = not result["error"] and result["row_count"]
+              print(
+                  f"  {name}: {result['query_time_ms']}ms, {result['row_count']} rows{cost}"
+                  if answered
+                  else f"  {name}: declined this query — {result['error']}"
+              )
+          PY
+          # The three presets the dashboard offers, in the order it offers them: a
+          # bounded read every path can answer, the smallest grouped query CQL cannot
+          # express, and the same grouping over the whole event history.  The last one
+          # is minutes rather than seconds, which is why the dashboard makes it opt-in.
+          cat > "$TMP_DIR/benchmark-bounded.json" << 'JSON'
+          {"sql": "SELECT entity_id, speed_mps, altitude_m FROM drone_latest_status LIMIT 5", "limit": 5}
+          JSON
+          cat > "$TMP_DIR/benchmark-fleet-group.json" << 'JSON'
+          {"sql": "SELECT event_type, count(*) AS assets, min(temp_internal_c) AS coldest, max(temp_internal_c) AS hottest FROM drone_latest_status GROUP BY event_type ORDER BY event_type LIMIT 5", "limit": 5}
+          JSON
+          cat > "$TMP_DIR/benchmark-aggregate.json" << 'JSON'
+          {"sql": "SELECT event_type, count(*) AS event_count, min(temp_internal_c) AS coldest, max(temp_internal_c) AS hottest FROM events GROUP BY event_type ORDER BY event_type LIMIT 5", "limit": 5}
+          JSON
+          cat > "$TMP_DIR/vector-search.json" << 'JSON'
+          {"query": "hydropower and renewable energy", "limit": 3}
+          JSON
+          cat > "$TMP_DIR/demo-settings.json" << 'JSON'
+          {"drones_enabled": 40, "events_per_sec": 800, "outlier_percent": 5.0, "paused": false}
+          JSON
+
+          echo -e "\n=== Waiting for the dashboard API ==="
+          timeout 180 bash -c 'until curl -sf http://localhost:8000/api/health > /dev/null; do echo "Waiting for backend..."; sleep 5; done'
+          echo "✓ Backend is answering"
+
+          echo -e "\n=== Waiting for the dashboard to be served ==="
+          timeout 120 bash -c 'until curl -sf http://localhost:4000/ > /dev/null; do echo "Waiting for frontend..."; sleep 5; done'
+          # The frontend proxies /api to the backend, so this also proves the proxy resolves.
+          curl -sf http://localhost:4000/api/health > /dev/null \
+            || { echo "::error::the frontend is not proxying /api to the backend"; exit 1; }
+          echo "✓ Dashboard served, and proxying the API"
+
+          echo -e "\n=== Every service reachable from the backend ==="
+          curl -s http://localhost:8000/api/platform/health | tee "$TMP_DIR/platform-health.json"
+          echo
+          grep -q '"status": *"down"' "$TMP_DIR/platform-health.json" \
+            && { echo "::error::the backend cannot reach every service"; exit 1; }
+          echo "✓ All services reachable"
+
+          echo -e "\n=== KPIs derived from live data ==="
+          # The producer and the sink have been running since the earlier steps, so
+          # the fleet must be non-empty; a zero here means the dashboard is not
+          # reading what the sink wrote.
+          timeout 180 bash -c 'while true; do FLEET=$(curl -s http://localhost:8000/api/overview/kpis | python3 $TMP_DIR/jq-path.py total_drones); [ "${FLEET:-0}" -gt 0 ] && break; echo "Waiting for the dashboard to see the fleet..."; sleep 10; done'
+          curl -s http://localhost:8000/api/overview/kpis | python3 -m json.tool | head -20
+          echo "✓ KPIs populated"
+
+          echo -e "\n=== One bounded read, all four access paths ==="
+          # Spark starts a job for its first query, and the bulk reader takes a
+          # snapshot before it reads, so allow a generous window.
+          curl -s --max-time 600 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-bounded.json" \
+            > "$TMP_DIR/bounded-result.json"
+          python3 -m json.tool < "$TMP_DIR/bounded-result.json"
+          python3 "$TMP_DIR/check-benchmark.py" cassandra presto spark spark_bulk \
+            < "$TMP_DIR/bounded-result.json"
+          echo "✓ Every access path answered the bounded read"
+
+          echo -e "\n=== Grouping the current fleet: the smallest query CQL cannot express ==="
+          # The dashboard's default grouped preset, and the one a viewer actually
+          # waits for: bounded to the fleet table, so seconds rather than minutes.
+          # Cassandra is expected to decline it, and the checker is told so.
+          curl -s --max-time 300 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-fleet-group.json" \
+            > "$TMP_DIR/fleet-group-result.json"
+          python3 -m json.tool < "$TMP_DIR/fleet-group-result.json"
+          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk \
+            < "$TMP_DIR/fleet-group-result.json"
+          grep -q "PRIMARY KEY" "$TMP_DIR/fleet-group-result.json" \
+            || { echo "::error::Cassandra was expected to decline the GROUP BY; it did not"; exit 1; }
+          echo "✓ The analytical paths grouped the fleet, and Cassandra explained why it cannot"
+
+          echo -e "\n=== A comparison refuses to run beside another one ==="
+          # Two overlapping comparisons would each be timed while the other ran, so
+          # the endpoint takes a lock.  Issue two at once and require exactly one 200
+          # and one 409: which of them wins the lock is a race and does not matter,
+          # only that the loser is refused rather than quietly producing wrong
+          # numbers.  The winner holds the lock for at least the baseline window, so
+          # the two do overlap.
+          for attempt in a b; do
+            curl -s -o "$TMP_DIR/concurrent-$attempt.json" -w '%{http_code}' --max-time 300 \
+              -X POST http://localhost:8000/api/query/benchmark \
+              -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-fleet-group.json" \
+              > "$TMP_DIR/concurrent-$attempt.code" &
+          done
+          wait
+          CODE_A=$(cat "$TMP_DIR/concurrent-a.code")
+          CODE_B=$(cat "$TMP_DIR/concurrent-b.code")
+          echo "the two overlapping comparisons returned $CODE_A and $CODE_B"
+          WINNER=""
+          for attempt in a b; do
+            case "$(cat "$TMP_DIR/concurrent-$attempt.code")" in
+              200) WINNER="$attempt" ;;
+              409) cat "$TMP_DIR/concurrent-$attempt.json"; echo ;;
+              *) echo "::error::unexpected status $(cat "$TMP_DIR/concurrent-$attempt.code")"; exit 1 ;;
+            esac
+          done
+          [ -n "$WINNER" ] && [ "$CODE_A" != "$CODE_B" ] \
+            || { echo "::error::expected one 200 and one 409, got $CODE_A and $CODE_B"; exit 1; }
+          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk \
+            < "$TMP_DIR/concurrent-$WINNER.json"
+          echo "✓ The overlapping comparison was refused, and the other still completed"
+
+          echo -e "\n=== The whole event history, grouped ==="
+          # Minutes, not seconds: this groups every event ingested so far, on three
+          # paths in sequence.  The dashboard makes this preset opt-in for that
+          # reason; CI runs it because it is the path the bulk reader exists for.
+          #
+          # It needs a non-empty history, which is why this whole step runs before the
+          # Parquet import test: that one truncates demo.events on purpose.  Assert it
+          # here, so reordering the steps fails with the reason rather than with three
+          # paths mysteriously agreeing on zero rows.
+          # One row is enough to know, and costs one partition read rather than a
+          # count over the whole table.
+          podman exec cassandra cqlsh cassandra -e "SELECT event_id FROM demo.events LIMIT 1;" 2>&1 \
+            | grep -qE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" \
+            || { echo "::error::demo.events is empty, so the history preset has nothing to scan; this step must run before the Parquet import test truncates it"; exit 1; }
+          curl -s --max-time 1800 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-aggregate.json" \
+            > "$TMP_DIR/aggregate-result.json"
+          python3 -m json.tool < "$TMP_DIR/aggregate-result.json"
+          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk \
+            < "$TMP_DIR/aggregate-result.json"
+          echo "✓ The analytical paths scanned the whole history"
+
+          echo -e "\n=== Every snapshot the bulk reader takes is time-bounded ==="
+          # A snapshot hard-links live SSTables, so one without an expiry keeps them
+          # from being compacted away for ever.  The reader is configured with a TTL
+          # that Cassandra enforces, so each of its snapshots must carry an
+          # expiration time; listsnapshots prints that in the last column.
+          podman exec cassandra nodetool listsnapshots 2>&1 | tail -20
+          podman exec cassandra nodetool listsnapshots 2>/dev/null \
+            | grep htap_dashboard > "$TMP_DIR/snapshots.txt" || true
+          UNBOUNDED=$(awk "{ if (\$NF ~ /^[0-9]{4}-/) next; print }" "$TMP_DIR/snapshots.txt" | wc -l | tr -d " ")
+          [ "${UNBOUNDED:-0}" -eq 0 ] \
+            || { echo "::error::$UNBOUNDED dashboard snapshots have no expiry"; cat "$TMP_DIR/snapshots.txt"; exit 1; }
+          echo "✓ $(wc -l < "$TMP_DIR/snapshots.txt" | tr -d " ") snapshot(s) present, all with an expiry"
+
+          echo -e "\n=== Vector search over Cassandra 5 SAI ==="
+          curl -sf -X POST http://localhost:8000/api/vector/index-all \
+            || { echo "::error::could not start the vector indexer"; exit 1; }
+          # The indexer runs in the background, so poll until a search finds something.
+          timeout 300 bash -c 'while true; do HITS=$(curl -s --max-time 120 -X POST http://localhost:8000/api/vector/search -H "Content-Type: application/json" --data @$TMP_DIR/vector-search.json | python3 $TMP_DIR/jq-path.py results); [ "${HITS:-0}" -gt 0 ] && break; echo "Waiting for embeddings..."; sleep 10; done'
+          curl -s -X POST http://localhost:8000/api/vector/search \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/vector-search.json" | python3 -m json.tool | head -30
+          echo "✓ Vector search returned matches"
+
+          echo -e "\n=== Flight path from the event history ==="
+          ENTITY=$(curl -s "http://localhost:8000/api/map/live?limit=1" | python3 "$TMP_DIR/jq-path.py" drones 0 entity_id)
+          POINTS=$(curl -s "http://localhost:8000/api/map/drone/$ENTITY/trail?points=10" | python3 "$TMP_DIR/jq-path.py" points)
+          echo "$ENTITY has $POINTS recorded positions"
+          [ "$POINTS" -gt 1 ] || { echo "::error::no flight path for $ENTITY"; exit 1; }
+          echo "✓ Flight path read from drone_events_by_entity"
+
+          echo -e "\n=== Demo controls reach the producer ==="
+          curl -sf -X POST http://localhost:8000/api/settings/demo \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/demo-settings.json" \
+            || { echo "::error::could not update the demo settings"; exit 1; }
+          # The producer polls every 10s, so give it a few cycles to report the change.
+          timeout 90 bash -c 'until podman logs data-producer 2>&1 | grep -q "settings updated: eps=800"; do echo "Waiting for the producer to adopt the new settings..."; sleep 5; done'
+          echo "✓ The producer adopted the settings set through the dashboard"
+
+          echo "✓ All Mission Control checks passed"
+        timeout-minutes: 20
 
       - name: Test Parquet Export
         run: |
@@ -487,162 +725,6 @@ jobs:
 #          echo "✓ Second transaction (seq=1) validated successfully"
 #          echo "✓ In-order session timeline verified with both seq=0 and seq=1"
 #          echo "✓ All Accord transactions completed successfully"
-
-      - name: Test Mission Control dashboard
-        run: |
-          # Scratch space for the helpers below.  RUNNER_TEMP is always set on a
-          # GitHub runner; the fallback lets this step be run by hand.
-          export TMP_DIR="${RUNNER_TEMP:-$PWD/.ci-tmp}"
-          mkdir -p "$TMP_DIR"
-
-          # Small helpers, so the polling loops below need no nested quoting.
-          cat > "$TMP_DIR/jq-path.py" << 'PY'
-          # Print one value out of a JSON document on stdin: jq-path.py total_drones
-          # Always prints exactly one token, so the polling loops below can compare it
-          # even when the endpoint answered with an error instead.
-          import json, sys
-          try:
-              document = json.load(sys.stdin)
-              for key in sys.argv[1:]:
-                  document = document[key] if isinstance(document, dict) else document[int(key)]
-              print(len(document) if isinstance(document, (list, dict)) else document)
-          except Exception as error:
-              print(0)
-              print(f"jq-path: {type(error).__name__}: {error}", file=sys.stderr)
-          PY
-          cat > "$TMP_DIR/check-benchmark.py" << 'PY'
-          # check-benchmark.py <engine that must answer> ...
-          #
-          # Every engine must be reachable.  Only the engines named on the command
-          # line have to answer the query, because not every query is for every
-          # engine: CQL cannot group by a non-key column, and the aggregate below
-          # relies on it saying so.
-          import json, sys
-          required = set(sys.argv[1:])
-          engines = json.load(sys.stdin)
-          problems = []
-          for name, result in engines.items():
-              if not result["available"]:
-                  problems.append(f"{name} unreachable: {result['error']}")
-              elif name in required and (result["error"] or result["row_count"] == 0):
-                  problems.append(f"{name}: {result['error'] or 'no rows'}")
-          if problems:
-              print("::error::benchmark failed: " + "; ".join(problems))
-              sys.exit(1)
-          for name, result in engines.items():
-              answered = not result["error"] and result["row_count"]
-              print(
-                  f"  {name}: {result['query_time_ms']}ms, {result['row_count']} rows"
-                  if answered
-                  else f"  {name}: declined this query — {result['error']}"
-              )
-          PY
-          # The two presets the dashboard offers.  The bounded read every path can
-          # answer; the aggregate is the one CQL cannot express, which is the point
-          # of having the other three.
-          cat > "$TMP_DIR/benchmark-bounded.json" << 'JSON'
-          {"sql": "SELECT entity_id, speed_mps, altitude_m FROM drone_latest_status LIMIT 5", "limit": 5}
-          JSON
-          cat > "$TMP_DIR/benchmark-aggregate.json" << 'JSON'
-          {"sql": "SELECT event_type, count(*) AS event_count, min(temp_internal_c) AS coldest, max(temp_internal_c) AS hottest FROM events GROUP BY event_type ORDER BY event_type LIMIT 5", "limit": 5}
-          JSON
-          cat > "$TMP_DIR/vector-search.json" << 'JSON'
-          {"query": "hydropower and renewable energy", "limit": 3}
-          JSON
-          cat > "$TMP_DIR/demo-settings.json" << 'JSON'
-          {"drones_enabled": 40, "events_per_sec": 800, "outlier_percent": 5.0, "paused": false}
-          JSON
-
-          echo -e "\n=== Waiting for the dashboard API ==="
-          timeout 180 bash -c 'until curl -sf http://localhost:8000/api/health > /dev/null; do echo "Waiting for backend..."; sleep 5; done'
-          echo "✓ Backend is answering"
-
-          echo -e "\n=== Waiting for the dashboard to be served ==="
-          timeout 120 bash -c 'until curl -sf http://localhost:4000/ > /dev/null; do echo "Waiting for frontend..."; sleep 5; done'
-          # The frontend proxies /api to the backend, so this also proves the proxy resolves.
-          curl -sf http://localhost:4000/api/health > /dev/null \
-            || { echo "::error::the frontend is not proxying /api to the backend"; exit 1; }
-          echo "✓ Dashboard served, and proxying the API"
-
-          echo -e "\n=== Every service reachable from the backend ==="
-          curl -s http://localhost:8000/api/platform/health | tee "$TMP_DIR/platform-health.json"
-          echo
-          grep -q '"status": *"down"' "$TMP_DIR/platform-health.json" \
-            && { echo "::error::the backend cannot reach every service"; exit 1; }
-          echo "✓ All services reachable"
-
-          echo -e "\n=== KPIs derived from live data ==="
-          # The producer and the sink have been running since the earlier steps, so
-          # the fleet must be non-empty; a zero here means the dashboard is not
-          # reading what the sink wrote.
-          timeout 180 bash -c 'while true; do FLEET=$(curl -s http://localhost:8000/api/overview/kpis | python3 $TMP_DIR/jq-path.py total_drones); [ "${FLEET:-0}" -gt 0 ] && break; echo "Waiting for the dashboard to see the fleet..."; sleep 10; done'
-          curl -s http://localhost:8000/api/overview/kpis | python3 -m json.tool | head -20
-          echo "✓ KPIs populated"
-
-          echo -e "\n=== One bounded read, all four access paths ==="
-          # Spark starts a job for its first query, and the bulk reader takes a
-          # snapshot before it reads, so allow a generous window.
-          curl -s --max-time 600 -X POST http://localhost:8000/api/query/benchmark \
-            -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-bounded.json" \
-            > "$TMP_DIR/bounded-result.json"
-          python3 -m json.tool < "$TMP_DIR/bounded-result.json"
-          python3 "$TMP_DIR/check-benchmark.py" cassandra presto spark spark_bulk \
-            < "$TMP_DIR/bounded-result.json"
-          echo "✓ Every access path answered the bounded read"
-
-          echo -e "\n=== Fleet-wide aggregate: the query CQL cannot express ==="
-          # Minutes, not seconds: this groups every event ingested so far, on three
-          # paths in sequence.  Cassandra is expected to decline it, and the
-          # checker is told so.
-          curl -s --max-time 1800 -X POST http://localhost:8000/api/query/benchmark \
-            -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-aggregate.json" \
-            > "$TMP_DIR/aggregate-result.json"
-          python3 -m json.tool < "$TMP_DIR/aggregate-result.json"
-          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk \
-            < "$TMP_DIR/aggregate-result.json"
-          grep -q "PRIMARY KEY" "$TMP_DIR/aggregate-result.json" \
-            || { echo "::error::Cassandra was expected to decline the GROUP BY; it did not"; exit 1; }
-          echo "✓ The analytical paths answered the aggregate, and Cassandra explained why it cannot"
-
-          echo -e "\n=== Every snapshot the bulk reader takes is time-bounded ==="
-          # A snapshot hard-links live SSTables, so one without an expiry keeps them
-          # from being compacted away for ever.  The reader is configured with a TTL
-          # that Cassandra enforces, so each of its snapshots must carry an
-          # expiration time; listsnapshots prints that in the last column.
-          podman exec cassandra nodetool listsnapshots 2>&1 | tail -20
-          podman exec cassandra nodetool listsnapshots 2>/dev/null \
-            | grep htap_dashboard > "$TMP_DIR/snapshots.txt" || true
-          UNBOUNDED=$(awk "{ if (\$NF ~ /^[0-9]{4}-/) next; print }" "$TMP_DIR/snapshots.txt" | wc -l | tr -d " ")
-          [ "${UNBOUNDED:-0}" -eq 0 ] \
-            || { echo "::error::$UNBOUNDED dashboard snapshots have no expiry"; cat "$TMP_DIR/snapshots.txt"; exit 1; }
-          echo "✓ $(wc -l < "$TMP_DIR/snapshots.txt" | tr -d " ") snapshot(s) present, all with an expiry"
-
-          echo -e "\n=== Vector search over Cassandra 5 SAI ==="
-          curl -sf -X POST http://localhost:8000/api/vector/index-all \
-            || { echo "::error::could not start the vector indexer"; exit 1; }
-          # The indexer runs in the background, so poll until a search finds something.
-          timeout 300 bash -c 'while true; do HITS=$(curl -s --max-time 120 -X POST http://localhost:8000/api/vector/search -H "Content-Type: application/json" --data @$TMP_DIR/vector-search.json | python3 $TMP_DIR/jq-path.py results); [ "${HITS:-0}" -gt 0 ] && break; echo "Waiting for embeddings..."; sleep 10; done'
-          curl -s -X POST http://localhost:8000/api/vector/search \
-            -H 'Content-Type: application/json' --data @"$TMP_DIR/vector-search.json" | python3 -m json.tool | head -30
-          echo "✓ Vector search returned matches"
-
-          echo -e "\n=== Flight path from the event history ==="
-          ENTITY=$(curl -s "http://localhost:8000/api/map/live?limit=1" | python3 "$TMP_DIR/jq-path.py" drones 0 entity_id)
-          POINTS=$(curl -s "http://localhost:8000/api/map/drone/$ENTITY/trail?points=10" | python3 "$TMP_DIR/jq-path.py" points)
-          echo "$ENTITY has $POINTS recorded positions"
-          [ "$POINTS" -gt 1 ] || { echo "::error::no flight path for $ENTITY"; exit 1; }
-          echo "✓ Flight path read from drone_events_by_entity"
-
-          echo -e "\n=== Demo controls reach the producer ==="
-          curl -sf -X POST http://localhost:8000/api/settings/demo \
-            -H 'Content-Type: application/json' --data @"$TMP_DIR/demo-settings.json" \
-            || { echo "::error::could not update the demo settings"; exit 1; }
-          # The producer polls every 10s, so give it a few cycles to report the change.
-          timeout 90 bash -c 'until podman logs data-producer 2>&1 | grep -q "settings updated: eps=800"; do echo "Waiting for the producer to adopt the new settings..."; sleep 5; done'
-          echo "✓ The producer adopted the settings set through the dashboard"
-
-          echo "✓ All Mission Control checks passed"
-        timeout-minutes: 20
 
       - name: Show service logs on failure
         if: failure()

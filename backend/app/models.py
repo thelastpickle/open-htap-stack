@@ -162,11 +162,29 @@ class BenchmarkRequest(BaseModel):
     limit: int = Field(default=10, ge=1, le=1000)
 
 
+class OltpImpact(BaseModel):
+    """What a single-partition read cost while something else was running.
+
+    Sampled by the comparison endpoint, so the effect of an analytical query on
+    the transactional path is shown rather than asserted.
+    """
+
+    p50_ms: float = 0.0
+    p95_ms: float = 0.0
+    max_ms: float = 0.0
+    samples: int = 0
+    # Point reads that did not come back at all during the window.
+    failures: int = 0
+
+
 class EngineResult(SQLQueryResult):
     # available=False means the engine could not be reached at all, which the UI
     # distinguishes from a query that reached it and failed.
     available: bool = True
     error: Optional[str] = None
+    # Absent unless the result came from the comparison endpoint, which is the
+    # only caller that probes the OLTP path while a query runs.
+    oltp: Optional[OltpImpact] = None
 
 
 class BenchmarkResponse(BaseModel):
@@ -175,6 +193,9 @@ class BenchmarkResponse(BaseModel):
     spark: EngineResult
     # The Analytics bulk reader: same rows, read straight from SSTables.
     spark_bulk: EngineResult
+    # The same point read measured before any engine ran, so each engine's
+    # figure has something to be compared against.
+    oltp_baseline: Optional[OltpImpact] = None
 
 
 class NLQueryRequest(BaseModel):

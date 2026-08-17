@@ -23,6 +23,7 @@ carries only the views its own path needs.
 import itertools
 import math
 import re
+import socket as stdlib_socket
 import threading
 import time
 from typing import Any, Dict, List, Optional, Sequence
@@ -74,12 +75,44 @@ class SparkThriftClient:
     ``name`` only labels the log lines, so the two connections can be told apart.
     """
 
+    # What a query reports when abort() cut its connection.  A cancelled query and
+    # a server that stopped answering arrive here as the same transport error, and
+    # only this class knows which of the two happened.
+    CANCELLED_MESSAGE = (
+        "Cancelled: the connection was taken away, so Spark stopped work on this "
+        "statement.  It reconnects on the next query."
+    )
+
     def __init__(self, name: str = "spark", register_connector_views: bool = True):
         self._name = name
         self._register_connector_views = register_connector_views
         self._conn: Optional[Any] = None
+        self._socket: Optional[Any] = None
+        # Set by abort() so the interrupted query can say it was cancelled rather
+        # than blaming the server for going quiet.
+        self._aborted = False
         self._lock = threading.Lock()
         self.connected = False
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def was_aborted(self) -> bool:
+        """Whether the last failure on this connection was a cancellation."""
+        return self._aborted
+
+    @property
+    def busy(self) -> bool:
+        """True while a statement is in flight on this connection.
+
+        Worth asking before reconnecting: connect() takes the same lock a query
+        holds, so it would otherwise wait out the whole query rather than doing
+        anything, and a control that hangs for a quarter of an hour is worse than
+        one that explains itself.
+        """
+        return self._lock.locked()
 
     def connect(self) -> None:
         with self._lock:
@@ -92,12 +125,17 @@ class SparkThriftClient:
                 # dashboard rather than reporting a failure.  This is the plain
                 # transport, matching the hive.server2.authentication=NOSASL the
                 # spark service starts its Thrift Server with.
-                socket = TSocket.TSocket(settings.spark_thrift_host, settings.spark_thrift_port)
-                socket.setTimeout(settings.spark_query_timeout_s * 1000)
+                transport_socket = TSocket.TSocket(
+                    settings.spark_thrift_host, settings.spark_thrift_port
+                )
+                transport_socket.setTimeout(settings.spark_query_timeout_s * 1000)
                 self._conn = hive.connect(
-                    thrift_transport=TTransport.TBufferedTransport(socket),
+                    thrift_transport=TTransport.TBufferedTransport(transport_socket),
                     database="default",
                 )
+                # Kept so abort() can reach it without the lock (see below).
+                self._socket = transport_socket
+                self._aborted = False
                 self.connected = True
                 print(
                     f"[db] Spark Thrift Server connected ({self._name}): "
@@ -118,7 +156,47 @@ class SparkThriftClient:
             except Exception:
                 pass
         self._conn = None
+        self._socket = None
         self.connected = False
+
+    def abort(self) -> bool:
+        """Cut the connection from under a query that is still running.
+
+        This deliberately does not take the lock, because the thread holding it is
+        the one being interrupted: PyHive gives no way to cancel a statement it is
+        already waiting on, so the way to stop waiting is to close the socket
+        underneath it.  Its blocked read then raises, the query reports a failure
+        like any other, and HiveServer2 cancels the statement's job group when it
+        notices the session has gone.
+
+        Returns False if there was nothing open to close.  Closing an idle
+        connection is harmless, since the next use reconnects.
+        """
+        transport_socket = self._socket
+        if transport_socket is None:
+            return False
+        self._aborted = True
+        self.connected = False
+        # Shut the connection down before closing it.  Closing alone is not enough:
+        # a close in this thread does not reliably wake a recv already blocked in
+        # another, so the query would keep waiting out its whole timeout.  A
+        # shutdown ends the connection itself, so the blocked read returns at once.
+        #
+        # This frees the dashboard, not the cluster: measured here, Spark keeps
+        # running a job whose session has gone, so whoever cancels has to kill the
+        # job as well (see db/spark_ui.kill_jobs_for).
+        handle = getattr(transport_socket, "handle", None)
+        if handle is not None:
+            try:
+                handle.shutdown(stdlib_socket.SHUT_RDWR)
+            except OSError:
+                pass  # already gone, which is the outcome being asked for
+        try:
+            transport_socket.close()
+        except Exception as e:
+            print(f"[db] Spark abort ({self._name}) could not close the socket: {e}")
+        print(f"[db] Spark connection aborted ({self._name}); it will reconnect on next use")
+        return True
 
     def _register_views(self) -> None:
         """Point Spark at the Cassandra tables through the CQL connector.
@@ -144,8 +222,11 @@ class SparkThriftClient:
         try:
             return self.execute(sql)
         except TTransportException as e:
+            aborted = self._aborted
             with self._lock:
                 self._close_locked()
+            if aborted:
+                raise RuntimeError(self.CANCELLED_MESSAGE) from e
             raise RuntimeError(
                 f"Spark stopped answering for {settings.spark_query_timeout_s}s ({e}). "
                 "Either the job is starved — comparing the paths all at once leaves it "
@@ -238,8 +319,15 @@ class SparkBulkClient:
     def connected(self) -> bool:
         return self._thrift.connected
 
+    @property
+    def busy(self) -> bool:
+        return self._thrift.busy
+
     def connect(self) -> None:
         self._thrift.connect()
+
+    def abort(self) -> bool:
+        return self._thrift.abort()
 
     def execute_query(self, sql: str) -> List[Dict[str, Any]]:
         """Snapshot what the statement reads, then run it."""
@@ -248,13 +336,16 @@ class SparkBulkClient:
         try:
             return self._thrift.execute(sql)
         except TTransportException as e:
+            if self._thrift.was_aborted:
+                raise RuntimeError(SparkThriftClient.CANCELLED_MESSAGE) from e
             raise RuntimeError(
                 f"The bulk reader stopped answering for {settings.spark_query_timeout_s}s ({e}). "
-                "Reading the whole history off SSTables is minutes of work, and with "
-                "the other paths beside it the job outlasts this guard — the job itself "
-                "usually finishes, but nothing here is left to hand it to. Run the paths "
-                "one at a time for a figure, or raise SPARK_QUERY_TIMEOUT_S to wait it "
-                "out under contention."
+                "Reading the whole history off SSTables is minutes of work, and with the "
+                "other paths beside it the job outlasts this guard.  Spark carries on "
+                "with it after this gives up, so cancel it from the Health page rather "
+                "than leaving it to compete with the next run.  For a figure, run the "
+                "paths one at a time; to wait it out under contention, raise "
+                "SPARK_QUERY_TIMEOUT_S."
             ) from e
         except Exception as e:
             raise RuntimeError(readable_error(e)) from e

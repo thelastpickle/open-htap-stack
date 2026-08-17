@@ -34,7 +34,7 @@ screenshots and no invented numbers. Where a figure cannot be measured the page 
 | **Map**      | Live positions, restricted airspace, and an asset's recorded flight path    | `drone_latest_status` for positions; `drone_events_by_entity` for the path         |
 | **Alerts**   | Zone-proximity and breach alerts, newest first                             | `alerts_by_bucket`, read one hourly partition at a time                           |
 | **Explore**  | SQL console, vector search, and the four-path comparison                    | Whichever path you pick; all four read the same Cassandra data                    |
-| **Health**   | Per-service reachability and latency by access path                        | A TCP probe per service, and one timed query per path                             |
+| **Health**   | Reachability, latency by access path, and the work in flight                | A TCP probe per service, one timed query per path, and each engine's own query list |
 | **Settings** | Fleet size, event rate, outlier share, pause, and the breach scenario      | Held in the backend; the data producer polls and adopts them                      |
 
 ## The comparison that matters
@@ -141,13 +141,49 @@ millisecond and a path starved out after a quarter of an hour are different find
 **All four paths at once, over the whole history, does not finish here, and that is the finding.** One
 measured run: 27 minutes of wall clock, Presto answering in 17 m 44 s against 241 s alone, and both
 Spark paths giving up — with seven cores between four scans of 36M rows, the Spark jobs outlast the
-900 s guard. The Thrift Server log shows the bulk reader's job completing after 27 minutes with
-nothing left to hand the answer to. Raising the guard until they finish would trade a demonstrable
+900 s guard. The Thrift Server log shows the connector's job running the whole 27 minutes and
+finishing after the dashboard had stopped waiting for it. Raising the guard until they finish would trade a demonstrable
 answer for an hour of waiting and a snapshot pinning SSTables for most of it, so the limit stays and
 the page says what to expect. What survives is the measurement the mode exists for: over 6,335 point
 reads spanning the window, p50 4.6 ms and p95 23.7 ms against 2.3 ms and 2.9 ms taken just before —
 the transactional path made twice as slow at the median and eight times at the tail, with no read
 failing. Select fewer paths and they contend and still finish.
+
+## Seeing and stopping what is running
+
+The Health page carries the operator's half of the dashboard: what the engines are working on, and
+the controls to stop it. Each engine is asked directly rather than the dashboard listing what it
+submitted, so work it knows nothing about appears too — a query from another browser tab, or a
+`presto-cli` session in a container, which is usually what you want to know when the dashboard has
+gone slow for no reason of its own. Presto's coordinator and Spark's application UI are both read
+over HTTP rather than through the dashboard's own connections, because the one query worth asking
+about is the one holding the connection that would answer.
+
+- **A comparison in flight** is shown with its age, its mode, and which paths have answered so far,
+  since that is what a 409 on Explore is about. **Stop it** ends it: Presto's query is cancelled by
+  its coordinator, each Spark path has its connection cut, and the Spark jobs are killed as well.
+  Both halves are needed. Cutting the connection stops the dashboard waiting, but Spark carries on
+  working for a session that has gone, and an orphaned job keeps the cores the next comparison would
+  be timed against. The run's own request returns at once, marked cancelled, with each path saying
+  which of the two happened to it.
+- **Any query** can be cancelled on its own, by the handle its engine gave it: a Presto `query_id` or
+  a Spark job id. Spark's jobs also show task progress, which is the only honest progress bar in the
+  stack.
+- **Reconnect** rebuilds this backend's connection to a service — two of them for Spark, since the
+  connector and the bulk reader hold their own sessions. It costs no downtime and is what clears a
+  session that has gone stale while the service itself is fine. A client busy with a query says so
+  instead: rebuilding would queue behind the query rather than replace it, and a control that hangs
+  for a quarter of an hour explains nothing.
+
+Cassandra is listed with the others and says it keeps no register of running queries, because it does
+not: a point read is milliseconds, so anything worth seeing on this page arrived through one of the
+other two paths.
+
+**Restarting a service is not offered, on purpose.** The dashboard is a container beside the others,
+reachable from a browser, so control over its neighbours is exactly what it should not have; giving it
+the container runtime's socket would be a real escalation for a demo. Each service card therefore
+carries the `podman restart` command rather than a button, next to the wipe and snapshot-clearing
+commands. Reconnecting is the half worth having anyway.
 
 ## Vector search
 

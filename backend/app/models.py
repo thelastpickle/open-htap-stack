@@ -213,6 +213,9 @@ class BenchmarkResponse(BaseModel):
     # Set only for a parallel run: one sample covering the whole window, because
     # while the paths overlap the cost cannot be attributed to any one of them.
     oltp_combined: Optional[OltpImpact] = None
+    # True when the run was stopped from the Health page.  Paths that had not
+    # started are absent rather than reported as failures, since they never ran.
+    cancelled: bool = False
 
 
 class NLQueryRequest(BaseModel):
@@ -272,3 +275,69 @@ class PlatformHealthResponse(BaseModel):
     services: List[ServiceHealth] = []
     overall_health_score: float = 0.0
     total_drones: int = 0
+
+
+# ──────────────────── Work in flight, and stopping it ────────────────────
+
+
+class RunningQuery(BaseModel):
+    """One query an engine is still working on, whoever submitted it.
+
+    The engines are asked directly, so this includes work the dashboard knows
+    nothing about: a presto-cli session in the container shows up here too, which
+    is usually what you want to know when the dashboard looks slow.
+    """
+
+    engine: str
+    # The engine's own handle, and what a kill request has to name: a Presto
+    # query_id, or a Spark job id.
+    id: str
+    state: str = ""
+    running_s: float = 0.0
+    sql: str = ""
+    # Who submitted it, where the engine records that.  Empty when it does not.
+    submitter: str = ""
+    # Progress, for engines that report it.  Spark counts tasks; Presto does not
+    # expose anything this simple, so both stay 0 there.
+    tasks_done: int = 0
+    tasks_total: int = 0
+
+
+class ComparisonRun(BaseModel):
+    """The comparison currently holding the one-at-a-time lock."""
+
+    running_for_s: float = 0.0
+    mode: str = "sequential"
+    engines: List[str] = []
+    sql: str = ""
+    # Paths that have already answered, so a long run shows progress rather than
+    # only an age.
+    done: List[str] = []
+
+
+class RunningWorkResponse(BaseModel):
+    comparison: Optional[ComparisonRun] = None
+    queries: List[RunningQuery] = []
+    # Engines whose running work could not be read, with the reason.  Reported
+    # rather than silently omitted: an empty list and an unreachable engine are
+    # very different answers to "what is running?".
+    unreadable: Dict[str, str] = {}
+
+
+class KillQueryRequest(BaseModel):
+    engine: Literal["presto", "spark"]
+    id: str
+
+
+class ReconnectRequest(BaseModel):
+    # The dashboard's client for one path, or every one of them.
+    target: Literal["cassandra", "presto", "spark", "spark_bulk", "all"]
+
+
+class OperationResult(BaseModel):
+    """What an operator control actually did, in words the page can show."""
+
+    ok: bool = True
+    # One line per thing done, so a control that does several things says so
+    # instead of reporting a bare success.
+    actions: List[str] = []

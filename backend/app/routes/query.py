@@ -161,6 +161,8 @@ def _run(engine: str, sql: str, limit: int) -> EngineResult:
         rows=[[r.get(c) for c in columns] for r in rows],
         row_count=len(rows),
         query_time_ms=elapsed_ms,
+        # Only the bulk reader offers this, so it is asked for rather than required.
+        bytes_scanned=getattr(client, "last_bytes_scanned", None),
     )
 
 

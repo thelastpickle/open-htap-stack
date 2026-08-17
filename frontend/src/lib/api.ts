@@ -53,6 +53,19 @@ export function formatMs(ms: number | null | undefined): string {
   return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
+/**
+ * A byte count in the unit a person would use.  Decimal rather than binary units,
+ * because the figures beside it are throughputs in MB/s and mixing the two makes
+ * the arithmetic on screen wrong by 7%.
+ */
+export function formatBytes(bytes: number | null | undefined): string {
+  if (bytes == null) return '—'
+  if (bytes < 1_000) return `${bytes} B`
+  if (bytes < 1_000_000) return `${(bytes / 1_000).toFixed(0)} kB`
+  if (bytes < 1_000_000_000) return `${(bytes / 1_000_000).toFixed(0)} MB`
+  return `${(bytes / 1_000_000_000).toFixed(2)} GB`
+}
+
 /** Compact a count: 1234 becomes 1.2k. */
 export function formatCount(value: number | null | undefined): string {
   if (value == null) return '—'

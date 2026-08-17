@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     cassandra_keyspace: str = "demo"
     # Named in the bulk reader's options; it addresses nodes by datacenter.
     cassandra_datacenter: str = "datacenter1"
+    # The Sidecar runs beside Cassandra, on the same host as far as this backend is
+    # concerned.  Used to size the snapshot a bulk read is about to stream, so the
+    # result can say how much data it went through.
+    sidecar_port: int = 9043
     # When the backend runs on the host rather than inside the compose network,
     # the driver discovers the node's broadcast address (172.20.0.10) and cannot
     # reach it.  Set this to 127.0.0.1 to rewrite every discovered address to the

@@ -327,6 +327,14 @@ jobs:
                   problems.append(f"{name}: ran {result['query_time_ms']}ms with no OLTP probe samples")
               elif mode == "parallel" and probe.get("samples"):
                   problems.append(f"{name}: carries a per-path probe, which a parallel run cannot attribute")
+          # The bulk reader streams SSTable files, so it alone can say how much data
+          # it went through, and it must: the whole-history preset costs more every
+          # hour the demo ingests, and without the volume a larger scan cannot be
+          # told from a slower one.
+          bulk = engines.get("spark_bulk") or {}
+          if "spark_bulk" in required and not bulk.get("error"):
+              if not bulk.get("bytes_scanned"):
+                  problems.append("spark_bulk answered without saying how many bytes it scanned")
           if not (baseline or {}).get("samples"):
               problems.append("no OLTP reference read before the run")
           if mode == "parallel" and not (combined or {}).get("samples"):
@@ -344,8 +352,15 @@ jobs:
                   else "" if mode == "parallel" else " — answered too quickly to sample"
               )
               answered = not result["error"] and result["row_count"]
+              volume = ""
+              if result.get("bytes_scanned"):
+                  mb = result["bytes_scanned"] / 1e6
+                  # A rate below this much data describes the snapshot and the job
+                  # starting rather than the mechanism, so it is left off.
+                  rate = result["bytes_scanned"] / 1e3 / max(result["query_time_ms"], 1)
+                  volume = f" [scanned {mb:.1f} MB{f', {rate:.0f} MB/s' if mb >= 10 else ''}]"
               print(
-                  f"  {name}: {result['query_time_ms']}ms, {result['row_count']} rows{cost}"
+                  f"  {name}: {result['query_time_ms']}ms, {result['row_count']} rows{volume}{cost}"
                   if answered
                   else f"  {name}: declined this query — {result['error']}"
               )

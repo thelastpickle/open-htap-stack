@@ -242,6 +242,25 @@ is felt slightly more by the transactional one — not through the CQL request p
 never touches, but because the disk and the cores are shared. Measured during the 348 s scan: point
 read p50 3.5 ms and p95 9.8 ms.
 
+### Why every bulk result states its volume
+
+Growth is easy to mistake for decay, and after wiping the data it is dramatic: the table refills from
+nothing, so it doubles, then triples, and each read of it costs proportionally more. So every bulk
+result carries the size of the snapshot it streamed and the rate that implies. It is the only path that
+can say — the other three read through Cassandra and see rows, not files — and it is the figure that
+separates "this scan was bigger" from "this scan was slower".
+
+Measured on a table refilling after a wipe, one preset, four data points: 34.5 s over 1.5 GB, 45.3 s
+over 2.3 GB, 33.7 s over 2.8 GB, then four consecutive reads at 3.0 GB of 31.9, 33.0, 28.7 and 28.7 s.
+The clock looks erratic and rising; the rate rises steadily from 42 to 107 MB/s as the fixed cost of
+taking a snapshot and starting a job is amortised over more data. Run-to-run variance on one laptop
+sharing itself with an ingest is easily ±30%, so read the rate rather than the clock, and read neither
+as a benchmark.
+
+Snapshots from earlier reads are still around while their TTL runs, so `nodetool listsnapshots` can
+show several at once. Measured harmless: four reads in a row left five snapshots and did not slow down,
+because a snapshot only hard-links files that were already live.
+
 ## Why the spark service republishes two resources
 
 The Thrift Server starts with two families of jars resolved by `--packages`: the CQL connector and

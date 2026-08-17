@@ -32,6 +32,7 @@ from thrift.transport import TSocket, TTransport
 from thrift.transport.TTransport import TTransportException
 
 from app.config import settings
+from app.db import sidecar
 
 # Tables the dashboard queries.  Both clients register a view per table: the
 # connector under the table's own name, the bulk reader under a bulk_ prefix, so
@@ -286,8 +287,12 @@ class SparkBulkClient:
     """The Analytics bulk reader, over its own Thrift Server connection.
 
     Each query takes a fresh coordinated snapshot of just the tables it reads, so
-    the answer is current and the timing includes what the mechanism costs.  The
-    snapshot is released when the read completes, so snapshots do not accumulate.
+    the answer is current and the timing includes what the mechanism costs.  Each
+    snapshot lives until its TTL expires rather than until the read finishes — the
+    on-completion hook does not fire for a statement issued through the Thrift
+    Server, as the strategy comment below explains — so several can be present at
+    once.  Measured harmless: four reads in a row left five snapshots and the reads
+    did not slow down, because a snapshot only hard-links what was already live.
     """
 
     # Options confirmed against org.apache.cassandra.spark.data.ClientConfig in
@@ -314,6 +319,15 @@ class SparkBulkClient:
 
     def __init__(self, thrift: SparkThriftClient):
         self._thrift = thrift
+        # Registering the view and running the statement have to be one operation.
+        # The view name is fixed per table, so two bulk queries interleaving here
+        # would have the second replace the first's view — and with it the snapshot
+        # the first was about to read — between its registration and its SELECT.
+        self._query_lock = threading.Lock()
+        # How much the last read on *this thread* went through.  Thread-local
+        # because each path of a parallel comparison is its own thread, and the
+        # figure belongs to whichever query the caller just ran, not to the client.
+        self._measured = threading.local()
 
     @property
     def connected(self) -> bool:
@@ -323,6 +337,17 @@ class SparkBulkClient:
     def busy(self) -> bool:
         return self._thrift.busy
 
+    @property
+    def last_bytes_scanned(self) -> Optional[int]:
+        """Bytes in the snapshot this thread's last read used, if it could be sized.
+
+        The comparison reports this beside the duration.  A read of the whole
+        history is slow because it is large, and on a demo whose table grows by
+        tens of megabytes a minute that is otherwise indistinguishable from
+        something having gone wrong.
+        """
+        return getattr(self._measured, "bytes_scanned", None)
+
     def connect(self) -> None:
         self._thrift.connect()
 
@@ -330,9 +355,19 @@ class SparkBulkClient:
         return self._thrift.abort()
 
     def execute_query(self, sql: str) -> List[Dict[str, Any]]:
-        """Snapshot what the statement reads, then run it."""
-        for table in self._tables_in(sql):
-            self._register_bulk_view(table)
+        """Snapshot what the statement reads, size it, then run it."""
+        self._measured.bytes_scanned = None
+        with self._query_lock:
+            total: Optional[int] = None
+            for table in self._tables_in(sql):
+                snapshot = self._register_bulk_view(table)
+                measured = sidecar.snapshot_bytes(table, snapshot)
+                if measured is not None:
+                    total = (total or 0) + measured
+            self._measured.bytes_scanned = total
+            return self._run_statement(sql)
+
+    def _run_statement(self, sql: str) -> List[Dict[str, Any]]:
         try:
             return self._thrift.execute(sql)
         except TTransportException as e:
@@ -361,12 +396,12 @@ class SparkBulkClient:
         lowered = sql.lower()
         return [t for t in REGISTERED_TABLES if f"{BULK_VIEW_PREFIX}{t}" in lowered]
 
-    def _register_bulk_view(self, table: str) -> None:
+    def _register_bulk_view(self, table: str) -> str:
         """Re-create the view, which takes the snapshot it will read.
 
-        Snapshot names carry the clock as well as a counter, so a restarted
-        backend cannot ask for a name that an earlier run took and has not yet
-        released.
+        Returns the snapshot's name, so the caller can ask the Sidecar how big it
+        is.  Names carry the clock as well as a counter, so a restarted backend
+        cannot ask for a name that an earlier run took and has not yet released.
         """
         snapshot = f"htap_dashboard_{table}_{int(time.time())}_{next(_bulk_snapshot_counter)}"
         ddl = (
@@ -384,6 +419,7 @@ class SparkBulkClient:
             ")"
         )
         self._thrift.execute_ddl(ddl)
+        return snapshot
 
 
 spark_client = SparkThriftClient(name="connector")

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import MaterialIcon from '../components/MaterialIcon'
 import Toast, { useToast } from '../components/Toast'
-import { formatMs, getJson, postJson } from '../lib/api'
+import { formatBytes, formatMs, getJson, postJson } from '../lib/api'
 
 interface QueryResult {
   columns: string[]
@@ -25,6 +25,8 @@ interface EngineResult extends QueryResult {
   available: boolean
   error: string | null
   oltp?: OltpImpact | null
+  /** Bulk reader only: the size of the snapshot it read, so growth is visible. */
+  bytes_scanned?: number | null
 }
 
 /** A path the request did not ask for is absent, so the keys are partial. */
@@ -141,7 +143,7 @@ const COMPARE_PRESETS = [
     key: 'history',
     label: 'Every event ever ingested',
     cost: 'minutes',
-    hint: 'The whole history, tens of millions of rows, scanned on one node while it ingests',
+    hint: 'The whole history, scanned on one node while it ingests — so it costs more every hour the demo runs',
     sql:
       'SELECT event_type, count(*) AS event_count,\n' +
       '       min(temp_internal_c) AS coldest, max(temp_internal_c) AS hottest\n' +
@@ -220,6 +222,13 @@ const MIN_PROBE_SAMPLES = 4
  * which the comparison should report as what it is.
  */
 const REFUSAL_MS = 1000
+
+/**
+ * Below this much data, a bulk read's clock is mostly the snapshot and the Spark
+ * job starting, so the throughput it implies describes the overhead rather than the
+ * mechanism.  The volume is still worth showing; the rate is not.
+ */
+const RATE_WORTH_QUOTING_BYTES = 10_000_000
 
 /**
  * The reference read is taken immediately before the run, which is not the same
@@ -359,6 +368,21 @@ function EngineCard({
               {formatMs(result.query_time_ms)}
             </p>
             <p className="text-on-surface-variant text-[9px]">{result.row_count} rows</p>
+            {/* Only the bulk reader can say what it read, because it reads files.
+                Worth the line: this preset's cost tracks a table that grows while
+                the demo runs, and without the volume a bigger scan is
+                indistinguishable from a slower one. */}
+            {result.bytes_scanned != null && result.bytes_scanned > 0 && (
+              <p className="text-on-surface-variant mt-0.5 text-[9px] tabular-nums" title="Size of the snapshot this read streamed from the Sidecar, and the rate it managed">
+                {formatBytes(result.bytes_scanned)} scanned
+                {/* A rate is only worth quoting once the data outweighs the fixed
+                    cost of taking a snapshot and starting a job; on a small table
+                    those dominate and the figure would say nothing. */}
+                {result.bytes_scanned >= RATE_WORTH_QUOTING_BYTES &&
+                  result.query_time_ms > 0 &&
+                  ` · ${Math.round(result.bytes_scanned / 1_000 / result.query_time_ms)} MB/s`}
+              </p>
+            )}
           </div>
         )}
       </div>
@@ -723,6 +747,13 @@ function ComparePanel() {
                 tells you what a path costs; all at once tells you what the paths cost each other,
                 which is the question worth asking of a stack that is meant to keep them apart.
                 Timings from the two modes are not comparable, so the mode is stated above them.
+              </p>
+              <p>
+                Run the whole history twice an hour apart and the second run is slower, because the
+                table it scans grew in between — at the default ingest rate, by tens of megabytes a
+                minute. That is why the bulk reader reports the volume it streamed and the rate it
+                managed: a scan that is bigger reads differently from one that is slower, and only the
+                path that reads files can tell you which it was.
               </p>
               <p>
                 On the grouped queries, watch the counts rather than only the clock. The two paths that

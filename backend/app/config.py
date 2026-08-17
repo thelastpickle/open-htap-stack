@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     # Spark master UI — used by the platform health probe only
     spark_ui_host: str = "spark"
     spark_ui_port: int = 8080
+    # The Spark *application* UI, which is a different server on a different port:
+    # the master at 8080 knows which applications exist, and this one knows what
+    # the Thrift Server's application is doing.  The Health page reads running jobs
+    # from its REST API and cancels them through it.
+    spark_app_ui_port: int = 4040
 
     # Optional: an OpenAI-compatible embeddings endpoint for vector search.
     # Without a key the backend falls back to a local hashing embedder, which

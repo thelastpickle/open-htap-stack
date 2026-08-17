@@ -138,12 +138,19 @@ def _run(engine: str, sql: str, limit: int) -> EngineResult:
         return EngineResult(available=False, error="Engine not connected")
 
     statement = dialect(sql, limit)
+    start = time.perf_counter()
     try:
-        start = time.perf_counter()
         rows = client.execute_query(statement)
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
     except Exception as e:
-        return EngineResult(sql=statement, error=str(e))
+        # Time the failure too.  A path refused in a millisecond because CQL cannot
+        # express the question and a path that gave up after a quarter of an hour
+        # are different findings, and without the clock they read alike.
+        return EngineResult(
+            sql=statement,
+            error=str(e),
+            query_time_ms=round((time.perf_counter() - start) * 1000, 1),
+        )
 
     columns = list(rows[0].keys()) if rows else []
     return EngineResult(
@@ -178,7 +185,11 @@ def execute_sql(req: SQLQueryRequest) -> SQLQueryResult:
 
 # One comparison at a time.  Two overlapping ones would each be timed while the
 # other was running, and both sets of numbers would be wrong without saying so.
+# The start time goes with it so a refusal can say how long the run it is waiting
+# on has been going: a browser that gave up on a long run leaves it going here, and
+# "already running" without a duration reads like the dashboard is stuck.
 _comparison_lock = threading.Lock()
+_comparison_started_at: Optional[float] = None
 
 # How often the probe reads one partition while an engine works, and how long the
 # baseline window is.  4 reads a second is far below what the dashboard's own
@@ -252,26 +263,101 @@ def _probe_subject() -> Optional[str]:
     return drones[0]["entity_id"] if drones else None
 
 
+def _requested_engines(names: Optional[List[str]]) -> List[str]:
+    """The paths to compare, in the dashboard's order, or raise 400.
+
+    Ordering comes from ENGINES rather than from the request, so the columns do
+    not move about depending on the order they were named in.
+    """
+    if names is None:
+        return list(ENGINES)
+    unknown = [name for name in names if name not in ENGINES]
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown engine(s): {', '.join(unknown)}")
+    chosen = [name for name in ENGINES if name in set(names)]
+    if not chosen:
+        raise HTTPException(status_code=400, detail="Choose at least one engine to compare")
+    return chosen
+
+
+def _run_sequentially(
+    engines: List[str], statement: str, limit: int, subject: Optional[str]
+) -> Dict[str, EngineResult]:
+    """One path at a time, each probed on its own.
+
+    This is the mode whose timings mean what they look like: nothing else the
+    dashboard controls is running, so a path's figure is its own cost, and the
+    probe beside it is the price that one path charged the transactional path.
+    """
+    results: Dict[str, EngineResult] = {}
+    for engine in engines:
+        if not subject:
+            results[engine] = _run(engine, statement, limit)
+            continue
+        with _OltpProbe(subject) as probe:
+            results[engine] = _run(engine, statement, limit)
+        results[engine].oltp = probe.impact()
+    return results
+
+
+def _run_together(engines: List[str], statement: str, limit: int) -> Dict[str, EngineResult]:
+    """Every path at once, contending on purpose.
+
+    Each path answers more slowly than it would alone, and that is the point: the
+    comparison is being used to show interference rather than to avoid it.  Each
+    path has its own client and its own connection, including the two Spark paths,
+    so they genuinely overlap instead of queueing behind a shared session.
+    """
+    results: Dict[str, EngineResult] = {}
+    threads = []
+    for engine in engines:
+        def leg(engine: str = engine) -> None:
+            try:
+                results[engine] = _run(engine, statement, limit)
+            except Exception as e:
+                # _run reports failure in its result rather than raising, so this
+                # is only reached if it fails outright.  Record it, because a
+                # thread that died silently would drop the column altogether and
+                # the comparison would look like it was never asked for.
+                results[engine] = EngineResult(error=str(e))
+
+        thread = threading.Thread(target=leg, name=f"compare-{engine}")
+        thread.start()
+        threads.append(thread)
+    for thread in threads:
+        thread.join()
+    return results
+
+
 @router.post("/benchmark", response_model=BenchmarkResponse)
 def run_benchmark(req: BenchmarkRequest) -> BenchmarkResponse:
-    """Run one logical question down all four paths, and report what each cost.
+    """Run one logical question down the chosen paths, and report what each cost.
 
-    The paths run in sequence, never together, so a timing is of one path rather
-    than of four competing for one host.  While each one runs, a single-partition
-    read is sampled alongside it, so the answer carries the price it charged the
-    transactional path; the same read is sampled before anything starts, as the
-    baseline to read those against.  Per-path failures are reported in the body,
-    so the comparison still renders when one path cannot answer — which for CQL
-    and an aggregate is the point of showing it.
+    Sequentially by default: a timing is then of one path rather than of several
+    competing for one host, and the single-partition read sampled beside each one
+    is the price that path charged the transactional path.  Asked to run in
+    parallel, the paths contend deliberately, every figure inflates, and the probe
+    becomes one measurement over the whole window, since while the paths overlap
+    the cost belongs to all of them and to none in particular.
+
+    Either way the same read is sampled just beforehand as a reference, and
+    per-path failures are reported in the body rather than raised, so the
+    comparison still renders when a path cannot answer — which for CQL and an
+    aggregate is the point of showing it.
     """
+    global _comparison_started_at
     statement = _validate(req.sql)
+    engines = _requested_engines(req.engines)
 
     if not _comparison_lock.acquire(blocking=False):
+        running_for = time.monotonic() - (_comparison_started_at or time.monotonic())
         raise HTTPException(
             status_code=409,
-            detail="A comparison is already running.  They run one at a time, "
-            "because two at once would each be timed while the other ran.",
+            detail=f"A comparison has been running for {int(running_for)}s.  They run "
+            "one at a time, because two at once would each be timed while the other "
+            "ran; a run whose browser gave up carries on here until it finishes.",
         )
+    _comparison_started_at = time.monotonic()
     try:
         subject = _probe_subject()
         baseline = None
@@ -280,16 +366,20 @@ def run_benchmark(req: BenchmarkRequest) -> BenchmarkResponse:
                 time.sleep(BASELINE_WINDOW_S)
             baseline = probe.impact()
 
-        results: Dict[str, EngineResult] = {}
-        for engine in ENGINES:
-            if not subject:
-                results[engine] = _run(engine, statement, req.limit)
-                continue
-            with _OltpProbe(subject) as probe:
-                results[engine] = _run(engine, statement, req.limit)
-            results[engine].oltp = probe.impact()
+        combined = None
+        if req.mode == "parallel":
+            if subject:
+                with _OltpProbe(subject) as probe:
+                    results = _run_together(engines, statement, req.limit)
+                combined = probe.impact()
+            else:
+                results = _run_together(engines, statement, req.limit)
+        else:
+            results = _run_sequentially(engines, statement, req.limit, subject)
 
-        return BenchmarkResponse(oltp_baseline=baseline, **results)
+        return BenchmarkResponse(
+            mode=req.mode, oltp_baseline=baseline, oltp_combined=combined, **results
+        )
     finally:
         _comparison_lock.release()
 

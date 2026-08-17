@@ -1,5 +1,5 @@
 """Request and response contracts for the dashboard API."""
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -160,6 +160,15 @@ class SQLQueryResult(BaseModel):
 class BenchmarkRequest(BaseModel):
     sql: str
     limit: int = Field(default=10, ge=1, le=1000)
+    # Which access paths to compare.  None means all of them.  Naming a subset is
+    # how a viewer asks a narrower question: two paths against each other, or one
+    # path on its own as a reference.
+    engines: Optional[List[str]] = None
+    # "sequential" times each path alone, which is the only way a timing means
+    # what it appears to.  "parallel" runs them at once, so the paths contend and
+    # the figures show what that costs.  Both are legitimate; they answer
+    # different questions, and the response says which was asked.
+    mode: Literal["sequential", "parallel"] = "sequential"
 
 
 class OltpImpact(BaseModel):
@@ -188,14 +197,22 @@ class EngineResult(SQLQueryResult):
 
 
 class BenchmarkResponse(BaseModel):
-    cassandra: EngineResult
-    presto: EngineResult
-    spark: EngineResult
+    # A path the request did not ask for is absent rather than empty, so a partial
+    # comparison cannot be mistaken for four paths of which some failed.
+    cassandra: Optional[EngineResult] = None
+    presto: Optional[EngineResult] = None
+    spark: Optional[EngineResult] = None
     # The Analytics bulk reader: same rows, read straight from SSTables.
-    spark_bulk: EngineResult
-    # The same point read measured before any engine ran, so each engine's
-    # figure has something to be compared against.
+    spark_bulk: Optional[EngineResult] = None
+    # Which of the two run modes produced these figures.  Without it a parallel
+    # run and a sequential one are indistinguishable, and they are not comparable.
+    mode: str = "sequential"
+    # The same point read measured before any path ran, so each path's figure has
+    # something to be compared against.
     oltp_baseline: Optional[OltpImpact] = None
+    # Set only for a parallel run: one sample covering the whole window, because
+    # while the paths overlap the cost cannot be attributed to any one of them.
+    oltp_combined: Optional[OltpImpact] = None
 
 
 class NLQueryRequest(BaseModel):

@@ -39,15 +39,36 @@ screenshots and no invented numbers. Where a figure cannot be measured the page 
 
 ## The comparison that matters
 
-Explore → **Compare engines** runs one statement on all four access paths and reports what each
-took. The statement is rewritten per dialect, and the rewrite is shown above each result, so the
+Explore → **Compare engines** runs one statement down the access paths you choose and reports what
+each took. The statement is rewritten per dialect, and the rewrite is shown above each result, so the
 comparison is inspectable rather than asserted.
 
-The paths run one at a time, never together, so a timing is of one path rather than of four
-competing for one host; a second comparison started while one is running is refused with a 409 for
-the same reason. While each path works, a single-partition read is sampled four times a second
-alongside it, and the same read is sampled for three seconds beforehand as an idle baseline. That
-is how the page shows what an analytical scan costs the transactional path, rather than claiming it.
+Two controls decide what is being asked. **Which paths**: all four, or a subset — two against each
+other, or one on its own as a reference. **How to run them**:
+
+- **One at a time**, the default. Each path is timed with nothing else the dashboard controls
+  running, so its figure is its own cost, and the single-partition read sampled four times a second
+  beside it is the price that path alone charged the transactional path.
+- **All at once.** The paths contend deliberately. Every figure inflates, which is the point: this is
+  the mode that shows what the paths cost each other rather than what each costs alone. The probe
+  becomes one measurement covering the whole window, because while the paths overlap that cost
+  belongs to all of them and to none in particular. Timings from the two modes are not comparable,
+  so the page states which mode produced the ones on screen. Expect it to be slower in wall clock
+  than running the paths in turn, and expect a path starved long enough to give up rather than
+  finish: that is the same contention, reported rather than hidden.
+
+Each path holds its own connection, including the two Spark paths, which is what lets them genuinely
+overlap rather than queueing behind a shared HiveServer2 session.
+
+Either way the same read is sampled for three seconds immediately beforehand as a reference. It is
+labelled "before this run" rather than "idle", because the stack never is: the ingest does not stop,
+the dashboard polls, and a comparison that has just finished may still be releasing Spark executors
+and snapshots. When that reference comes back uneven — a p95 far above its p50 — the page says so
+and suggests running again, since every figure beside it is measured against it.
+
+A second comparison started while one is running is refused with a 409, so that no set of numbers is
+quietly produced while another run was in flight. A run whose browser gives up continues on the
+server and keeps that refusal in force until it finishes.
 
 The paths are not interchangeable, and that is the point:
 
@@ -69,12 +90,12 @@ and because the size of the question is most of the answer:
 - **Every event ever ingested**, minutes — the same grouping over the whole history. Opt-in, because
   on one node it is minutes rather than seconds.
 
-One measured run of the last preset, over 36.4M events on a seven-core laptop with the ingest
-running, gives the shape of it:
+One measured run of the last preset, one path at a time, over 36.4M events on a seven-core laptop
+with the ingest running, gives the shape of it:
 
 | Path | Answered in | Point read p50 | p95 | max |
 | --- | --- | --- | --- | --- |
-| *idle baseline* | — | 2.2 ms | 2.7 ms | 2.9 ms |
+| *before the run* | — | 2.2 ms | 2.7 ms | 2.9 ms |
 | Cassandra | declines | — | — | — |
 | Presto | 241 s | 2.6 ms | 13.5 ms | 72 ms |
 | Spark SQL, connector | 113 s | 2.9 ms | 7.0 ms | 96 ms |
@@ -94,6 +115,39 @@ grow underneath them while they scan, so their totals differ from each other —
 its groups are consistent with each other. And none of these figures is a benchmark: this is one node
 sharing its cores with Presto, Spark and a live ingest. Given more nodes the three analytical paths
 scale out and the transactional one does not change at all, which is the reason for separating them.
+
+### What bounds a run
+
+Three limits decide when the dashboard stops waiting. Running the paths together makes the worst case
+ordinary, so all three are set for it rather than for the typical one:
+
+- `SPARK_QUERY_TIMEOUT_S`, 900 s, is the Thrift Server socket timeout: how a starved or wedged query
+  is told from a slow one. It bounds the wait, not the query — a scan that answers in 113 s alone was
+  still working after 180 s with three other paths beside it, which is why the old 180 s was too
+  tight for any contended run.
+- The bulk reader's snapshot TTL is derived from that timeout rather than chosen separately.
+  Cassandra clears a snapshot when its TTL says so, whatever is still reading it, and a read that
+  loses its snapshot mid-scan fails with `Required 1 replicas but only 0 responded` — which is what a
+  fixed fifteen minutes did to a sixteen-minute contended run. CI asserts the derived TTL against the
+  timeout the backend is actually running with, so the two cannot drift apart again.
+- nginx allows an hour per request, which is generous on purpose. Giving up early is the worse
+  failure: the comparison carries on in the backend and keeps holding the lock that makes runs one at
+  a time, so the browser reports a timeout and then has its retry refused. The refusal says how long
+  the run it is waiting on has been going, so a long run is distinguishable from a stuck dashboard.
+
+A path that fails is reported with how long it ran first, because a path declining a query in a
+millisecond and a path starved out after a quarter of an hour are different findings.
+
+**All four paths at once, over the whole history, does not finish here, and that is the finding.** One
+measured run: 27 minutes of wall clock, Presto answering in 17 m 44 s against 241 s alone, and both
+Spark paths giving up — with seven cores between four scans of 36M rows, the Spark jobs outlast the
+900 s guard. The Thrift Server log shows the bulk reader's job completing after 27 minutes with
+nothing left to hand the answer to. Raising the guard until they finish would trade a demonstrable
+answer for an hour of waiting and a snapshot pinning SSTables for most of it, so the limit stays and
+the page says what to expect. What survives is the measurement the mode exists for: over 6,335 point
+reads spanning the window, p50 4.6 ms and p95 23.7 ms against 2.3 ms and 2.9 ms taken just before —
+the transactional path made twice as slow at the median and eight times at the tail, with no read
+failing. Select fewer paths and they contend and still finish.
 
 ## Vector search
 

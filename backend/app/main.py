@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.db.cassandra_client import cassandra_client
 from app.db.presto_client import presto_client
-from app.db.spark_client import spark_client
+from app.db.spark_client import spark_bulk_client, spark_client
 from app.routes import alerts, demo, health, map, overview, query, settings as settings_routes
 from app.routes import vector, zones
 
@@ -36,10 +36,16 @@ async def lifespan(app: FastAPI):
     # Connect eagerly so the first dashboard poll is not paying for it, but never
     # fatally: the stack's services come up in their own time and every endpoint
     # already reports an engine it cannot reach.
+    # The bulk reader is here as well as the connector, on its own connection: it
+    # is one of the four paths the comparison offers, so it should report itself
+    # reachable before anybody uses it rather than only afterwards, and in a run
+    # that starts every path at once it should not be the one still opening a
+    # session while the others are already scanning.
     for name, client in (
         ("Cassandra", cassandra_client),
         ("Presto", presto_client),
         ("Spark Thrift Server", spark_client),
+        ("Spark bulk reader", spark_bulk_client),
     ):
         try:
             client.connect()

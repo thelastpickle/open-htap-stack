@@ -290,46 +290,70 @@ jobs:
           # cannot group by a non-key column, and the grouped queries below rely on
           # it saying so.
           #
+          # Every path named must also be present: asking for a subset and getting
+          # something else back would mean the selection was ignored.
+          #
           # Also checks the OLTP probe, which is the comparison's evidence that an
-          # analytical scan does or does not cost the transactional path.  The idle
-          # baseline is always sampled over a fixed window, so it must be there.  A
-          # path is only required to carry samples if it ran long enough to be
-          # sampled at all: the probe reads four times a second, and a query that
-          # answers in milliseconds legitimately finishes inside one interval.
+          # analytical scan does or does not cost the transactional path.  The
+          # reference read before the run is always sampled over a fixed window, so
+          # it must be there.  Where the probe is reported depends on the mode: run
+          # one at a time, each path carries its own, but only if it ran long enough
+          # to be sampled — the probe reads four times a second, and a query that
+          # answers in milliseconds legitimately finishes inside one interval.  Run
+          # all at once, the paths overlap, so there is one measurement for the
+          # window instead and none per path.
           import json, sys
           PROBE_INTERVAL_MS = 250
           required = set(sys.argv[1:])
           document = json.load(sys.stdin)
           baseline = document.pop("oltp_baseline", None)
-          engines = document
+          combined = document.pop("oltp_combined", None)
+          mode = document.pop("mode", "sequential")
+          engines = {name: result for name, result in document.items() if result}
           problems = []
+          for name in sorted(required - set(engines)):
+              problems.append(f"{name} was asked for but is absent from the response")
           for name, result in engines.items():
               probe = result.get("oltp") or {}
               if not result["available"]:
                   problems.append(f"{name} unreachable: {result['error']}")
               elif name in required and (result["error"] or result["row_count"] == 0):
                   problems.append(f"{name}: {result['error'] or 'no rows'}")
-              elif result["query_time_ms"] > 4 * PROBE_INTERVAL_MS and not probe.get("samples"):
+              elif (
+                  mode == "sequential"
+                  and result["query_time_ms"] > 4 * PROBE_INTERVAL_MS
+                  and not probe.get("samples")
+              ):
                   problems.append(f"{name}: ran {result['query_time_ms']}ms with no OLTP probe samples")
+              elif mode == "parallel" and probe.get("samples"):
+                  problems.append(f"{name}: carries a per-path probe, which a parallel run cannot attribute")
           if not (baseline or {}).get("samples"):
-              problems.append("no idle OLTP baseline")
+              problems.append("no OLTP reference read before the run")
+          if mode == "parallel" and not (combined or {}).get("samples"):
+              problems.append("a parallel run reported no combined OLTP measurement")
           if problems:
               print("::error::comparison failed: " + "; ".join(problems))
               sys.exit(1)
-          print(f"  idle baseline: point read p50 {baseline['p50_ms']}ms, p95 {baseline['p95_ms']}ms")
+          print(f"  ran {mode}; point read before the run p50 {baseline['p50_ms']}ms, p95 {baseline['p95_ms']}ms")
           for name, result in engines.items():
               probe = result.get("oltp") or {}
               cost = (
                   f" — point read p50 {probe['p50_ms']}ms, p95 {probe['p95_ms']}ms,"
                   f" max {probe['max_ms']}ms over {probe['samples']} reads while it ran"
                   if probe.get("samples")
-                  else " — answered too quickly to sample"
+                  else "" if mode == "parallel" else " — answered too quickly to sample"
               )
               answered = not result["error"] and result["row_count"]
               print(
                   f"  {name}: {result['query_time_ms']}ms, {result['row_count']} rows{cost}"
                   if answered
                   else f"  {name}: declined this query — {result['error']}"
+              )
+          if combined and combined.get("samples"):
+              print(
+                  f"  all {len(engines)} at once: point read p50 {combined['p50_ms']}ms,"
+                  f" p95 {combined['p95_ms']}ms, max {combined['max_ms']}ms"
+                  f" over {combined['samples']} reads"
               )
           PY
           # The three presets the dashboard offers, in the order it offers them: a
@@ -403,6 +427,38 @@ jobs:
             || { echo "::error::Cassandra was expected to decline the GROUP BY; it did not"; exit 1; }
           echo "✓ The analytical paths grouped the fleet, and Cassandra explained why it cannot"
 
+          echo -e "\n=== Two paths only, and run all at once rather than one at a time ==="
+          # The compare page offers both choices, so both are exercised here.  A
+          # subset must come back as a subset: the paths not asked for are absent
+          # rather than empty.  And a parallel run must report one OLTP measurement
+          # for the window instead of one per path, because while the paths overlap
+          # the cost cannot be attributed to any single one of them.
+          python3 - "$TMP_DIR/benchmark-fleet-group.json" > "$TMP_DIR/benchmark-parallel.json" << 'PY'
+          import json, sys
+          body = json.load(open(sys.argv[1]))
+          body["engines"] = ["cassandra", "spark_bulk"]
+          body["mode"] = "parallel"
+          print(json.dumps(body))
+          PY
+          curl -s --max-time 300 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-parallel.json" \
+            > "$TMP_DIR/parallel-result.json"
+          python3 -m json.tool < "$TMP_DIR/parallel-result.json"
+          python3 "$TMP_DIR/check-benchmark.py" spark_bulk < "$TMP_DIR/parallel-result.json"
+          python3 - "$TMP_DIR/parallel-result.json" << 'PY'
+          import json, sys
+          document = json.load(open(sys.argv[1]))
+          extra = [name for name in ("presto", "spark") if document.get(name) is not None]
+          if extra:
+              print(f"::error::asked for two paths, but the response also carries {extra}")
+              sys.exit(1)
+          if document.get("mode") != "parallel":
+              print(f"::error::asked to run in parallel, response says {document.get('mode')!r}")
+              sys.exit(1)
+          print("  the two paths not asked for are absent, and the mode is reported back")
+          PY
+          echo "✓ A subset of paths, run together, is honoured and labelled"
+
           echo -e "\n=== A comparison refuses to run beside another one ==="
           # Two overlapping comparisons would each be timed while the other ran, so
           # the endpoint takes a lock.  Issue two at once and require exactly one 200
@@ -456,18 +512,58 @@ jobs:
             < "$TMP_DIR/aggregate-result.json"
           echo "✓ The analytical paths scanned the whole history"
 
-          echo -e "\n=== Every snapshot the bulk reader takes is time-bounded ==="
+          echo -e "\n=== Every snapshot the bulk reader takes is time-bounded, and outlasts a read ==="
           # A snapshot hard-links live SSTables, so one without an expiry keeps them
           # from being compacted away for ever.  The reader is configured with a TTL
           # that Cassandra enforces, so each of its snapshots must carry an
           # expiration time; listsnapshots prints that in the last column.
+          #
+          # An expiry alone is not enough: it has to outlast the read it was taken
+          # for, because Cassandra clears it on time whatever is still reading, and
+          # the components then vanish underneath the job — "Required 1 replicas but
+          # only 0 responded".  The longest a read can last is the backend's socket
+          # timeout, so that is the bound, read from the running configuration rather
+          # than repeated here where the two could drift apart.
           podman exec cassandra nodetool listsnapshots 2>&1 | tail -20
           podman exec cassandra nodetool listsnapshots 2>/dev/null \
             | grep htap_dashboard > "$TMP_DIR/snapshots.txt" || true
-          UNBOUNDED=$(awk "{ if (\$NF ~ /^[0-9]{4}-/) next; print }" "$TMP_DIR/snapshots.txt" | wc -l | tr -d " ")
-          [ "${UNBOUNDED:-0}" -eq 0 ] \
-            || { echo "::error::$UNBOUNDED dashboard snapshots have no expiry"; cat "$TMP_DIR/snapshots.txt"; exit 1; }
-          echo "✓ $(wc -l < "$TMP_DIR/snapshots.txt" | tr -d " ") snapshot(s) present, all with an expiry"
+          READ_LIMIT_S=$(podman exec backend python -c 'from app.config import settings; print(settings.spark_query_timeout_s)')
+          python3 - "$READ_LIMIT_S" "$TMP_DIR/snapshots.txt" << 'PY'
+          import re, sys
+          from datetime import datetime
+          limit_s, path = int(sys.argv[1]), sys.argv[2]
+          rows = [line.split() for line in open(path) if line.strip()]
+          if not rows:
+              print("::error::the bulk reader left no snapshot at all, so its TTL is untested")
+              sys.exit(1)
+
+          def moment(text: str) -> datetime:
+              return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+          problems = []
+          for row in rows:
+              # A snapshot with an expiry ends in two timestamps, one without in one:
+              # the creation time is always last, so both of the final fields have to
+              # be tested rather than only the last.
+              name = row[0]
+              stamps = [field for field in row[-2:] if re.match(r"^\d{4}-", field)]
+              if len(stamps) < 2:
+                  problems.append(f"{name} has no expiry, so it pins SSTables for ever")
+                  continue
+              created, expires = stamps
+              ttl_s = (moment(expires) - moment(created)).total_seconds()
+              if ttl_s < limit_s:
+                  problems.append(
+                      f"{name} expires {int(ttl_s)}s after it was taken, inside the {limit_s}s"
+                      " a read is allowed to last, so a slow read can lose it mid-scan"
+                  )
+              else:
+                  print(f"  {name}: expires {int(ttl_s)}s after it was taken")
+          if problems:
+              print("::error::snapshot lifetimes: " + "; ".join(problems))
+              sys.exit(1)
+          print(f"✓ {len(rows)} snapshot(s), each outlasting the {limit_s}s a read may take")
+          PY
 
           echo -e "\n=== Vector search over Cassandra 5 SAI ==="
           curl -sf -X POST http://localhost:8000/api/vector/index-all \

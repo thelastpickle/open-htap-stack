@@ -168,7 +168,16 @@ services:
         # comments included, ends the string and truncates the script.  And compose
         # interpolates a dollar-brace reference anywhere in this file, comments
         # included, so a variable meant for the shell needs its dollar doubled.
-        THRIFT_CORES=$$(( $$(nproc) / 2 ));
+        # A core here is a concurrent task, and a bulk-reader task spends most of
+        # its life waiting on the Sidecar rather than computing: measured on a
+        # seven-core laptop, this container sat at a tenth of a core while its tasks
+        # streamed.  So the cap sets how many streams there are, and half the box
+        # left most of the throughput unused: the same scan of the whole history
+        # took 443s on three cores and 348s on five.  Leave two cores for everything
+        # else instead, and fall back to half on a small host so a four-core CI
+        # runner still keeps two for the spark-sql jobs it runs beside this server.
+        if [ "$$(nproc)" -gt 4 ]; then THRIFT_CORES=$$(( $$(nproc) - 2 ));
+        else THRIFT_CORES=$$(( $$(nproc) / 2 )); fi;
         if [ "$${THRIFT_CORES}" -lt 2 ]; then THRIFT_CORES=2; fi;
         echo "Starting the Spark Thrift Server on 10000, with $${THRIFT_CORES} of $$(nproc) cores…";
         /opt/spark/sbin/start-thriftserver.sh --master spark://spark:7077 --hiveconf "javax.jdo.option.ConnectionURL=jdbc:derby:;databaseName=/tmp/thriftserver-metastore;create=true" --hiveconf hive.server2.authentication=NOSASL --hiveconf hive.server2.thrift.port=10000 --hiveconf hive.server2.thrift.bind.host=0.0.0.0 --conf spark.cassandra.connection.host=cassandra --conf spark.cassandra.connection.port=9042 --conf "spark.cores.max=$${THRIFT_CORES}" --conf "spark.executor.cores=$${THRIFT_CORES}" --conf spark.cassandra.connection.keepAliveMS=3600000;

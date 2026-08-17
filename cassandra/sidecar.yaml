@@ -18,7 +18,17 @@ sidecar:
   request_timeout: 5m
   tcp_keep_alive: false
   accept_backlog: 1024
-  server_verticle_instances: 1
+  # One instance is one Vert.x event loop serving every request, and this Sidecar
+  # exists to stream SSTables: the bulk reader pulls the whole events table through
+  # it for each analytical query.  Measured on this laptop with one instance, a
+  # single stream ran at 62 MB/s and four concurrent streams were served one after
+  # another for the same 64 MB/s in total, while raw disk in the same container did
+  # 433 MB/s and python -m http.server over the same container hop did 332 MB/s.
+  # The bulk read's duration was exactly the table's bytes divided by that 62 MB/s,
+  # with Spark idle at 7% CPU waiting for it.  One instance per concurrent reader,
+  # therefore, with headroom over the Spark task slots that decide how many streams
+  # there are.
+  server_verticle_instances: 4
   # DnsResolver to use (org.apache.cassandra.sidecar.common.server.dns.DnsResolver). Currently supported
   # values are 'default' and 'resolve_to_ip'. Default will resolve hostnames to addresses and addresses to
   # hostnames whereas resolve_to_ip will only resolve hostnames to addresses.

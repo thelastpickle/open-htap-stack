@@ -28,8 +28,12 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        # The four-path comparison runs the engines in sequence, and a fleet-wide
-        # aggregate over every event ingested takes minutes per analytical engine.
-        proxy_read_timeout 900s;
+        # The four-path comparison of every event ever ingested takes minutes per
+        # analytical path, and runs them in sequence by default, so one legitimate
+        # request here can last the better part of an hour.  Generous on purpose:
+        # giving up early is the worse failure, because the comparison carries on
+        # in the backend and holds the lock that keeps runs one at a time, so the
+        # browser reports a timeout and then has its retry refused with a 409.
+        proxy_read_timeout 3600s;
     }
 }

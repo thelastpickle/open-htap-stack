@@ -101,6 +101,9 @@ with the ingest running, gives the shape of it:
 | Spark SQL, connector | 113 s | 2.9 ms | 7.0 ms | 96 ms |
 | Spark bulk reader | 147 s | 2.3 ms | 5.4 ms | 357 ms |
 
+The bulk reader's figure here predates the Sidecar concurrency fix described under *What limits the
+bulk reader*; the same path is now about 1.9× faster than this table implies.
+
 Read the right column, not the middle one. The bulk reader is not the fastest here and the page does
 not pretend otherwise: on one node, at this scale, it is not. What it is, is the only path that
 leaves point-read latency where it found it — p50 unchanged, p95 lowest of the three — because its
@@ -208,6 +211,36 @@ ranked and reproducible.
    table invisible to Presto, taking the analytical half of the demo with it.
 2. An embedding is 1536 floats. Keeping it out of the row the map reads every few seconds keeps that
    read small.
+
+## What limits the bulk reader
+
+A bulk read pulls whole SSTables from the Sidecar over HTTP, so its duration is the table's bytes
+divided by the rate the Sidecar can serve them. That made it the one number worth measuring, and the
+first measurement was unflattering. With `server_verticle_instances: 1` — one Vert.x event loop
+serving every request — one stream ran at 62 MB/s and four concurrent streams were served *one after
+another* for the same 64 MB/s in total, while raw disk in the same container did 433 MB/s and
+`python -m http.server` over the same container hop did 332 MB/s. The scan's duration was the table's
+size divided by that 62 MB/s, to within 4%, with Spark idle at a tenth of a core waiting.
+
+Two configuration changes, and the same query over the same ~40 GB:
+
+| | Sidecar aggregate, 4 streams | Whole-history scan |
+| --- | --- | --- |
+| One verticle instance, 3 Spark cores | 64 MB/s | 622 s, 648 s |
+| Four verticle instances, 3 Spark cores | 293 MB/s | 443 s |
+| Four verticle instances, 5 Spark cores | 293 MB/s | 348 s |
+
+The Sidecar's instances decide whether streams overlap at all; Spark's core cap decides how many there
+are, because each task alternates between streaming and processing and so uses only a fraction of a
+core. Neither is the ceiling now: at 116 MB/s the scan is below what the Sidecar can serve, and the
+remaining limit is one laptop shared between an ingest, a Cassandra and a scan.
+
+Two consequences worth keeping in mind. The cost tracks the table, which grows at the ingest rate: at
+2,000 events/s that is 7.2M rows an hour, adding about 13 s to every subsequent scan, so a preset that
+took four minutes this morning takes longer this afternoon for no other reason. And a faster bulk path
+is felt slightly more by the transactional one — not through the CQL request path, which it still
+never touches, but because the disk and the cores are shared. Measured during the 348 s scan: point
+read p50 3.5 ms and p95 9.8 ms.
 
 ## Why the spark service republishes two resources
 

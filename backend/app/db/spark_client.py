@@ -14,9 +14,14 @@ difference between them is the architectural claim this stack makes:
     construction" the README describes.  Its rows are consistent as of the
     snapshot rather than as of now.
 
-Both talk to one Thrift Server over one connection.
+Both talk to the same Thrift Server, but each holds its own connection, and so its
+own HiveServer2 session.  One connection would be enough to serve them in turn;
+two is what lets them run at the same time, which the comparison offers on purpose
+so the contention between paths can be seen rather than described.  Each session
+carries only the views its own path needs.
 """
 import itertools
+import math
 import re
 import threading
 import time
@@ -59,9 +64,19 @@ def readable_error(error: Exception) -> str:
 
 
 class SparkThriftClient:
-    """Thin HiveServer2 wrapper.  One connection, serialised by a lock."""
+    """Thin HiveServer2 wrapper.  One connection, serialised by a lock.
 
-    def __init__(self):
+    ``register_connector_views`` builds the spark-cassandra-connector views on
+    connect.  The bulk reader holds its own instance of this class and does not
+    want them: it registers its own views per query, and a session carrying views
+    it never reads would take a table definition through the CQL path for nothing.
+
+    ``name`` only labels the log lines, so the two connections can be told apart.
+    """
+
+    def __init__(self, name: str = "spark", register_connector_views: bool = True):
+        self._name = name
+        self._register_connector_views = register_connector_views
         self._conn: Optional[Any] = None
         self._lock = threading.Lock()
         self.connected = False
@@ -85,14 +100,15 @@ class SparkThriftClient:
                 )
                 self.connected = True
                 print(
-                    f"[db] Spark Thrift Server connected: "
+                    f"[db] Spark Thrift Server connected ({self._name}): "
                     f"{settings.spark_thrift_host}:{settings.spark_thrift_port}"
                 )
             except Exception as e:
                 self._close_locked()
-                print(f"[db] Spark Thrift Server connection failed: {e}")
+                print(f"[db] Spark Thrift Server connection failed ({self._name}): {e}")
                 return
-        self._register_views()
+        if self._register_connector_views:
+            self._register_views()
 
     def _close_locked(self) -> None:
         """Drop the connection.  Callers must hold the lock."""
@@ -131,9 +147,12 @@ class SparkThriftClient:
             with self._lock:
                 self._close_locked()
             raise RuntimeError(
-                f"Spark did not answer within {settings.spark_query_timeout_s}s ({e}). "
-                "A Spark job this slow is usually the connector resolving a table "
-                "definition; check the Thrift Server log in the spark container."
+                f"Spark stopped answering for {settings.spark_query_timeout_s}s ({e}). "
+                "Either the job is starved — comparing the paths all at once leaves it "
+                "and the poll that watches it competing with every other path for the "
+                "same cores — or the connector is parked resolving a table definition. "
+                "The Thrift Server log tells them apart: a starved job is still "
+                "finishing tasks."
             ) from e
         except Exception as e:
             if any(marker in str(e) for marker in _STALE_VIEW_MARKERS):
@@ -183,7 +202,7 @@ class SparkThriftClient:
 
 
 class SparkBulkClient:
-    """The Analytics bulk reader, over the same Thrift Server connection.
+    """The Analytics bulk reader, over its own Thrift Server connection.
 
     Each query takes a fresh coordinated snapshot of just the tables it reads, so
     the answer is current and the timing includes what the mechanism costs.  The
@@ -198,11 +217,18 @@ class SparkBulkClient:
     # OnCompletionOrTTL rather than OnCompletion: the completion hook does not fire
     # for a query issued through the Thrift Server, so the TTL is what actually
     # releases the snapshot, and Cassandra enforces it whatever this process does.
+    #
     # A snapshot hard-links live SSTables, so until it expires it keeps them from
-    # being compacted away; the TTL is therefore as short as it can be while still
-    # comfortably outlasting the slowest query the dashboard runs, which is tens of
-    # seconds.  A snapshot cleared mid-read would fail the read.
-    CLEAR_SNAPSHOT_STRATEGY = "OnCompletionOrTTL 15m"
+    # being compacted away: the TTL wants to be short.  But it must outlast the
+    # read, and Cassandra will clear it mid-read if it does not — the components
+    # vanish and the read fails with "Required 1 replicas but only 0 responded",
+    # which is what a fixed 15 minutes did to a 16-minute contended run.  So it is
+    # derived from the socket timeout rather than guessed: that timeout bounds any
+    # read the dashboard is still waiting on, so a TTL beyond it cannot expire under
+    # a read whose answer anybody expects.  Doubled, for the snapshot this query
+    # takes before that clock starts and for slack.
+    SNAPSHOT_TTL_MINUTES = max(15, math.ceil(settings.spark_query_timeout_s / 60) * 2)
+    CLEAR_SNAPSHOT_STRATEGY = f"OnCompletionOrTTL {SNAPSHOT_TTL_MINUTES}m"
     NUM_CORES = 4
 
     def __init__(self, thrift: SparkThriftClient):
@@ -223,9 +249,12 @@ class SparkBulkClient:
             return self._thrift.execute(sql)
         except TTransportException as e:
             raise RuntimeError(
-                f"The bulk reader did not answer within {settings.spark_query_timeout_s}s ({e}). "
-                "Taking a snapshot and reading SSTables is slower than a CQL scan; "
-                "raise SPARK_QUERY_TIMEOUT_S for larger tables."
+                f"The bulk reader stopped answering for {settings.spark_query_timeout_s}s ({e}). "
+                "Reading the whole history off SSTables is minutes of work, and with "
+                "the other paths beside it the job outlasts this guard — the job itself "
+                "usually finishes, but nothing here is left to hand it to. Run the paths "
+                "one at a time for a figure, or raise SPARK_QUERY_TIMEOUT_S to wait it "
+                "out under contention."
             ) from e
         except Exception as e:
             raise RuntimeError(readable_error(e)) from e
@@ -266,5 +295,7 @@ class SparkBulkClient:
         self._thrift.execute_ddl(ddl)
 
 
-spark_client = SparkThriftClient()
-spark_bulk_client = SparkBulkClient(spark_client)
+spark_client = SparkThriftClient(name="connector")
+spark_bulk_client = SparkBulkClient(
+    SparkThriftClient(name="bulk-reader", register_connector_views=False)
+)

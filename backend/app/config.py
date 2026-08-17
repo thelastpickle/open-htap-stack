@@ -29,9 +29,14 @@ class Settings(BaseSettings):
     spark_thrift_host: str = "spark"
     spark_thrift_port: int = 10000
     # A Spark job has no other deadline, so this socket timeout is what stops a
-    # stuck query from hanging the dashboard.  It has to allow for the bulk reader,
-    # which takes a snapshot before it reads.  nginx allows 300s in front of this.
-    spark_query_timeout_s: int = 180
+    # stuck query from hanging the dashboard.  It bounds how long the server may go
+    # without answering, which is not the same as how long the query may take: it is
+    # a threshold for "nothing is coming back", not a budget.  Set for the contended
+    # case rather than the typical one, because a scan of the whole history that
+    # answers in 113s alone was still working after 180s with three other paths
+    # beside it.  The bulk reader's snapshot TTL is derived from this value (see
+    # db/spark_client.py), and nginx allows longer still in front of it.
+    spark_query_timeout_s: int = 900
 
     # Kafka — used by the platform health probe only
     kafka_host: str = "kafka"

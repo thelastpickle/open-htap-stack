@@ -38,9 +38,19 @@ function detailOf(payload: unknown): string | null {
   return null
 }
 
-/** Format a millisecond duration the way every panel shows it. */
+/**
+ * Format a duration in whichever unit reads: the dashboard measures point reads
+ * in single milliseconds and comparisons of the whole event history in minutes,
+ * and "988200 ms" is not a figure anybody can read at a glance.  The decimal is
+ * kept only below ten milliseconds, which is where the transactional path lives
+ * and where a tenth still means something.
+ */
 export function formatMs(ms: number | null | undefined): string {
-  return ms == null ? '—' : `${ms.toFixed(ms < 10 ? 1 : 0)} ms`
+  if (ms == null) return '—'
+  if (ms < 10_000) return `${ms.toFixed(ms < 10 ? 1 : 0)} ms`
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`
+  const seconds = Math.round(ms / 1000)
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
 }
 
 /** Compact a count: 1234 becomes 1.2k. */

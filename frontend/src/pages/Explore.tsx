@@ -27,8 +27,12 @@ interface EngineResult extends QueryResult {
   oltp?: OltpImpact | null
 }
 
-type BenchmarkResponse = Record<Engine, EngineResult> & {
+/** A path the request did not ask for is absent, so the keys are partial. */
+type BenchmarkResponse = Partial<Record<Engine, EngineResult>> & {
+  mode?: RunMode
   oltp_baseline?: OltpImpact | null
+  /** Parallel runs only: one sample over the whole window, not per path. */
+  oltp_combined?: OltpImpact | null
 }
 
 interface VectorHit {
@@ -48,6 +52,27 @@ interface VectorResponse {
 
 type Tab = 'sql' | 'ai' | 'compare'
 type Engine = 'cassandra' | 'presto' | 'spark' | 'spark_bulk'
+type RunMode = 'sequential' | 'parallel'
+
+/**
+ * The two ways to run a comparison, and what each is for.  Running one at a time
+ * is the only way a timing means what it looks like; running them together is how
+ * to see what they cost each other.  Neither is the honest one — they answer
+ * different questions, and the answers are not comparable, so the mode is shown
+ * with the results.
+ */
+const RUN_MODES: { key: RunMode; label: string; hint: string }[] = [
+  {
+    key: 'sequential',
+    label: 'One at a time',
+    hint: 'Each path is timed alone, so its figure is its own cost and the point read beside it is the price that path alone charged',
+  },
+  {
+    key: 'parallel',
+    label: 'All at once',
+    hint: 'The paths contend deliberately: every figure inflates, and the point read is one measurement for the whole window because the cost belongs to all of them',
+  },
+]
 
 const TABS: { key: Tab; label: string; icon: string }[] = [
   { key: 'sql', label: 'SQL console', icon: 'terminal' },
@@ -190,6 +215,31 @@ function ResultTable({ result }: { result: QueryResult }) {
 const MIN_PROBE_SAMPLES = 4
 
 /**
+ * A path that cannot express a query says so at once, so a failure quicker than
+ * this is a refusal rather than a breakage.  Anything slower ran and then broke,
+ * which the comparison should report as what it is.
+ */
+const REFUSAL_MS = 1000
+
+/**
+ * The reference read is taken immediately before the run, which is not the same
+ * as taking it on a quiet machine: the ingest never stops, the dashboard polls,
+ * and a comparison finished moments ago may still be releasing Spark executors
+ * and snapshots.  A tail this far above the median means the reference caught
+ * some of that, and everything measured against it is correspondingly generous.
+ */
+const UNSETTLED_BASELINE_RATIO = 5
+
+function baselineUnsettled(baseline?: OltpImpact | null): boolean {
+  return Boolean(
+    baseline?.samples &&
+      baseline.samples >= MIN_PROBE_SAMPLES &&
+      baseline.p50_ms > 0 &&
+      baseline.p95_ms / baseline.p50_ms > UNSETTLED_BASELINE_RATIO,
+  )
+}
+
+/**
  * The price this path charged the transactional one, next to the baseline it was
  * measured against.  A path that never touches the CQL request path should sit on
  * its baseline; one that scans through it should not.
@@ -219,7 +269,7 @@ function OltpFooter({ oltp, baseline }: { oltp?: OltpImpact | null; baseline?: O
       </p>
       {baseline?.samples ? (
         <p className="mt-0.5 tabular-nums opacity-60">
-          idle baseline p50 {baseline.p50_ms} ms · p95 {baseline.p95_ms} ms
+          before this run p50 {baseline.p50_ms} ms · p95 {baseline.p95_ms} ms
           {worse ? ` — p95 ×${worse.toFixed(1)}` : ''}
         </p>
       ) : null}
@@ -228,6 +278,52 @@ function OltpFooter({ oltp, baseline }: { oltp?: OltpImpact | null; baseline?: O
           {oltp.failures} point {oltp.failures === 1 ? 'read' : 'reads'} did not return
         </p>
       )}
+    </div>
+  )
+}
+
+/**
+ * What the transactional path paid while several analytical paths ran at once.
+ * Reported once rather than per path, because while they overlap the cost cannot
+ * be attributed to any one of them without inventing an attribution.
+ */
+function CombinedOltp({
+  oltp,
+  baseline,
+  paths,
+}: {
+  oltp?: OltpImpact | null
+  baseline?: OltpImpact | null
+  paths: number
+}) {
+  if (!oltp || oltp.samples < MIN_PROBE_SAMPLES) return null
+
+  return (
+    <div className="border-tertiary/30 bg-tertiary/5 rounded-lg border p-4">
+      <p className="text-tertiary text-[10px] font-bold uppercase tracking-wider">
+        Point read while all {paths} ran together
+      </p>
+      <p className="text-on-surface-variant mt-1 text-xs tabular-nums">
+        p50 {oltp.p50_ms} ms · p95 {oltp.p95_ms} ms · max {oltp.max_ms} ms
+        <span className="opacity-60"> over {oltp.samples} reads</span>
+        {baseline?.samples ? (
+          <span className="opacity-60">
+            {' '}
+            · before this run p50 {baseline.p50_ms} ms, p95 {baseline.p95_ms} ms
+          </span>
+        ) : null}
+        {oltp.failures > 0 && (
+          <span className="text-tertiary font-bold">
+            {' '}
+            · {oltp.failures} did not return
+          </span>
+        )}
+      </p>
+      <p className="text-on-surface-variant mt-2 text-[10px] leading-relaxed">
+        One measurement for the whole window, not one per path: while they overlap, this cost
+        belongs to all of them together and to none of them in particular. To find out what a
+        single path charges, select that path on its own and run it.
+      </p>
     </div>
   )
 }
@@ -304,11 +400,19 @@ function EngineCard({
 function ComparePanel() {
   const [preset, setPreset] = useState<string>(COMPARE_PRESETS[0].key)
   const [sql, setSql] = useState<string>(COMPARE_PRESETS[0].sql)
+  const [chosen, setChosen] = useState<Engine[]>(ENGINES.map((engine) => engine.key))
+  const [mode, setMode] = useState<RunMode>('sequential')
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<BenchmarkResponse | null>(null)
 
   const run = useMutation({
-    mutationFn: () => postJson<BenchmarkResponse>('/api/query/benchmark', { sql, limit: 10 }),
+    mutationFn: () =>
+      postJson<BenchmarkResponse>('/api/query/benchmark', {
+        sql,
+        limit: 10,
+        engines: chosen,
+        mode,
+      }),
     onSuccess: (data) => {
       setResults(data)
       setError(null)
@@ -319,12 +423,37 @@ function ComparePanel() {
     },
   })
 
-  const timings = ENGINES.map((engine) => {
+  /** Keep at least one path selected: a comparison of nothing is not a question. */
+  const toggle = (engine: Engine) =>
+    setChosen((current) =>
+      current.includes(engine)
+        ? current.length > 1
+          ? current.filter((key) => key !== engine)
+          : current
+        : [...current, engine],
+    )
+
+  // Whether the query about to run is one of the minutes-long ones, which decides
+  // whether running the paths together is worth warning about.
+  const costsMinutes = COMPARE_PRESETS.find((option) => option.key === preset)?.cost === 'minutes'
+
+  // Render the paths the answer actually covers, not the ones selected now: the
+  // selection can be changed after a run, and the results would then be labelled
+  // with paths they never included.
+  const shown = ENGINES.filter((engine) => results?.[engine.key])
+  const ranInParallel = results?.mode === 'parallel'
+  const timings = shown.map((engine) => {
     const result = results?.[engine.key]
+    const failed = Boolean(result?.available && result.error)
     return {
       ...engine,
       ms: result && result.available && !result.error ? result.query_time_ms : null,
-      failed: Boolean(result?.available && result.error),
+      failed,
+      // A path declining a query answers in milliseconds; a path that worked for
+      // minutes and then broke is a different finding, and calling both of them
+      // "cannot answer this query" would hide the one worth knowing about.
+      failedAfterMs:
+        failed && (result?.query_time_ms ?? 0) > REFUSAL_MS ? result!.query_time_ms : null,
     }
   })
   const slowest = Math.max(...timings.map((t) => t.ms ?? 0), 1)
@@ -334,11 +463,72 @@ function ComparePanel() {
       <div className="glass-panel overflow-hidden rounded-xl">
         <div className="flex flex-wrap items-center gap-4 border-b border-white/5 bg-surface-container-high px-6 py-3">
           <span className="text-primary text-[10px] font-black uppercase tracking-widest">
-            One query, four access paths
+            One query, {chosen.length} access {chosen.length === 1 ? 'path' : 'paths'}
           </span>
           <span className="text-on-surface-variant text-[10px] uppercase tracking-wider opacity-60">
-            One at a time, each in its own dialect; the rewrite is shown with its result
+            Each in its own dialect; the rewrite is shown with its result
           </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3 border-b border-white/5 px-6 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-on-surface-variant text-[9px] font-bold uppercase tracking-wider">
+              Compare
+            </span>
+            {ENGINES.map((engine) => {
+              const on = chosen.includes(engine.key)
+              return (
+                <button
+                  key={engine.key}
+                  onClick={() => toggle(engine.key)}
+                  title={
+                    on && chosen.length === 1
+                      ? 'At least one path has to stay selected'
+                      : engine.role
+                  }
+                  aria-pressed={on}
+                  className="flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors"
+                  style={{
+                    background: on ? 'color-mix(in srgb, var(--color-surface-container-highest) 100%, transparent)' : 'transparent',
+                    color: on ? engine.colour : 'var(--color-on-surface-variant)',
+                    opacity: on ? 1 : 0.5,
+                  }}
+                >
+                  <MaterialIcon
+                    name={on ? 'check_box' : 'check_box_outline_blank'}
+                    className="text-[14px]"
+                  />
+                  {engine.label}
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-on-surface-variant text-[9px] font-bold uppercase tracking-wider">
+              Run
+            </span>
+            {RUN_MODES.map((option) => (
+              <button
+                key={option.key}
+                onClick={() => setMode(option.key)}
+                title={option.hint}
+                aria-pressed={mode === option.key}
+                className={`cursor-pointer rounded px-3 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                  mode === option.key
+                    ? 'bg-primary text-on-primary'
+                    : 'bg-surface-container-highest text-on-surface-variant hover:text-primary'
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+            <span className="text-on-surface-variant/60 text-[10px]">
+              {mode === 'parallel'
+                ? 'Contending on purpose: every figure inflates, and none is comparable with a run made one at a time'
+                : 'Each path timed alone, so a figure is that path and nothing else'}
+            </span>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-b border-white/5 px-6 py-3">
@@ -386,8 +576,28 @@ function ComparePanel() {
           name={run.isPending ? 'sync' : 'compare_arrows'}
           className={run.isPending ? 'animate-spin' : ''}
         />
-        {run.isPending ? 'Running on all four paths…' : 'Run on all four paths'}
+        {run.isPending ? 'Running…' : 'Run'}
+        <span className="font-normal opacity-70">
+          {chosen.length === ENGINES.length
+            ? 'all four paths'
+            : `${chosen.length} ${chosen.length === 1 ? 'path' : 'paths'}`}
+          {chosen.length > 1 && (mode === 'parallel' ? ' at once' : ' one at a time')}
+        </span>
       </button>
+
+      {mode === 'parallel' && chosen.length > 1 && costsMinutes && (
+        <div className="border-secondary/30 bg-secondary/5 text-on-surface-variant flex items-start gap-3 rounded-lg border p-4">
+          <MaterialIcon name="schedule" className="text-secondary shrink-0 text-[18px]" />
+          <p className="text-[11px] leading-relaxed">
+            Measured here, this combination runs for close to half an hour and the two Spark paths do
+            not finish inside it: with four scans of the whole history sharing seven cores, their jobs
+            outlast the timeout that tells a starved query from a wedged one. That is not a defect
+            being hidden, it is the contention you asked to see, and the point read sampled across the
+            window is the measurement that survives it. For a figure per path, run them one at a time;
+            to watch specific paths obstruct each other and still finish, select fewer of them.
+          </p>
+        </div>
+      )}
 
       {error && (
         <div className="border-tertiary/30 bg-tertiary/10 text-tertiary flex items-start gap-3 rounded-lg border p-4">
@@ -398,8 +608,12 @@ function ComparePanel() {
 
       {results && (
         <>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {ENGINES.map((engine) => (
+          <div
+            className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${
+              shown.length >= 4 ? 'xl:grid-cols-4' : shown.length === 3 ? 'xl:grid-cols-3' : ''
+            }`}
+          >
+            {shown.map((engine) => (
               <EngineCard
                 key={engine.key}
                 label={engine.label}
@@ -412,9 +626,39 @@ function ComparePanel() {
           </div>
 
           <div className="glass-panel space-y-4 rounded-xl border border-white/5 p-6">
-            <p className="text-on-surface-variant text-[10px] font-bold uppercase tracking-wider">
-              Time to answer
-            </p>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <p className="text-on-surface-variant text-[10px] font-bold uppercase tracking-wider">
+                Time to answer
+              </p>
+              <p className="text-[10px] font-bold uppercase tracking-wider">
+                <span style={{ color: ranInParallel ? 'var(--color-tertiary)' : 'var(--color-positive)' }}>
+                  {ranInParallel ? 'run all at once' : 'run one at a time'}
+                </span>
+                <span className="text-on-surface-variant ml-2 font-normal normal-case opacity-60">
+                  {ranInParallel
+                    ? 'these figures include the paths obstructing each other'
+                    : 'each figure is that path alone'}
+                </span>
+              </p>
+            </div>
+
+            {baselineUnsettled(results.oltp_baseline) && (
+              <p className="text-secondary border-secondary/30 bg-secondary/5 rounded-lg border p-3 text-[10px] leading-relaxed">
+                The reference read taken before this run was itself uneven — p95{' '}
+                {results.oltp_baseline?.p95_ms} ms against a p50 of {results.oltp_baseline?.p50_ms} ms.
+                The stack had not settled, most likely from a comparison that had just finished
+                releasing its Spark executors and snapshots. Everything below is measured against
+                that reference, so leave it a minute and run again for a cleaner one.
+              </p>
+            )}
+
+            {ranInParallel && (
+              <CombinedOltp
+                oltp={results.oltp_combined}
+                baseline={results.oltp_baseline}
+                paths={shown.length}
+              />
+            )}
             {timings.map((timing) => (
               <div key={timing.key} className="space-y-1">
                 <div className="flex justify-between text-[10px] font-bold">
@@ -422,9 +666,11 @@ function ComparePanel() {
                   <span className="text-on-surface-variant tabular-nums">
                     {timing.ms != null
                       ? formatMs(timing.ms)
-                      : timing.failed
-                        ? 'cannot answer this query'
-                        : 'unavailable'}
+                      : timing.failedAfterMs != null
+                        ? `failed after ${formatMs(timing.failedAfterMs)}`
+                        : timing.failed
+                          ? 'cannot answer this query'
+                          : 'unavailable'}
                   </span>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-white/5">
@@ -441,27 +687,42 @@ function ComparePanel() {
             <div className="text-on-surface-variant space-y-3 border-t border-white/5 pt-4 text-xs leading-relaxed">
               <p>
                 These are not benchmark results. This is one Cassandra node on one machine, sharing
-                its cores with Presto, Spark and a live ingest, and the paths are run one at a time so
-                each is timed alone. Read the figures as a floor on what the mechanism costs here, not
-                as a measure of any engine: given more nodes the three analytical paths scale out and
-                the transactional one does not change at all, which is the whole point of separating
-                them.
+                its cores with Presto, Spark and a live ingest.{' '}
+                {ranInParallel
+                  ? 'These paths ran together, so each figure includes the others getting in its way; that is what the run was for, but it means no figure here is a measure of the path it sits under.'
+                  : 'Each path was timed alone, so its figure is its own cost.'}{' '}
+                Read the figures as a floor on what the mechanism costs here, not as a measure of any
+                engine: given more nodes the three analytical paths scale out and the transactional
+                one does not change at all, which is the whole point of separating them.
               </p>
               <p>
-                A path reporting an error has not failed: it has told you the query is not for it. CQL
-                groups only by primary-key columns, which is exactly why the analytical paths exist.
+                A path reporting an error has usually not failed: it has told you the query is not for
+                it. CQL groups only by primary-key columns, which is exactly why the analytical paths
+                exist.{' '}
+                {ranInParallel
+                  ? 'The clock beside it says which kind of error it is: a path that declined the query answers in milliseconds, while one that ran for minutes and then gave up was starved of cores by the paths beside it — the contention, arriving as a failure rather than as a slower figure.'
+                  : ''}{' '}
                 Change the size of the question and the ordering changes with it — a single-partition
                 lookup, a grouped read of the current fleet, and a scan of the whole history do not
                 favour the same path, and no single number decides between them.
               </p>
               <p>
-                The point read under each result is the price that path charged the transactional one,
-                sampled every 250&nbsp;ms while it ran, against the same read taken while the stack was
-                otherwise idle. Three of these paths go through the CQL request path and share it with
-                the live ingest, so they show up there. The bulk reader reads SSTable files from a
-                coordinated snapshot through the Sidecar instead: taking that snapshot is a brief
-                hardlink pass on the node, which you may see as a single spike, and the scan that
-                follows touches the request path not at all.
+                The point read is sampled every 250&nbsp;ms while the query runs, against the same read
+                taken just before the run started.{' '}
+                {ranInParallel
+                  ? 'Because these paths overlapped, it is reported once for the whole window rather than under each result.'
+                  : 'Under each result it is the price that path charged the transactional one.'}{' '}
+                Three of these paths go through the CQL request path and share it with the live
+                ingest, so they show up there. The bulk reader reads SSTable files from a coordinated
+                snapshot through the Sidecar instead: taking that snapshot is a brief hardlink pass on
+                the node, which you may see as a single spike, and the scan that follows touches the
+                request path not at all.
+              </p>
+              <p>
+                Both run modes are legitimate and they answer different questions. One at a time
+                tells you what a path costs; all at once tells you what the paths cost each other,
+                which is the question worth asking of a stack that is meant to keep them apart.
+                Timings from the two modes are not comparable, so the mode is stated above them.
               </p>
               <p>
                 On the grouped queries, watch the counts rather than only the clock. The two paths that

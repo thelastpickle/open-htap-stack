@@ -1,6 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import MaterialIcon from '../components/MaterialIcon'
-import { formatCount, formatMs, getJson } from '../lib/api'
+import Toast, { useToast, type ToastKind } from '../components/Toast'
+import { formatCount, formatMs, getJson, postJson } from '../lib/api'
 
 interface ServiceHealth {
   name: string
@@ -20,12 +21,83 @@ interface Latency {
   vector_search_ms: number | null
 }
 
+/** A query an engine is still working on, whoever submitted it. */
+interface RunningQuery {
+  engine: string
+  id: string
+  state: string
+  running_s: number
+  sql: string
+  submitter: string
+  tasks_done: number
+  tasks_total: number
+}
+
+/** The comparison holding the one-at-a-time lock on Explore. */
+interface ComparisonRun {
+  running_for_s: number
+  mode: string
+  engines: string[]
+  sql: string
+  done: string[]
+}
+
+interface RunningWork {
+  comparison: ComparisonRun | null
+  queries: RunningQuery[]
+  unreadable: Record<string, string>
+}
+
+interface OperationResult {
+  ok: boolean
+  actions: string[]
+}
+
+type ReconnectTarget = 'cassandra' | 'presto' | 'spark' | 'spark_bulk'
+
 const SERVICE_ICONS: Record<string, string> = {
   Cassandra: 'database',
   Kafka: 'stream',
   Presto: 'analytics',
   Spark: 'bolt',
 }
+
+/**
+ * The container each service runs in, so the page can show the one command it
+ * cannot run itself.  The dashboard is a container beside the others with no
+ * control over them, which is the right way round for something a browser can
+ * reach; restarting a service is a command on the host.
+ */
+const SERVICE_CONTAINERS: Record<string, string> = {
+  Cassandra: 'cassandra',
+  Kafka: 'kafka',
+  Presto: 'presto',
+  Spark: 'spark',
+}
+
+/**
+ * Which of the backend's clients belong to each service, for the reconnect
+ * control.  Spark has two, because the connector and the bulk reader hold their
+ * own sessions so they can run at once.  Kafka has none: nothing here queries it,
+ * the health probe just opens a socket.
+ */
+const SERVICE_CLIENTS: Record<string, ReconnectTarget[]> = {
+  Cassandra: ['cassandra'],
+  Presto: ['presto'],
+  Spark: ['spark', 'spark_bulk'],
+  Kafka: [],
+}
+
+/** Colour per engine, matching the compare panel on Explore. */
+const ENGINE_COLOURS: Record<string, string> = {
+  cassandra: 'var(--color-primary)',
+  presto: 'var(--color-secondary)',
+  spark: 'var(--color-accent)',
+  spark_bulk: 'var(--color-positive)',
+}
+
+/** How often the running-work view refreshes.  It is a live view, so: often. */
+const RUNNING_POLL_MS = 5000
 
 /** What each service does here, so the page explains the stack as it checks it. */
 const SERVICE_ROLES: Record<string, string> = {
@@ -64,7 +136,186 @@ const LATENCY_TIERS = [
   },
 ]
 
+/** The one command the dashboard cannot run for you, ready to paste. */
+function CopyableCommand({
+  command,
+  onResult,
+}: {
+  command: string
+  onResult: (message: string, kind?: ToastKind) => void
+}) {
+  return (
+    <button
+      onClick={() => {
+        if (!navigator.clipboard) {
+          onResult('No clipboard here; select the command by hand', 'info')
+          return
+        }
+        navigator.clipboard.writeText(command).then(
+          () => onResult(`Copied: ${command}`),
+          () => onResult('Could not copy; select the command by hand', 'info'),
+        )
+      }}
+      title="Copy this command"
+      className="text-on-surface-variant hover:text-primary flex w-full cursor-pointer items-center gap-2 rounded bg-black/20 px-2 py-1 font-mono text-[10px] transition-colors"
+    >
+      <MaterialIcon name="content_copy" className="text-[12px] shrink-0" />
+      <span className="truncate">{command}</span>
+    </button>
+  )
+}
+
+/**
+ * What the engines are working on, and the controls to stop it.
+ *
+ * The engines are asked directly rather than the dashboard listing what it
+ * submitted, so a spark-sql session in the container or a presto-cli query shows
+ * up here too, which is usually what you want to know when the dashboard has gone
+ * slow for no reason of its own.
+ */
+function WorkInFlight({ onResult }: { onResult: (message: string, kind?: ToastKind) => void }) {
+  const queryClient = useQueryClient()
+  const { data, isLoading, error } = useQuery<RunningWork>({
+    queryKey: ['running-work'],
+    queryFn: () => getJson<RunningWork>('/api/platform/running'),
+    refetchInterval: RUNNING_POLL_MS,
+  })
+
+  const report = (result: OperationResult) => {
+    onResult(result.actions.join(' · ') || 'nothing to do', result.ok ? 'success' : 'info')
+    queryClient.invalidateQueries({ queryKey: ['running-work'] })
+  }
+  const failed = (e: Error) => onResult(e.message, 'error')
+
+  const stopComparison = useMutation({
+    mutationFn: () => postJson<OperationResult>('/api/platform/running/cancel-comparison'),
+    onSuccess: report,
+    onError: failed,
+  })
+  const killQuery = useMutation({
+    mutationFn: (query: RunningQuery) =>
+      postJson<OperationResult>('/api/platform/running/kill', {
+        engine: query.engine,
+        id: query.id,
+      }),
+    onSuccess: report,
+    onError: failed,
+  })
+
+  const comparison = data?.comparison
+  const queries = data?.queries ?? []
+
+  return (
+    <div className="glass-panel rounded-xl p-8">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h2 className="font-headline text-lg font-bold uppercase tracking-wide">Work in flight</h2>
+        <p className="text-on-surface-variant text-[10px] uppercase tracking-wider opacity-60">
+          Asked of each engine, every {RUNNING_POLL_MS / 1000}s
+        </p>
+      </div>
+      <p className="text-on-surface-variant mt-1 text-xs">
+        Everything the engines are working on, whoever asked for it: a query from another browser tab,
+        or a <span className="font-mono">presto-cli</span> session in a container, appears here as
+        readily as the dashboard's own. Stopping a query is the engine's own cancel, so it stops
+        server-side rather than only being abandoned.
+      </p>
+
+      {error && (
+        <p className="text-tertiary mt-4 text-xs">Could not read what is running: {error.message}</p>
+      )}
+
+      {comparison && (
+        <div className="border-secondary/30 bg-secondary/5 mt-6 rounded-lg border p-4">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-secondary text-[10px] font-black uppercase tracking-wider">
+                A comparison holds the lock
+              </p>
+              <p className="text-on-surface-variant mt-1 text-[11px]">
+                Running {formatMs(comparison.running_for_s * 1000)}, {comparison.mode === 'parallel' ? 'all at once' : 'one at a time'},{' '}
+                {comparison.done.length} of {comparison.engines.length} paths answered
+                {comparison.done.length > 0 && ` (${comparison.done.join(', ')})`}. Until it
+                finishes, Explore refuses to start another.
+              </p>
+              <p className="text-on-surface-variant mt-2 truncate font-mono text-[10px] opacity-70" title={comparison.sql}>
+                {comparison.sql}
+              </p>
+            </div>
+            <button
+              onClick={() => stopComparison.mutate()}
+              disabled={stopComparison.isPending}
+              className="text-tertiary border-tertiary/40 hover:bg-tertiary/10 shrink-0 cursor-pointer rounded border px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
+            >
+              {stopComparison.isPending ? 'Stopping…' : 'Stop it'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-6 space-y-2">
+        {isLoading && <p className="text-on-surface-variant text-xs">Asking the engines…</p>}
+        {!isLoading && queries.length === 0 && (
+          <p className="text-on-surface-variant text-xs">
+            Nothing running on Presto or Spark.
+          </p>
+        )}
+        {queries.map((query) => (
+          <div
+            key={`${query.engine}-${query.id}`}
+            className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-white/5 bg-surface-container-low px-4 py-3"
+          >
+            <span
+              className="text-[10px] font-black uppercase tracking-wider"
+              style={{ color: ENGINE_COLOURS[query.engine] ?? 'var(--color-on-surface-variant)' }}
+            >
+              {query.engine}
+            </span>
+            <span className="text-on-surface-variant font-mono text-[10px]">{query.id}</span>
+            <span className="text-on-surface-variant text-[10px] uppercase tracking-wider opacity-70">
+              {query.state}
+            </span>
+            <span className="text-on-surface tabular-nums text-[11px] font-bold">
+              {formatMs(query.running_s * 1000)}
+            </span>
+            {query.tasks_total > 0 && (
+              <span className="text-on-surface-variant tabular-nums text-[10px]">
+                {query.tasks_done}/{query.tasks_total} tasks
+              </span>
+            )}
+            <span
+              className="text-on-surface-variant min-w-0 flex-1 truncate font-mono text-[10px] opacity-70"
+              title={query.sql}
+            >
+              {query.sql}
+            </span>
+            <button
+              onClick={() => killQuery.mutate(query)}
+              disabled={killQuery.isPending}
+              className="text-tertiary border-tertiary/40 hover:bg-tertiary/10 shrink-0 cursor-pointer rounded border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {data?.unreadable && Object.keys(data.unreadable).length > 0 && (
+        <div className="text-on-surface-variant mt-4 space-y-1 border-t border-white/5 pt-4 text-[10px] leading-relaxed opacity-70">
+          {Object.entries(data.unreadable).map(([engine, reason]) => (
+            <p key={engine}>
+              <span className="uppercase tracking-wider">{engine}</span>: {reason}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function HealthPage() {
+  const { toast, show, dismiss } = useToast()
+  const queryClient = useQueryClient()
+
   const { data, isLoading } = useQuery<PlatformHealth>({
     queryKey: ['platform-health'],
     queryFn: () => getJson<PlatformHealth>('/api/platform/health'),
@@ -75,6 +326,29 @@ export default function HealthPage() {
     queryKey: ['latency'],
     queryFn: () => getJson<Latency>('/api/demo/latency'),
     refetchInterval: 10000,
+  })
+
+  /**
+   * Rebuild the backend's connections to one service.  Spark has two of them, so
+   * this is per service rather than per client, which is how the page presents the
+   * stack everywhere else.
+   */
+  const reconnect = useMutation({
+    mutationFn: async (targets: ReconnectTarget[]) => {
+      const results = await Promise.all(
+        targets.map((target) => postJson<OperationResult>('/api/platform/reconnect', { target })),
+      )
+      return {
+        ok: results.every((result) => result.ok),
+        actions: results.flatMap((result) => result.actions),
+      }
+    },
+    onSuccess: (result) => {
+      show(result.actions.join(' · '), result.ok ? 'success' : 'info')
+      queryClient.invalidateQueries({ queryKey: ['platform-health'] })
+      queryClient.invalidateQueries({ queryKey: ['engines'] })
+    },
+    onError: (e: Error) => show(e.message, 'error'),
   })
 
   const services = data?.services ?? []
@@ -129,6 +403,8 @@ export default function HealthPage() {
         ) : (
           services.map((service) => {
             const isUp = service.status === 'up'
+            const clients = SERVICE_CLIENTS[service.name] ?? []
+            const container = SERVICE_CONTAINERS[service.name]
             return (
               <div
                 key={service.name}
@@ -164,10 +440,64 @@ export default function HealthPage() {
                 <p className="text-on-surface-variant mt-4 text-xs leading-relaxed">
                   {SERVICE_ROLES[service.name] ?? 'Part of the stack'}
                 </p>
+
+                <div className="mt-4 space-y-2 border-t border-white/5 pt-4">
+                  {clients.length > 0 && (
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-on-surface-variant text-[10px] leading-tight">
+                        Rebuild this backend's{' '}
+                        {clients.length > 1 ? `${clients.length} connections` : 'connection'} to it
+                      </span>
+                      <button
+                        onClick={() => reconnect.mutate(clients)}
+                        disabled={reconnect.isPending}
+                        className="text-primary border-primary/40 hover:bg-primary/10 shrink-0 cursor-pointer rounded border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
+                      >
+                        {reconnect.isPending ? 'Working…' : 'Reconnect'}
+                      </button>
+                    </div>
+                  )}
+                  {container && (
+                    <CopyableCommand command={`podman restart ${container}`} onResult={show} />
+                  )}
+                </div>
               </div>
             )
           })
         )}
+      </div>
+
+      <WorkInFlight onResult={show} />
+
+      <div className="glass-panel rounded-xl p-8">
+        <h2 className="font-headline text-lg font-bold uppercase tracking-wide">
+          Restarting a service
+        </h2>
+        <p className="text-on-surface-variant mt-1 text-xs leading-relaxed">
+          The dashboard cannot restart the stack, and is not given the means to: it is a container
+          beside the others, reachable from a browser, so control over its neighbours is exactly what
+          it should not have. Each card above therefore carries the command rather than a button.
+          <span className="mt-2 block">
+            Reconnecting is usually the one you want, and costs no downtime: it is what clears a
+            session that has gone stale while the service itself is fine. Restart the backend instead
+            when you want every connection rebuilt at once, or to release a comparison that will not
+            stop.
+          </span>
+        </p>
+        <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2">
+          <CopyableCommand command="podman restart backend" onResult={show} />
+          <CopyableCommand command="scripts/cleanup-data.sh" onResult={show} />
+          <CopyableCommand command="podman exec cassandra nodetool clearsnapshot --all" onResult={show} />
+          <CopyableCommand command="./stop-and-clean-data-and-schema.sh" onResult={show} />
+        </div>
+        <p className="text-on-surface-variant mt-3 text-[10px] leading-relaxed opacity-70">
+          <span className="font-mono">cleanup-data.sh</span> truncates the generated tables and leaves
+          the stack up;{' '}
+          <span className="font-mono">clearsnapshot</span> reclaims snapshots an abandoned bulk read
+          left pinning SSTables, which otherwise expire on their own;{' '}
+          <span className="font-mono">stop-and-clean-data-and-schema.sh</span> is the full wipe,
+          including the Kafka volume.
+        </p>
       </div>
 
       <div className="glass-panel rounded-xl p-8">
@@ -214,6 +544,8 @@ export default function HealthPage() {
           })}
         </div>
       </div>
+
+      {toast && <Toast toast={toast} onDismiss={dismiss} />}
     </section>
   )
 }

@@ -9,12 +9,14 @@ import httpx
 from fastapi import APIRouter, HTTPException
 
 from app.config import settings
+from app.db import spark_ui
 from app.db.cassandra_client import cassandra_client
 from app.db.presto_client import presto_client
 from app.db.spark_client import BULK_VIEW_PREFIX, spark_bulk_client, spark_client
 from app.models import (
     BenchmarkRequest,
     BenchmarkResponse,
+    ComparisonRun,
     EngineResult,
     NLQueryRequest,
     NLQueryResponse,
@@ -185,11 +187,17 @@ def execute_sql(req: SQLQueryRequest) -> SQLQueryResult:
 
 # One comparison at a time.  Two overlapping ones would each be timed while the
 # other was running, and both sets of numbers would be wrong without saying so.
-# The start time goes with it so a refusal can say how long the run it is waiting
-# on has been going: a browser that gave up on a long run leaves it going here, and
-# "already running" without a duration reads like the dashboard is stuck.
+#
+# What is running is recorded beside the lock, not just the fact that something is:
+# a browser that gives up on a long run leaves it going here, so "already running"
+# with no age, statement or progress reads like a stuck dashboard.  The Health page
+# reads this, and can stop it.
 _comparison_lock = threading.Lock()
-_comparison_started_at: Optional[float] = None
+_in_flight: Optional[Dict[str, Any]] = None
+# Set by a cancel request, cleared when the run it stopped has returned.  A path
+# already working is stopped by taking its connection away; this is what stops the
+# paths that have not started yet.
+_cancel_requested = threading.Event()
 
 # How often the probe reads one partition while an engine works, and how long the
 # baseline window is.  4 reads a second is far below what the dashboard's own
@@ -281,34 +289,43 @@ def _requested_engines(names: Optional[List[str]]) -> List[str]:
 
 
 def _run_sequentially(
-    engines: List[str], statement: str, limit: int, subject: Optional[str]
-) -> Dict[str, EngineResult]:
-    """One path at a time, each probed on its own.
+    engines: List[str], statement: str, limit: int, subject: Optional[str],
+    results: Dict[str, EngineResult],
+) -> None:
+    """One path at a time, each probed on its own, filling ``results`` as it goes.
 
     This is the mode whose timings mean what they look like: nothing else the
     dashboard controls is running, so a path's figure is its own cost, and the
     probe beside it is the price that one path charged the transactional path.
+
+    Results are filled in rather than returned so that a run in flight can be
+    watched: what is in the dict is what has answered.  A cancelled run stops
+    before its next path, and the paths it never reached stay absent.
     """
-    results: Dict[str, EngineResult] = {}
     for engine in engines:
+        if _cancel_requested.is_set():
+            return
         if not subject:
             results[engine] = _run(engine, statement, limit)
             continue
         with _OltpProbe(subject) as probe:
             results[engine] = _run(engine, statement, limit)
         results[engine].oltp = probe.impact()
-    return results
 
 
-def _run_together(engines: List[str], statement: str, limit: int) -> Dict[str, EngineResult]:
+def _run_together(
+    engines: List[str], statement: str, limit: int, results: Dict[str, EngineResult]
+) -> None:
     """Every path at once, contending on purpose.
 
     Each path answers more slowly than it would alone, and that is the point: the
     comparison is being used to show interference rather than to avoid it.  Each
     path has its own client and its own connection, including the two Spark paths,
     so they genuinely overlap instead of queueing behind a shared session.
+
+    There is nothing here for a cancel flag to prevent, since every path has
+    already started; a cancel stops these by taking their connections away.
     """
-    results: Dict[str, EngineResult] = {}
     threads = []
     for engine in engines:
         def leg(engine: str = engine) -> None:
@@ -326,7 +343,6 @@ def _run_together(engines: List[str], statement: str, limit: int) -> Dict[str, E
         threads.append(thread)
     for thread in threads:
         thread.join()
-    return results
 
 
 @router.post("/benchmark", response_model=BenchmarkResponse)
@@ -345,19 +361,38 @@ def run_benchmark(req: BenchmarkRequest) -> BenchmarkResponse:
     comparison still renders when a path cannot answer — which for CQL and an
     aggregate is the point of showing it.
     """
-    global _comparison_started_at
+    global _in_flight
     statement = _validate(req.sql)
     engines = _requested_engines(req.engines)
 
     if not _comparison_lock.acquire(blocking=False):
-        running_for = time.monotonic() - (_comparison_started_at or time.monotonic())
+        running = running_comparison()
+        age = int(running.running_for_s) if running else 0
         raise HTTPException(
             status_code=409,
-            detail=f"A comparison has been running for {int(running_for)}s.  They run "
-            "one at a time, because two at once would each be timed while the other "
-            "ran; a run whose browser gave up carries on here until it finishes.",
+            detail=f"A comparison has been running for {age}s.  They run one at a time, "
+            "because two at once would each be timed while the other ran; a run whose "
+            "browser gave up carries on here until it finishes.  The Health page shows "
+            "it, and can stop it.",
         )
-    _comparison_started_at = time.monotonic()
+
+    results: Dict[str, EngineResult] = {}
+    _cancel_requested.clear()
+    _in_flight = {
+        "started": time.monotonic(),
+        "mode": req.mode,
+        "engines": engines,
+        "sql": statement,
+        "results": results,
+        # What each Spark path will submit, worked out here because a cancel has to
+        # recognise those jobs among everything else the shared Thrift Server may be
+        # running.  The dialects are pure rewrites, so this is what the legs issue.
+        "spark_statements": [
+            ENGINES[name][1](statement, req.limit)
+            for name in engines
+            if name in ("spark", "spark_bulk")
+        ],
+    }
     try:
         subject = _probe_subject()
         baseline = None
@@ -370,18 +405,95 @@ def run_benchmark(req: BenchmarkRequest) -> BenchmarkResponse:
         if req.mode == "parallel":
             if subject:
                 with _OltpProbe(subject) as probe:
-                    results = _run_together(engines, statement, req.limit)
+                    _run_together(engines, statement, req.limit, results)
                 combined = probe.impact()
             else:
-                results = _run_together(engines, statement, req.limit)
+                _run_together(engines, statement, req.limit, results)
         else:
-            results = _run_sequentially(engines, statement, req.limit, subject)
+            _run_sequentially(engines, statement, req.limit, subject, results)
 
         return BenchmarkResponse(
-            mode=req.mode, oltp_baseline=baseline, oltp_combined=combined, **results
+            mode=req.mode,
+            oltp_baseline=baseline,
+            oltp_combined=combined,
+            cancelled=_cancel_requested.is_set(),
+            **results,
         )
     finally:
+        _in_flight = None
+        _cancel_requested.clear()
         _comparison_lock.release()
+
+
+def running_comparison() -> Optional[ComparisonRun]:
+    """The comparison in flight, or None.  Read by the Health page."""
+    run = _in_flight
+    if run is None:
+        return None
+    answered = run["results"]
+    return ComparisonRun(
+        running_for_s=round(time.monotonic() - run["started"], 1),
+        mode=run["mode"],
+        engines=run["engines"],
+        sql=run["sql"],
+        done=[name for name in run["engines"] if name in answered],
+    )
+
+
+def cancel_comparison() -> List[str]:
+    """Stop the comparison in flight, and report what that took.
+
+    Three different mechanisms, because the paths are three different kinds of
+    client: the paths that have not started are stopped by a flag, a Presto query
+    is cancelled by the coordinator, and a Spark statement has its connection taken
+    away because PyHive cannot cancel one it is already waiting on.  Cassandra is
+    absent from the list on purpose: its legs are single-digit milliseconds, so
+    there is never one to stop.
+
+    The run itself ends the moment its paths stop; the HTTP request that started it
+    gets an ordinary response marked cancelled, if anything is still listening.
+    """
+    run = _in_flight
+    if run is None:
+        return []
+
+    _cancel_requested.set()
+    actions = ["stopped the paths that had not started yet"]
+
+    if "presto" in run["engines"]:
+        try:
+            killed = [
+                query["id"]
+                for query in presto_client.running_queries()
+                if query["user"] == settings.presto_user
+            ]
+            for query_id in killed:
+                presto_client.kill_query(query_id)
+            if killed:
+                actions.append(f"cancelled {len(killed)} Presto quer(y/ies): {', '.join(killed)}")
+        except Exception as e:
+            actions.append(f"could not cancel the Presto query: {e}")
+
+    for name, client in (("spark", spark_client), ("spark_bulk", spark_bulk_client)):
+        if name in run["engines"]:
+            try:
+                if client.abort():
+                    actions.append(f"took the connection away from {name}")
+            except Exception as e:
+                actions.append(f"could not stop {name}: {e}")
+
+    if run["spark_statements"]:
+        # Both halves are needed.  The abort above stops the dashboard waiting; this
+        # stops Spark working, which it otherwise carries on doing for a session that
+        # has gone, keeping the cores the next comparison would be timed against.
+        try:
+            killed = spark_ui.kill_jobs_for(run["spark_statements"])
+            if killed:
+                actions.append(f"killed {len(killed)} Spark job(s): {', '.join(killed)}")
+        except Exception as e:
+            actions.append(f"could not kill the Spark job(s): {e}")
+
+    return actions
 
 
 # ──────────────────────── Natural language → SQL ────────────────────────

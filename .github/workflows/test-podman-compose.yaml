@@ -490,6 +490,113 @@ jobs:
             < "$TMP_DIR/concurrent-$WINNER.json"
           echo "✓ The overlapping comparison was refused, and the other still completed"
 
+          echo -e "\n=== Running work is visible, and can be stopped ==="
+          # The Health page's operator half.  Start a comparison over the whole
+          # history, which is the longest thing the dashboard does, then watch it
+          # from the outside and stop it.  Polling until the run appears rather than
+          # sleeping a fixed time keeps this deterministic: the endpoint holds the
+          # lock for at least its baseline window, so it cannot finish unseen.
+          curl -s --max-time 1800 -o "$TMP_DIR/cancelled-run.json" \
+            -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-aggregate.json" &
+          CANCEL_TARGET=$!
+          # Two things are waited for.  That the run is visible at all is required:
+          # it holds the lock for at least its baseline window, so it cannot finish
+          # unseen.  That one of its paths has reached an engine is only hoped for,
+          # since it is what makes the cancel stop real work rather than just a flag,
+          # and hoping is as far as this can go without becoming a race.
+          SEEN=""
+          SEEN_QUERY=""
+          for _ in $(seq 1 60); do
+            curl -s --max-time 10 http://localhost:8000/api/platform/running \
+              > "$TMP_DIR/running.json" || true
+            if python3 "$TMP_DIR/jq-path.py" comparison mode < "$TMP_DIR/running.json" \
+                 | grep -qE 'sequential|parallel'; then
+              SEEN="yes"
+              if [ "$(python3 "$TMP_DIR/jq-path.py" queries < "$TMP_DIR/running.json")" != "0" ]; then
+                SEEN_QUERY="yes"
+                break
+              fi
+            elif [ -n "$SEEN" ]; then
+              break  # it finished on its own; nothing left to wait for
+            fi
+            sleep 0.5
+          done
+          python3 -m json.tool < "$TMP_DIR/running.json"
+          [ -n "$SEEN" ] || { echo "::error::a comparison was running but /api/platform/running did not report it"; exit 1; }
+          [ -n "$SEEN_QUERY" ] || echo "note: no engine query became visible before the cancel, so only the lock was exercised"
+          curl -s --max-time 60 -X POST http://localhost:8000/api/platform/running/cancel-comparison \
+            | tee "$TMP_DIR/cancel-result.json"
+          echo
+          wait "$CANCEL_TARGET" || true
+          python3 - "$TMP_DIR/cancelled-run.json" "$TMP_DIR/cancel-result.json" "${SEEN_QUERY:-no}" << 'PY'
+          import json, sys
+          run = json.load(open(sys.argv[1]))
+          cancel = json.load(open(sys.argv[2]))
+          engine_was_working = sys.argv[3] == "yes"
+          problems = []
+          if not cancel.get("ok") or not cancel.get("actions"):
+              problems.append(f"the cancel reported nothing done: {cancel}")
+          if not run.get("cancelled"):
+              problems.append("the comparison did not come back marked cancelled")
+          if engine_was_working:
+              # A path had reached an engine, so the cancel has to have stopped work
+              # somewhere rather than only setting the flag that stops the next path.
+              stopped = [a for a in cancel.get("actions", []) if "cancelled" in a or "killed" in a or "connection away" in a]
+              if not stopped:
+                  problems.append(
+                      f"an engine was working, but nothing was stopped: {cancel.get('actions')}"
+                  )
+          # A cancelled run still answers: the paths that got as far as running report
+          # why they stopped, and the ones that never started are absent.
+          for name in ("presto", "spark", "spark_bulk"):
+              result = run.get(name)
+              if result and not result.get("error"):
+                  problems.append(f"{name} answered normally, so nothing was actually stopped")
+          if problems:
+              print("::error::cancelling a comparison: " + "; ".join(problems))
+              sys.exit(1)
+          print("  " + "; ".join(cancel["actions"]))
+          PY
+          # And nothing may be left behind: an orphaned Spark job would keep the cores
+          # the next comparison is timed against.
+          sleep 8
+          curl -s --max-time 10 http://localhost:8000/api/platform/running > "$TMP_DIR/running-after.json"
+          python3 -m json.tool < "$TMP_DIR/running-after.json"
+          python3 - "$TMP_DIR/running-after.json" << 'PY'
+          import json, sys
+          after = json.load(open(sys.argv[1]))
+          if after.get("comparison"):
+              print("::error::the comparison is still holding the lock after being cancelled")
+              sys.exit(1)
+          # Anything older than the pause above is a leftover of the cancelled run;
+          # a younger query is something else starting, which is not this test's
+          # business and would make it flaky to assert about.
+          left = [
+              f"{q['engine']} {q['id']} ({q['running_s']}s)"
+              for q in after.get("queries", [])
+              if q["running_s"] > 5
+          ]
+          if left:
+              print(f"::error::cancelled, but still running: {', '.join(left)}")
+              sys.exit(1)
+          print("  nothing left running")
+          PY
+          # Reconnecting is the other control, and is the one safe to run at any time.
+          curl -s --max-time 60 -X POST http://localhost:8000/api/platform/reconnect \
+            -H 'Content-Type: application/json' --data '{"target": "all"}' \
+            | tee "$TMP_DIR/reconnect.json"
+          echo
+          python3 - "$TMP_DIR/reconnect.json" << 'PY'
+          import json, sys
+          result = json.load(open(sys.argv[1]))
+          if not result.get("ok"):
+              print(f"::error::reconnecting every path failed: {result.get('actions')}")
+              sys.exit(1)
+          print("  " + "; ".join(result["actions"]))
+          PY
+          echo "✓ Work in flight is visible, stoppable, and leaves nothing behind"
+
           echo -e "\n=== The whole event history, grouped ==="
           # Minutes, not seconds: this groups every event ingested so far, on three
           # paths in sequence.  The dashboard makes this preset opt-in for that

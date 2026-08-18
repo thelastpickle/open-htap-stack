@@ -18,12 +18,57 @@ import math
 import os
 import time
 import uuid
+import zlib
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from cassandra.cluster import Cluster, ConsistencyLevel
 from cassandra.util import datetime_from_uuid1
 from kafka import KafkaConsumer
+
+
+# How the raw event table is partitioned.  Both values are part of the data model
+# rather than tuning: change either one and existing rows keep the buckets and
+# shards they were written with, so the queries that name them stop matching.
+#
+# Fifteen minutes is short enough that "recently" costs one or two partitions and
+# long enough that an hour is four of them.  Sixteen shards keeps a bucket at the
+# demo's default rate near 110k rows per partition, and is few enough that naming
+# every shard in a query stays readable.
+EVENT_BUCKET_MINUTES = 15
+EVENT_SHARDS = 16
+
+
+def event_bucket(event_time: datetime) -> str:
+    """The 15-minute window an event belongs to, as "YYYY-MM-DDTHH:MM" in UTC.
+
+    Text rather than a timestamp on purpose.  This value is written by hand into
+    queries that four different engines have to parse, and a quoted string means
+    the same thing in CQL, Presto SQL and Spark SQL, where a timestamp literal does
+    not.  It also sorts lexicographically, so a range predicate still reads
+    naturally on the paths that cannot prune on it.
+    """
+    floored = event_time.astimezone(timezone.utc).replace(
+        minute=(event_time.minute // EVENT_BUCKET_MINUTES) * EVENT_BUCKET_MINUTES,
+        second=0,
+        microsecond=0,
+    )
+    return floored.strftime("%Y-%m-%dT%H:%M")
+
+
+def event_shard(event_id: uuid.UUID) -> int:
+    """Which partition of a bucket this event goes to.
+
+    Taken from the event's own id, so the spread is even whatever the fleet size:
+    deriving it from the asset would put every row of a one-asset demo in a single
+    partition.  Deterministic, unlike Python's salted hash of a string, so a
+    restarted sink keeps writing the same event to the same place.
+
+    Hashed rather than taken modulo the id itself, which measured as every event
+    landing in one shard: these are version-1 UUIDs, whose low bits are the node
+    field, and that is constant for a given host.
+    """
+    return zlib.crc32(event_id.bytes) % EVENT_SHARDS
 
 
 def env_int(name: str, default: int) -> int:
@@ -93,12 +138,31 @@ def ensure_schema(session, keyspace: str, table: str):
 
     # Raw event stream, one row per event.  Presto and the Spark bulk reader read
     # this table; the mission-control tables below are projections of it.
+    #
+    # Partitioned by a time bucket rather than by event_id, so that a question
+    # about a period of time is a question about particular partitions.  Keyed on
+    # the event alone, every path had to read the whole table to answer "the last
+    # fifteen minutes", because event_time is not part of the key and a token is a
+    # hash: there was nothing to prune on.  With the bucket in the key, Cassandra
+    # reads those partitions and needs no ALLOW FILTERING, Presto and the
+    # spark-cassandra-connector push the predicate down, and the bulk reader turns
+    # it into a partition-key filter and skips the SSTables that cannot hold them.
+    #
+    # The shard is what keeps those partitions a sane size.  One bucket at the
+    # demo's default rate is about 1.8M rows, which is far too much for a single
+    # partition; spread over SHARDS it is nearer 110k, a few tens of megabytes.  It
+    # comes from the event's own id rather than from the asset, so the spread does
+    # not collapse when the fleet is small.  A query for a whole window therefore
+    # names every shard, which is the cost of the arrangement and the reason to
+    # keep the count modest.
     session.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {keyspace}.{table} (
+          event_bucket text,
+          shard int,
+          event_id timeuuid,
           entity_id text,
           event_day date,
-          event_id timeuuid,
           event_time timestamp,
           event_type text,
           observer_id text,
@@ -108,11 +172,9 @@ def ensure_schema(session, keyspace: str, table: str):
           temp_external_c float,
           temp_internal_c float,
           text_payload text,
-          PRIMARY KEY (event_id)
+          PRIMARY KEY ((event_bucket, shard), event_id)
         );
         """
-        # TODO: PRIMARY KEY ((entity_id, event_day), event_id)
-        #
         # WITH transactional_mode = 'full';
     )
 
@@ -670,9 +732,10 @@ def main() -> None:
             time.sleep(5)
 
     insert_raw = session.prepare(
-        f"INSERT INTO {keyspace}.{table} (entity_id, event_day, event_id, event_time, event_type, "
-        "observer_id, latitude, longitude, altitude_m, temp_external_c, temp_internal_c, "
-        "text_payload) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        f"INSERT INTO {keyspace}.{table} (event_bucket, shard, event_id, entity_id, event_day, "
+        "event_time, event_type, observer_id, latitude, longitude, altitude_m, "
+        "temp_external_c, temp_internal_c, text_payload) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
     insert_raw.consistency_level = ConsistencyLevel.QUORUM
 
@@ -782,7 +845,8 @@ def main() -> None:
                 telemetry_age_s = max(0, int((now_utc - event_time).total_seconds()))
 
                 pending.append(session.execute_async(insert_raw, (
-                    entity_id, event_time.date(), event_id, event_time, event_type,
+                    event_bucket(event_time), event_shard(event_id), event_id,
+                    entity_id, event_time.date(), event_time, event_type,
                     observer_id, latitude, longitude, altitude_m,
                     temp_external_c, temp_internal_c, text_payload,
                 )))

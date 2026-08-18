@@ -89,7 +89,7 @@ podman exec cassandra \
   cqlsh cassandra -e "SELECT * FROM demo.events LIMIT 3;"
 ```
 
-The demo ingests drone telemetry events via Kafka into a Cassandra table keyed by `entity_id` and `event_time` — a typical wide-partition time-series shape. See [docs/DATA-MODEL.md](docs/DATA-MODEL.md) for the full schema.
+The demo ingests drone telemetry events via Kafka into a Cassandra table partitioned by a 15-minute time bucket and a shard, clustered by event id — the ordinary way to model an event stream so that a question about a period of time reads only the partitions holding it. Every access path exploits that differently, which is half of what the dashboard's comparison shows. See [docs/DATA-MODEL.md](docs/DATA-MODEL.md) for the full schema and why it is shaped this way.
 
 ### Example Presto queries
 

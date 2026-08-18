@@ -1,17 +1,17 @@
 # Architecture: Scope, Consistency, and Enterprise Considerations
 
-This document covers the technical scope of the HTAP stack, the consistency model it provides, the trade-offs it makes, and the enterprise concerns it needs to answer. The [README](../README.md) covers the quickstart; [WHY.md](WHY.md) covers the argument for the approach.
+This document covers the technical scope of the hybrid transactional/analytical processing (HTAP) stack, the consistency model it provides, the trade-offs it makes, and the enterprise concerns it needs to answer. &emsp;The [README](../README.md) covers the quickstart; [WHY.md](WHY.md) covers the argument for the approach.
 
 ## Contents
 
-- [A. What this demo is (and is not)](#a-what-this-demo-is-and-is-not)
-- [B. How strict serializability is achieved (and what availability means)](#b-how-strict-serializability-is-achieved-and-what-availability-means)
-- [C. HTAP analytics without duplicating data](#c-htap-analytics-without-duplicating-data-persisted-structure-reads--snapshots)
-- [D. Resource isolation: protecting OLTP tail latency](#d-resource-isolation-protecting-oltp-tail-latency)
-- [E. SQL interface: what "Postgres-compatible" means here](#e-sql-interface-what-postgres-compatible-means-in-this-repo)
-- [F. Parquet / Iceberg exports: optional optimization, not foundation](#f-parquet--iceberg-exports-optional-optimization-not-the-foundation)
-- [G. Consistency model: tunable where appropriate](#g-consistency-model-tunable-where-appropriate)
-- [H. Enterprise realities](#h-enterprise-realities-and-how-to-think-about-them)
+- [A. &emsp;What this demo is (and is not)](#a-what-this-demo-is-and-is-not)
+- [B. &emsp;How strict serializability is achieved (and what availability means)](#b-how-strict-serializability-is-achieved-and-what-availability-means)
+- [C. &emsp;HTAP analytics without duplicating data](#c-htap-analytics-without-duplicating-data-persisted-structure-reads--snapshots)
+- [D. &emsp;Resource isolation: protecting OLTP tail latency](#d-resource-isolation-protecting-oltp-tail-latency)
+- [E. &emsp;SQL interface: what "Postgres-compatible" means here](#e-sql-interface-what-postgres-compatible-means-in-this-repo)
+- [F. &emsp;Parquet / Iceberg exports: optional optimisation, not foundation](#f-parquet--iceberg-exports-optional-optimisation-not-the-foundation)
+- [G. &emsp;Consistency model: tunable where appropriate](#g-consistency-model-tunable-where-appropriate)
+- [H. &emsp;Enterprise realities](#h-enterprise-realities-and-how-to-think-about-them)
 - [Hard Questions FAQ](#hard-questions-faq)
 
 ---
@@ -20,15 +20,15 @@ This document covers the technical scope of the HTAP stack, the consistency mode
 
 ### What it is
 
-- A runnable proof-of-concept showing end-to-end ingestion and query paths across OLTP and analytics.
+- A runnable proof-of-concept showing end-to-end ingestion and query paths across online transaction processing (OLTP) and analytics.
 - A demonstration of **global strict serializability** for multi-key and multi-table transactions under the constraints described below.
 - A demonstration of analytics reads that operate against persisted structures (including coordinated snapshots) to avoid OLTP interference.
 
 ### What it is not (yet)
 
-- A claim of full feature parity with mature, general-purpose SQL databases. Every SQL is different anyway 🤷
+- A claim of full feature parity with mature, general-purpose SQL databases. &emsp;No two SQL dialects agree anyway.
 - A promise that every enterprise workload can be consolidated immediately without trade-offs.
-- A turnkey drop-in replacement for warehouses and lakes in every scenario, some organizations may still benefit  exporting to Parquet/Iceberg on cold storage for cost/performance/lifecycle reasons.
+- A turnkey drop-in replacement for warehouses and lakes in every scenario; some organisations may still benefit from exporting to Parquet/Iceberg on cold storage for cost, performance or lifecycle reasons.
 
 ---
 
@@ -36,13 +36,13 @@ This document covers the technical scope of the HTAP stack, the consistency mode
 
 ### Where strict serializability comes from
 
-Strict serializability is provided by **Accord (CEP-15)**, included in this stack. Accord's design goals are:
+Strict serializability is provided by **Accord**, Cassandra Enhancement Proposal 15 (CEP-15), included in this stack. &emsp;Accord's design goals are:
 
 - strict-serializable isolation across multi-key transactions
 - low latency in the common case (single wide-area round trip under normal conditions)
 - leaderless operation without introducing a global bottleneck
 
-Accord is informed by research from the University of Michigan and Apple. The protocol uses commodity clocks rather than specialized time infrastructure (like Google Spanner's TrueTime), which removes the commit-wait latency Spanner pays on writes.
+Accord is informed by research from the University of Michigan and Apple. &emsp;The protocol uses commodity clocks rather than specialised time infrastructure (like Google Spanner's TrueTime), which removes the commit-wait latency Spanner pays on writes.
 
 ### Availability model (practical interpretation)
 
@@ -54,17 +54,39 @@ This system is **quorum-based** for transactional decisions:
 A practical rule of thumb:
 
 - With replication factor (RF) = 3, you can typically lose one replica per key-range and still make progress.
-- With higher RF (and appropriate rack/AZ/region placement), you can tolerate more failures. How many can be down depends on the quorum configuration and the failure-domain topology.
+- With higher RF (and appropriate rack, availability-zone or region placement), you can tolerate more failures. &emsp;How many can be down depends on the quorum configuration and the failure-domain topology.
 
-Accord's leaderless design means availability is **per-request**. A down server affects only the transactions that touch keys whose coordination path includes that server, not the cluster as a whole. This is materially different from leader-based consensus (Raft, multi-Paxos) where a leader outage pauses all writes in the leader's scope until a new leader is elected.
+Accord's leaderless design means availability is **per-request**. &emsp;A down server affects only the transactions that touch keys whose coordination path includes that server, not the cluster as a whole. &emsp;This is materially different from leader-based consensus (Raft, multi-Paxos) where a leader outage pauses all writes in the leader's scope until a new leader is elected.
+
+### What the same guarantee costs elsewhere
+
+Strict serializability is rare enough that the systems offering it can be named, and naming them is more useful than claiming exclusivity. &emsp;What separates them is where each puts the component that orders transactions, because that choice sets the failure model.
+
+CEP-15 surveys the field it was designed against, and the survey is the clearest statement of the design axis. &emsp;It puts existing approaches in two families: a global leader, as in FaunaDB and FoundationDB, which it calls "simple and correct but introduces a scalability bottleneck that would be irreconcilable with the size of many Cassandra clusters"; and a combination of a transaction log with per-key leaders, as in DynamoDB, CockroachDB and YugabyteDB, which it judges "unlikely to be better than two round-trips in the general case" and which "appear to require either specialised hardware clocks or provide only serializable isolation".
+
+| System | What it documents | What the design charges for it |
+| --- | --- | --- |
+| **FoundationDB** | Strict serializability | One Sequencer process assigns every read and commit version in the cluster; losing it triggers a transaction-system recovery. &emsp;Across 289 production traces the median was 3.08 s and the 90th percentile 5.28 s, with read-write transactions blocked for the duration.  Scalability is very limited. |
+| **Google Spanner** | External consistency, which is strict serializability | TrueTime, meaning specialised time infrastructure in every datacentre, and a commit-wait on every write. |
+| **CockroachDB** | Serializable | States plainly that it stops short: "CockroachDB doesn't quite offer strict serializability, but we're fairly close to it." &emsp;It permits an anomaly it names causal reverse. |
+| **TiDB** | Snapshot isolation, presented as `REPEATABLE-READ` for MySQL compatibility | No serializable level at all. &emsp;Transaction timestamps are allocated by the Placement Driver rather than by the replicas holding the data. |
+| **YugabyteDB** | Serializable, in its PostgreSQL-compatible API | Documents serializability rather than external consistency, so it makes no claim about ordering relative to real time. |
+
+The argument for the leaderless design follows from the third column of that table rather than from any benchmark. &emsp;A design that reaches consistency through a leader puts a low-traffic but critical component on the write path. &emsp;Replacing that component with a distributed one tends to leave a smaller critical component behind it, and every failure of whatever remains is a recovery or an election, either of which is a pause.
+
+The probability that some such component fails somewhere rises with node count, so the tail degrades as the cluster grows. &emsp;Building consistency over a store that is available by default has no such component to lose, so the failure model keeps its shape as the cluster grows. &emsp;That is a claim about design rather than a measurement, and it is falsifiable: it predicts that a leader-based system's write tail latency worsens with cluster size faster than a leaderless one's.
+
+**What this costs, and what is not yet shown.** &emsp;Having no leader means no leader-side batching or pipelining of the consensus stream, which is a real throughput advantage that leader-based designs keep. &emsp;Contention on the same keys moves Accord off its one-round-trip fast path onto a slower path. &emsp;Scale-invariance is a property of the design and not a result: Accord is not generally available, and CEP-15 describes its own prototype as "incomplete and not ready for production use".
+
+**None of the figures in this section were measured here.** &emsp;Each is the vendor's or the authors' own published number, cited so that it can be checked; see the references at the end of this document. &emsp;In particular, this repository has no head-to-head benchmark against Spanner or any distributed-SQL system, and no published one surfaced, so no throughput comparison is offered. &emsp;The comparison on offer is the mechanism: one wide-area round trip under normal conditions, against a commit-wait or a hop to a leader.  &emsp;This [blog post](https://medium.com/@jingyuzhou/a-critique-on-foundationdb-transaction-system-8b640c06f6cd) demonstrates production experience where these systems quickly fail as minimal scale and cannot past even a smaller number of 30 nodes.
 
 ### "No rollback" (what is meant here)
 
 Accord is designed so that transactions do not need to "roll back" in the traditional sense of speculatively-applied state that must be undone.
 
-Instead, transactions are journaled and ordered before they apply, and may be **blocked** (or forced onto a slower coordination path) when conflicts or failures require additional coordination. This trades tail latency for correctness and availability under failure.
+Instead, transactions are journaled and ordered before they apply, and may be **blocked** (or forced onto a slower coordination path) when conflicts or failures require additional coordination. &emsp;This trades tail latency for correctness and availability under failure.
 
-**The developer-experience claim**: that blocked-transactions are simpler to reason about than explicit rollback, depends on your application. If your application relies heavily on explicit rollback semantics (compensating actions, saga patterns built around failed transactions), you'll need to adapt. If your application is primarily read-heavy with occasional writes that need strong consistency, the blocked-transaction model often produces cleaner code.
+**The developer-experience claim**: that blocked-transactions are simpler to reason about than explicit rollback, depends on your application. &emsp;If your application relies heavily on explicit rollback semantics (compensating actions, saga patterns built around failed transactions), you'll need to adapt. &emsp;If your application is primarily read-heavy with occasional writes that need strong consistency, the blocked-transaction model often produces cleaner code.
 
 ---
 
@@ -82,19 +104,19 @@ Instead, the stack supports analytics that read:
 - directly from persisted on-disk structures (SSTable-oriented bulk read)
 - from coordinated cluster snapshots of those structures
 
-This is why the demo emphasizes:
+This is why the demo emphasises:
 
 - **Spark Bulk Reader/Writer** paths that interact with persisted structures via Sidecar endpoints
 - snapshot-coordinated reads for consistent analytical views
 
-### Snapshot-coordinated analytics (demo behavior)
+### Snapshot-coordinated analytics (demo behaviour)
 
 In the demo, "snapshotting" refers to:
 
 1. coordinating snapshots across the cluster (a well-understood Cassandra operation)
 2. running analytic queries over the snapshotted persisted structures
 
-This yields a stable analytical view while allowing OLTP to continue without disruption — resource isolation by construction.
+This yields a stable analytical view while allowing OLTP to continue without disruption: resource isolation by construction.
 
 ---
 
@@ -104,7 +126,7 @@ This yields a stable analytical view while allowing OLTP to continue without dis
 
 The demo's design intent:
 
-- OLTP uses the normal request path (CQL / Postgres wire protocol, coordinator → replica)
+- OLTP uses the normal request path (Cassandra Query Language, CQL, or the Postgres wire protocol; coordinator → replica)
 - analytics uses persisted-structure reads and/or snapshot reads via the Sidecar
 - a Sidecar can stream/offload snapshot files to separate storage to reduce repeated I/O contention
 
@@ -112,7 +134,7 @@ The intended outcome:
 
 - minimal impact to OLTP p99 latency under analytic load, provided the system is configured correctly
 
-The architectural reason this works: analytical reads don't go through Cassandra's coordinator queues, the read-repair path, or the normal replica-read path. They read SSTable files directly, bypassing all the mechanisms that OLTP requests compete for.
+The architectural reason this works: analytical reads don't go through Cassandra's coordinator queues, the read-repair path, or the normal replica-read path. &emsp;They read SSTable files directly, bypassing all the mechanisms that OLTP requests compete for.
 
 ### Query shapes: when to use which path
 
@@ -120,12 +142,12 @@ The architectural reason this works: analytical reads don't go through Cassandra
 |---|---|
 | Point reads (single partition key) | OLTP path |
 | Bounded partition reads (single partition key, range of clustering keys) | OLTP path |
-| Per-partition analytics (aggregations within a single partition) | OLTP path or persisted-structure reads, depending on concurrency and SLAs |
+| Per-partition analytics (aggregations within a single partition) | OLTP path or persisted-structure reads, depending on concurrency and service-level agreements |
 | Wide scans / large token-range reads | Persisted-structure reads (bulk reader) |
 | Cross-partition aggregations | Persisted-structure reads |
 | Full-table scans | Persisted-structure reads |
 
-**Note**: OLTP wide scans (token-range queries via CQL) will generally have higher p99 latency than partition reads. They can still be fast, but the analytics path is designed to be the better tool for that job.
+**Note**: OLTP wide scans (token-range queries via CQL) will generally have higher p99 latency than partition reads. &emsp;They can still be fast, but the analytics path is designed to be the better tool for that job.
 
 ---
 
@@ -147,7 +169,7 @@ The SQL interface in this stack is a **Postgres wire-protocol + Postgres-dialect
 
 ---
 
-## F. Parquet / Iceberg exports: optional optimization, not the foundation
+## F. Parquet / Iceberg exports: optional optimisation, not the foundation
 
 This stack does not require Parquet/Iceberg to function as an HTAP foundation.
 
@@ -160,10 +182,10 @@ However, exporting to columnar formats is still useful when you explicitly want:
 
 In those cases:
 
-- Parquet/Iceberg are performance and lifecycle optimizations
+- Parquet/Iceberg are performance and lifecycle optimisations
 - the authoritative, freshest, strongly-consistent view remains in the OLTP store
 
-This is a meaningful distinction from architectures where Parquet/Iceberg IS the source of truth and the OLTP store is a cache.
+This is a meaningful distinction from architectures where Parquet/Iceberg is itself the source of truth and the OLTP store holds a copy of it.
 
 ---
 
@@ -176,40 +198,40 @@ Use this intentionally:
 - **strict-serializable transactions** (via Accord) for correctness-critical invariants: financial transactions, inventory, auth, audit
 - **weaker consistency** where latency/availability trade-offs are acceptable and correctness requirements permit: high-volume telemetry, analytics ingest, session data
 
-The availability of tunable consistency does not mean "use it casually." Every weakening of consistency is a correctness assertion about what your application can tolerate. Document those assertions.
+The availability of tunable consistency does not mean "use it casually." &emsp;Every weakening of consistency is a correctness assertion about what your application can tolerate. &emsp;Document those assertions.
 
 ---
 
 ## H. Enterprise realities (and how to think about them)
 
-Unified OLTP+analytics stacks must answer the same enterprise concerns any production data platform faces. These are the common ones and how we recommend thinking about them.
+Unified OLTP and analytics stacks must answer the same enterprise concerns any production data platform faces. &emsp;These are the common ones and how we recommend thinking about them.
 
 ### 1. Operational maturity and support
 
 Enterprises will ask:
 
-- Who operates this at 2am?
+- Who operates this at 2 a.m.?
 - What are the failure modes and runbooks?
 - How do upgrades, repairs, and incident response work?
 
 **Recommendation**:
 
 - Treat this repo as an evaluation harness, not a production blueprint
-- Define an operational model: SRE ownership, on-call rotation, SLIs/SLOs, upgrade cadence, repair/compaction monitoring
+- Define an operational model: site-reliability ownership, on-call rotation, service-level indicators and objectives, upgrade cadence, repair and compaction monitoring
 - Budget for specialist skills (Cassandra, Accord, Spark bulk I/O) or commercial support contracts
 
 ### 2. Governance, security, and data access boundaries
 
 Expect requirements for:
 
-- centralized RBAC/ABAC
+- centralised access control, whether role-based or attribute-based
 - auditing and lineage
-- data masking / tokenization policies
+- data masking and tokenisation policies
 - separation of duties and tenant isolation
 
 **Recommendation**:
 
-- Define the governance plane early, **including analytic access patterns**, the Spark Bulk Reader path reads SSTables directly, which has implications for row-level security that the OLTP path enforces
+- Define the governance plane early, **including analytic access patterns**; the Spark Bulk Reader path reads SSTables directly, which has implications for row-level security that the OLTP path enforces
 - Ensure consistent policy enforcement across OLTP and analytics interfaces
 
 ### 3. Schema evolution and migration
@@ -223,17 +245,17 @@ Enterprises need:
 **Recommendation**:
 
 - Document the migration path for legacy SQL workloads: what works today, what is planned
-- Accept that wide-column data modelling is different from relational modelling; some Postgres schemas will translate cleanly, others won't
+- Accept that wide-column data modelling differs from relational modelling; some Postgres schemas will translate cleanly, others won't
 
-### 4. CDC and integration (Kafka, streaming, dedup)
+### 4. Change data capture and integration (Kafka, streaming, dedup)
 
 Enterprises typically require:
 
-- reliable CDC to Kafka
+- reliable change data capture (CDC) to Kafka
 - dedup semantics aligned with replication and failure handling
 - clean operational experience for CDC pipelines
 
-**Note**: the Sidecar is intended to provide CDC-to-Kafka with replication-factor-aware dedup semantics. This is expected to be added to the demo.
+**Note**: the Sidecar is intended to provide CDC-to-Kafka with replication-factor-aware dedup semantics. &emsp;This is expected to be added to the demo.
 
 ### 5. Analytics expectations and BI tooling
 
@@ -253,56 +275,56 @@ Teams will ask:
 
 Enterprises will require:
 
-- clearly documented RPO/RTO
+- a clearly documented recovery point objective and recovery time objective
 - failover/failback procedures
 - proof that invariants hold during regional impairment
 
 **Recommendation**:
 
-- Include a DR drill guide and a failure-injection test plan
+- Include a disaster-recovery drill guide and a failure-injection test plan
 - Define how "availability" is preserved while respecting correctness
-- Accord's leaderless design helps here, quorum loss in one region doesn't stop operations on keys whose quorum is elsewhere
+- Accord's leaderless design helps here: quorum loss in one region doesn't stop operations on keys whose quorum is elsewhere
 
 ---
 
 ## Hard Questions FAQ
 
-### 1. Is this production ready / GA?
+### 1. Is this production ready, or generally available?
 
-No. This repository is a proof-of-concept you can run today to evaluate the approach. Production readiness requires additional hardening, operational tooling, performance tuning, and: for most enterprises; a commercial support contract.
+No. &emsp;This repository is a proof-of-concept you can run today to evaluate the approach. &emsp;Production readiness requires additional hardening, operational tooling, performance tuning, and, for most enterprises, a commercial support contract.
 
 ### 2. How can you claim strict serializability and still be "always-on available"?
 
 Strict serializability requires coordination, and coordination requires quorum.
 
-"Available" here means: **as long as a quorum can be reached for the keys involved in a transaction**, the transaction proceeds. Accord's leaderless design means availability is per-request, a down server affects only the transactions whose coordination path includes that server, not the cluster as a whole.
+"Available" here means: **as long as a quorum can be reached for the keys involved in a transaction**, the transaction proceeds. &emsp;Accord's leaderless design means availability is per-request; a down server affects only the transactions whose coordination path includes that server, not the cluster as a whole.
 
-Under partitions or failures that prevent quorum for some keys, the system preserves correctness by blocking or degrading to slower coordination paths rather than returning inconsistent results. You trade tail latency for correctness during failure, and per-request availability for global availability. Both trade-offs are explicit and documented.
+Under partitions or failures that prevent quorum for some keys, the system preserves correctness by blocking or degrading to slower coordination paths rather than returning inconsistent results. &emsp;You trade tail latency for correctness during failure, and per-request availability for global availability. &emsp;Both trade-offs are explicit and documented.
 
 ### 3. Is "no data duplication" realistic, or do we still need Parquet/Iceberg/lakes?
 
 "No duplication" means you can run many analytics workloads **directly over persisted structures and snapshots** without requiring an always-on ETL copy.
 
-You may still export to Parquet/Iceberg for explicit goals: cold storage, backups, scan-heavy workloads where columnar storage wins on cost/performance, or interop with external tools. Those exports are **optional optimizations**, not required plumbing. The distinction matters because it changes the ETL layer from mandatory infrastructure to a choice you make per-workload.
+You may still export to Parquet/Iceberg for explicit goals: cold storage, backups, scan-heavy workloads where columnar storage wins on cost/performance, or interop with external tools. &emsp;Those exports are **optional optimisations**, not required plumbing. &emsp;The distinction matters because it changes the ETL layer from mandatory infrastructure to a choice you make per-workload.
 
 ### 4. What are the trade-offs enterprises will actually feel?
 
 In practice:
 
-- **SQL feature coverage** — the Postgres-compatible interface is a protocol + dialect adapter, not full Postgres parity. Validate your required SQL semantics against what's actually implemented.
-- **Query-path selection** — teams need to learn which access path fits which workload. The OLTP path is slower for wide scans than the bulk-read path; the bulk-read path has higher setup cost for small queries. Wrong-path queries will work but will surprise you on cost or latency.
-- **Operational maturity** — Cassandra operations, Accord transaction debugging, Spark bulk I/O tuning are real specialist skills. Either build them in-house or contract commercial support.
-- **Governance and CDC integration** — the technical capabilities are present; integrating them with existing enterprise governance and CDC platforms is implementation work.
-- **Data modelling** — wide-column modelling is different from relational. Some schemas translate cleanly (time-series, event logs, key-value lookups); some don't (heavily normalized relational schemas with complex joins).
+- **SQL feature coverage**: the Postgres-compatible interface is a protocol + dialect adapter, not full Postgres parity. &emsp;Validate your required SQL semantics against what's actually implemented.
+- **Query-path selection**: teams need to learn which access path fits which workload. &emsp;The OLTP path is slower for wide scans than the bulk-read path; the bulk-read path has higher setup cost for small queries. &emsp;Wrong-path queries will work but will surprise you on cost or latency.
+- **Operational maturity**: Cassandra operations, Accord transaction debugging, Spark bulk I/O tuning are real specialist skills. &emsp;Either build them in-house or contract commercial support.
+- **Governance and CDC integration**: the technical capabilities are present; integrating them with existing enterprise governance and CDC platforms is implementation work.
+- **Data modelling**: wide-column modelling is different from relational. &emsp;Some schemas translate cleanly (time-series, event logs, key-value lookups); some don't (heavily normalised relational schemas with complex joins).
 
 ### 5. How does this compare to CockroachDB, TiDB, YugabyteDB, SingleStore, Snowflake Hybrid Tables, or Postgres + Citus?
 
 Each takes a different bet on the HTAP problem:
 
-- **CockroachDB, TiDB, YugabyteDB** — distributed SQL with strong relational semantics and varying consistency models. Excellent fit for application workloads that need relational integrity; analytical throughput on the same cluster is typically more constrained than this stack's bulk-reader approach.
-- **SingleStore** — row + columnar hybrid in a single engine, strong analytical performance on fresh data, strong concurrency story for BI. Commercial licensing, closed-source core.
-- **Snowflake Hybrid Tables / Unistore** — OLTP tables bolted onto an OLAP architecture. Good if you're already on Snowflake and want to reduce round-trips; the OLTP latency profile, concurrency model, and per-node scaling differ from a distributed-database-first approach.
-- **Postgres + Citus** — horizontal sharding of Postgres with good distributed-query support. Excellent if you have Postgres expertise already; strict-serializable distributed transactions across shards are bounded differently.
+- **CockroachDB, TiDB, YugabyteDB**: distributed SQL with strong relational semantics and varying consistency models. &emsp;Excellent fit for application workloads that need relational integrity; analytical throughput on the same cluster is typically more constrained than this stack's bulk-reader approach.
+- **SingleStore**: row + columnar hybrid in a single engine, strong analytical performance on fresh data, strong concurrency story for BI. &emsp;Commercial licensing, closed-source core.
+- **Snowflake Hybrid Tables / Unistore**: OLTP tables bolted onto an online analytical processing (OLAP) architecture. &emsp;Good if you're already on Snowflake and want to reduce round-trips; the OLTP latency profile, concurrency model, and per-node scaling differ from a distributed-database-first approach.
+- **Postgres + Citus**: horizontal sharding of Postgres with good distributed-query support. &emsp;Excellent if you have Postgres expertise already; strict-serializable distributed transactions across shards are bounded differently.
 
 **This stack's bet**: start with a distributed OLTP store that already scales horizontally for write-heavy workloads, add strict-serializable transactions via Accord, and read analytics directly from persisted storage via the bulk reader.
 
@@ -311,9 +333,9 @@ Loses on: relational feature richness (compared to distributed-SQL databases), m
 
 ### 6. Is this platform linearly scalable?
 
-For the documented workload shapes: point reads, bounded partition reads, and write ingest; yes, scaling is linear across documented cluster sizes. Cassandra's scaling story at this layer is well-established.
+Yes, for the documented workload shapes: point reads, bounded partition reads, and write ingest all scale linearly across documented cluster sizes. &emsp;Cassandra's scaling story at this layer is well-established.
 
-Token-range scans and cross-partition transactions have different scaling characteristics and are bounded by coordination overhead rather than node count. Wide-scan analytical throughput scales with disk I/O bandwidth per node times node count (which is why the per-node throughput number in the TCO doc matters more than the cluster total).
+Token-range scans and cross-partition transactions have different scaling characteristics and are bounded by coordination overhead rather than node count. &emsp;Wide-scan analytical throughput scales with disk I/O bandwidth per node times node count (which is why the per-node throughput number in the TCO doc matters more than the cluster total).
 
 See the [TCO worksheet](TCO-Comparisons.md) for specific workload/cluster-size examples.
 
@@ -321,7 +343,15 @@ See the [TCO worksheet](TCO-Comparisons.md) for specific workload/cluster-size e
 
 ## References
 
-- Accord / CEP-15 :: transactions, strict serializability, failure tolerance goals
-- CEP-28 :: Spark bulk reader/writer via Sidecar to persisted storage
-- Cassandra Analytics :: bulk reader/writer examples
-- SQL prototype repo :: Postgres wire protocol + Calcite-based dialect coverage
+- Accord / CEP-15: transactions, strict serializability, failure tolerance goals. &emsp;The goals list, the survey of prior work and the prototype's status are quoted from <https://cwiki.apache.org/confluence/display/CASSANDRA/CEP-15%3A+General+Purpose+Transactions>
+- CEP-28: Spark bulk reader/writer via Sidecar to persisted storage
+- Cassandra Analytics: bulk reader/writer examples
+- SQL prototype repo: Postgres wire protocol and Calcite-based dialect coverage
+
+Sources for section B's comparison, each quoted from the system's own documentation or paper:
+
+- FoundationDB: Zhou et al., "FoundationDB: A Distributed Unbundled Transactional Key Value Store", SIGMOD 2021, <https://www.foundationdb.org/files/fdb-paper.pdf>. &emsp;Strict serializability is section 2.4.2; the singleton Sequencer is 2.3.1; the 3.08 s median and 5.28 s 90th percentile over 289 traces, and the note that client reads were unaffected, are section 5.3; the single August 2020 recovery and the five-9s figure are section 5.1; the 10 KB key, 100 KB value and 10 MB transaction limits are section 2.2, and the 5 s multi-version window is section 6.4
+- Google Spanner: "TrueTime and external consistency", <https://cloud.google.com/spanner/docs/true-time-external-consistency>
+- CockroachDB: "Living Without Atomic Clocks", <https://www.cockroachlabs.com/blog/consistency-model/>, whose section headed "CockroachDB's consistency model: more than serializable, less than strict serializability" is the source of both the quotation and the causal-reverse anomaly
+- TiDB: "TiDB Transaction Isolation Levels", <https://docs.pingcap.com/tidb/stable/transaction-isolation-levels/>, and the Placement Driver's role in "TiDB Architecture", <https://docs.pingcap.com/tidb/stable/tidb-architecture/>
+- YugabyteDB: "Transaction isolation levels", <https://docs.yugabyte.com/preview/architecture/transactions/isolation-levels/>

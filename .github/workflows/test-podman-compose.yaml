@@ -157,6 +157,36 @@ jobs:
               sleep 10
             done
           '
+
+          echo -e "\n=== A window of events is addressable, and a bare time filter is not ==="
+          # events is partitioned by a 15-minute bucket and a shard so that a
+          # question about a period of time is a question about partitions.  Two
+          # structural assertions rather than timings, which would be flaky: naming
+          # the bucket and its shards must be a legal CQL read, and filtering on
+          # event_time must still be refused.  If the data model is ever flattened
+          # back, exactly one of these breaks.
+          BUCKET=$(podman exec cassandra cqlsh cassandra \
+            -e "SELECT event_bucket FROM demo.events LIMIT 1;" 2>/dev/null \
+            | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}' | head -1)
+          [ -n "$BUCKET" ] \
+            || { echo "::error::demo.events has no event_bucket, so it is not partitioned by time"; exit 1; }
+          # A bounded read rather than an aggregate.  count(*) over a whole window is
+          # 1.8M rows at the demo's default rate and times out at the coordinator,
+          # which is the point rather than a defect: the bucket makes the window
+          # addressable, it does not make CQL an analytical engine.  Asserting on the
+          # aggregate would also make this test depend on how full the window is.
+          SHARDS="0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15"
+          WINDOWED=$(podman exec cassandra cqlsh cassandra \
+            -e "SELECT event_id, entity_id FROM demo.events WHERE event_bucket = '$BUCKET' AND shard IN ($SHARDS) LIMIT 5;" 2>&1) \
+            || { echo "::error::a windowed read was refused; the partition key no longer covers time"; echo "$WINDOWED"; exit 1; }
+          echo "$WINDOWED" | grep -qE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" \
+            || { echo "::error::the windowed read returned no rows"; echo "$WINDOWED"; exit 1; }
+          echo "  window $BUCKET read by partition key, no ALLOW FILTERING needed"
+          podman exec cassandra cqlsh cassandra \
+            -e "SELECT count(*) FROM demo.events WHERE event_time > '2026-01-01 00:00:00+0000';" 2>&1 \
+            | grep -q 'ALLOW FILTERING' \
+            || { echo "::error::a bare event_time filter was accepted, so the contrast the demo draws is gone"; exit 1; }
+          echo "✓ A window is addressable by partition key; a bare event_time filter still is not"
         timeout-minutes: 12
 
       - name: Test Presto Queries

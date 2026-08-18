@@ -77,13 +77,28 @@ const FILTERS = ['all', 'flying', 'at risk'] as const
 type Filter = (typeof FILTERS)[number]
 
 function droneIcon(colour: string, grounded = false): Icon {
-  const size = grounded ? 20 : 30
+  const size = grounded ? 22 : 32
+  const opacity = grounded ? 0.5 : 1.0
+  const bodyFill = grounded ? 0.3 : 0.85
+  const rotorDash = grounded ? ' stroke-dasharray="2 2"' : ''
+  const sw = grounded ? '1.2' : '1.8'
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-         stroke="${colour}" stroke-width="${grounded ? 1.5 : 2.2}">
-      <circle cx="12" cy="12" r="${grounded ? 3 : 3.5}" fill="${colour}" fill-opacity="${grounded ? 0.35 : 0.9}"/>
-      <path d="M12 2v4M12 18v4M2 12h4M18 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"
-            ${grounded ? 'stroke-dasharray="3 2"' : ''}/>
+         stroke="${colour}" stroke-width="${sw}" opacity="${opacity}" stroke-linecap="round">
+      <!-- four arms from centre to rotor positions -->
+      <line x1="12" y1="12" x2="5" y2="5"/>
+      <line x1="12" y1="12" x2="19" y2="5"/>
+      <line x1="12" y1="12" x2="5" y2="19"/>
+      <line x1="12" y1="12" x2="19" y2="19"/>
+      <!-- four rotors -->
+      <circle cx="5" cy="5" r="3.5" fill="${colour}" fill-opacity="0.15"${rotorDash}/>
+      <circle cx="19" cy="5" r="3.5" fill="${colour}" fill-opacity="0.15"${rotorDash}/>
+      <circle cx="5" cy="19" r="3.5" fill="${colour}" fill-opacity="0.15"${rotorDash}/>
+      <circle cx="19" cy="19" r="3.5" fill="${colour}" fill-opacity="0.15"${rotorDash}/>
+      <!-- central body -->
+      <rect x="9.5" y="9.5" width="5" height="5" rx="1.2" fill="${colour}" fill-opacity="${bodyFill}"/>
+      <!-- front indicator (top edge) -->
+      <line x1="10.5" y1="9.5" x2="13.5" y2="9.5" stroke="${colour}" stroke-width="2.5"/>
     </svg>`
   return new Icon({
     iconUrl: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,

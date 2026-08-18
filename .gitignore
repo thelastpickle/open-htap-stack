@@ -26,3 +26,6 @@ venv/
 
 # Local compose override (see the file header)
 podman-compose.local.yml
+cassandra_debug.log
+backend.log
+settings-cache/

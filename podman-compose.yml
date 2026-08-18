@@ -65,7 +65,7 @@ services:
     ports:
       - "9042:9042"
       - "9043:9043"
-      - "7000:7000"
+      # Port 7000 (internode) not exposed to host — conflicts with macOS AirPlay Receiver
     volumes:
       - ./cassandra-data:/var/lib/cassandra
       - ./cassandra/sidecar.yaml:/config/sidecar.yaml:ro

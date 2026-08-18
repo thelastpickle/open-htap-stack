@@ -27,20 +27,37 @@ from cassandra.util import datetime_from_uuid1
 from kafka import KafkaConsumer
 
 
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
+def env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
 # How the raw event table is partitioned.  Both values are part of the data model
 # rather than tuning: change either one and existing rows keep the buckets and
-# shards they were written with, so the queries that name them stop matching.
+# shards they were written with, so queries naming the new ones stop matching the
+# old rows.  They come from the environment because the dashboard's backend has to
+# name the same buckets and shards when it queries, and compose sets both services
+# from one declaration so they cannot drift apart.
 #
 # Fifteen minutes is short enough that "recently" costs one or two partitions and
 # long enough that an hour is four of them.  Sixteen shards keeps a bucket at the
 # demo's default rate near 110k rows per partition, and is few enough that naming
 # every shard in a query stays readable.
-EVENT_BUCKET_MINUTES = 15
-EVENT_SHARDS = 16
+EVENT_BUCKET_MINUTES = env_int("EVENT_BUCKET_MINUTES", 15)
+EVENT_SHARDS = env_int("EVENT_SHARDS", 16)
 
 
 def event_bucket(event_time: datetime) -> str:
-    """The 15-minute window an event belongs to, as "YYYY-MM-DDTHH:MM" in UTC.
+    """The window an event belongs to, as "YYYY-MM-DDTHH:MM" in UTC.
 
     Text rather than a timestamp on purpose.  This value is written by hand into
     queries that four different engines have to parse, and a quoted string means
@@ -48,8 +65,11 @@ def event_bucket(event_time: datetime) -> str:
     not.  It also sorts lexicographically, so a range predicate still reads
     naturally on the paths that cannot prune on it.
     """
-    floored = event_time.astimezone(timezone.utc).replace(
-        minute=(event_time.minute // EVENT_BUCKET_MINUTES) * EVENT_BUCKET_MINUTES,
+    # Converted before the minute is read, not after: an offset like +05:30 would
+    # otherwise floor the UTC hour using a local minute.
+    utc = event_time.astimezone(timezone.utc)
+    floored = utc.replace(
+        minute=(utc.minute // EVENT_BUCKET_MINUTES) * EVENT_BUCKET_MINUTES,
         second=0,
         microsecond=0,
     )
@@ -69,20 +89,6 @@ def event_shard(event_id: uuid.UUID) -> int:
     field, and that is constant for a given host.
     """
     return zlib.crc32(event_id.bytes) % EVENT_SHARDS
-
-
-def env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except Exception:
-        return default
-
-
-def env_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except Exception:
-        return default
 
 
 def connect_cassandra(host: str, port: int):

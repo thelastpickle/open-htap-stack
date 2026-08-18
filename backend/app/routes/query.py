@@ -3,6 +3,7 @@ import asyncio
 import re
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -162,7 +163,7 @@ def _run(engine: str, sql: str, limit: int) -> EngineResult:
         row_count=len(rows),
         query_time_ms=elapsed_ms,
         # Only the bulk reader offers this, so it is asked for rather than required.
-        bytes_scanned=getattr(client, "last_bytes_scanned", None),
+        snapshot_bytes=getattr(client, "last_snapshot_bytes", None),
     )
 
 
@@ -646,6 +647,44 @@ def _render_hint(prompt: str) -> str:
     if any(w in prompt for w in ("trend", "history", "over time")):
         return "chart"
     return "table"
+
+
+# ──────────────────── Which window to ask about ────────────────────
+
+
+def _bucket_for(moment: datetime) -> str:
+    """The event bucket a moment falls in, spelled as the sink spells it.
+
+    The same arithmetic as event_bucket() in ingress/consumer/consumer.py, which is
+    the writer.  Two copies because they are separate services; the two values it
+    depends on come from one declaration in compose so they cannot disagree.
+    """
+    minutes = max(1, settings.event_bucket_minutes)
+    utc = moment.astimezone(timezone.utc)
+    floored = utc.replace(minute=(utc.minute // minutes) * minutes, second=0, microsecond=0)
+    return floored.strftime("%Y-%m-%dT%H:%M")
+
+
+@router.get("/window")
+def get_window() -> Dict[str, Any]:
+    """How events are bucketed, and which buckets are worth asking about.
+
+    The compare page builds its windowed query from this rather than from the
+    browser's clock: the buckets exist because the sink wrote them, so it is the
+    stack's own time and configuration that decide which ones to name.
+
+    ``last_complete`` is the useful one.  The current window is still filling, so
+    every path reads it at a different moment and they disagree about the totals; a
+    closed window cannot change, so the paths that can answer it agree exactly.
+    """
+    now = datetime.now(timezone.utc)
+    minutes = max(1, settings.event_bucket_minutes)
+    return {
+        "bucket_minutes": minutes,
+        "shards": settings.event_shards,
+        "current": _bucket_for(now),
+        "last_complete": _bucket_for(now - timedelta(minutes=minutes)),
+    }
 
 
 def engine_status() -> Dict[str, bool]:

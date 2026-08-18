@@ -363,7 +363,7 @@ jobs:
           # told from a slower one.
           bulk = engines.get("spark_bulk") or {}
           if "spark_bulk" in required and not bulk.get("error"):
-              if not bulk.get("bytes_scanned"):
+              if not bulk.get("snapshot_bytes"):
                   problems.append("spark_bulk answered without saying how many bytes it scanned")
           if not (baseline or {}).get("samples"):
               problems.append("no OLTP reference read before the run")
@@ -383,12 +383,15 @@ jobs:
               )
               answered = not result["error"] and result["row_count"]
               volume = ""
-              if result.get("bytes_scanned"):
-                  mb = result["bytes_scanned"] / 1e6
-                  # A rate below this much data describes the snapshot and the job
-                  # starting rather than the mechanism, so it is left off.
-                  rate = result["bytes_scanned"] / 1e3 / max(result["query_time_ms"], 1)
-                  volume = f" [scanned {mb:.1f} MB{f', {rate:.0f} MB/s' if mb >= 10 else ''}]"
+              if result.get("snapshot_bytes"):
+                  mb = result["snapshot_bytes"] / 1e6
+                  # The rate is a throughput only for a statement that read all of it:
+                  # one naming partitions reads only those.  And below ten megabytes it
+                  # describes the snapshot and the job starting rather than the read.
+                  scanned_all = "WHERE" not in (result.get("sql") or "").upper()
+                  rate = result["snapshot_bytes"] / 1e3 / max(result["query_time_ms"], 1)
+                  quote_rate = scanned_all and mb >= 10
+                  volume = f" [{mb:.1f} MB snapshot{f', {rate:.0f} MB/s' if quote_rate else ''}]"
               print(
                   f"  {name}: {result['query_time_ms']}ms, {result['row_count']} rows{volume}{cost}"
                   if answered
@@ -401,10 +404,12 @@ jobs:
                   f" over {combined['samples']} reads"
               )
           PY
-          # The three presets the dashboard offers, in the order it offers them: a
+          # The four presets the dashboard offers, in the order it offers them: a
           # bounded read every path can answer, the smallest grouped query CQL cannot
-          # express, and the same grouping over the whole event history.  The last one
-          # is minutes rather than seconds, which is why the dashboard makes it opt-in.
+          # express, that grouping bounded to one closed window, and the same over the
+          # whole event history.  The last is minutes rather than seconds, which is why
+          # the dashboard makes it opt-in.  The windowed one is built below rather than
+          # written here, because which window is complete changes as the clock moves.
           cat > "$TMP_DIR/benchmark-bounded.json" << 'JSON'
           {"sql": "SELECT entity_id, speed_mps, altitude_m FROM drone_latest_status LIMIT 5", "limit": 5}
           JSON
@@ -471,6 +476,58 @@ jobs:
           grep -q "PRIMARY KEY" "$TMP_DIR/fleet-group-result.json" \
             || { echo "::error::Cassandra was expected to decline the GROUP BY; it did not"; exit 1; }
           echo "✓ The analytical paths grouped the fleet, and Cassandra explained why it cannot"
+
+          echo -e "\n=== One closed window, bounded to the partitions holding it ==="
+          # The same grouping as the whole-history preset, restricted to one finished
+          # 15-minute window.  The backend says which window that is and how many
+          # shards it spans, because the sink wrote them and the clock has moved since
+          # this file was written.
+          curl -sf --max-time 30 http://localhost:8000/api/query/window > "$TMP_DIR/window.json" \
+            || { echo "::error::the backend could not say which event window to ask about"; exit 1; }
+          python3 -m json.tool < "$TMP_DIR/window.json"
+          python3 - "$TMP_DIR/window.json" > "$TMP_DIR/benchmark-window.json" << 'PY'
+          import json, sys
+          window = json.load(open(sys.argv[1]))
+          shards = ",".join(str(i) for i in range(window["shards"]))
+          sql = (
+              "SELECT event_type, count(*) AS event_count, min(temp_internal_c) AS coldest,"
+              " max(temp_internal_c) AS hottest FROM events"
+              f" WHERE event_bucket = '{window['last_complete']}' AND shard IN ({shards})"
+              " GROUP BY event_type ORDER BY event_type LIMIT 5"
+          )
+          print(json.dumps({"sql": sql, "limit": 5}))
+          PY
+          curl -s --max-time 900 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-window.json" \
+            > "$TMP_DIR/window-result.json"
+          python3 -m json.tool < "$TMP_DIR/window-result.json" | head -40
+          # Cassandra is not required to answer: the grouping is still by a non-key
+          # column, so it declines.  Bounding the question does not make it expressible,
+          # which is the distinction this preset draws.
+          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk \
+            < "$TMP_DIR/window-result.json"
+          python3 - "$TMP_DIR/window-result.json" << 'PY'
+          import json, sys
+          document = json.load(open(sys.argv[1]))
+          problems = []
+          # A finished window cannot change, so the paths that can read it must agree
+          # exactly.  This is the assertion the unbounded presets cannot make, and it
+          # is what a time-bucketed model buys.
+          totals = {}
+          for name in ("presto", "spark", "spark_bulk"):
+              result = document.get(name) or {}
+              if result.get("error") or not result.get("rows"):
+                  problems.append(f"{name} did not answer the windowed query: {result.get('error')}")
+                  continue
+              totals[name] = sum(row[1] for row in result["rows"])
+          if len(set(totals.values())) > 1:
+              problems.append(f"a closed window gave different totals per path: {totals}")
+          if problems:
+              print("::error::windowed comparison: " + "; ".join(problems))
+              sys.exit(1)
+          print(f"  every analytical path counted the same closed window identically: {sorted(set(totals.values()))[0]:,} events")
+          PY
+          echo "✓ One closed window, answered identically by every path that can express it"
 
           echo -e "\n=== Two paths only, and run all at once rather than one at a time ==="
           # The compare page offers both choices, so both are exercised here.  A

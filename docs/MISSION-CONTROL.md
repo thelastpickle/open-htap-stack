@@ -57,6 +57,37 @@ other, or one on its own as a reference. **How to run them**:
   than running the paths in turn, and expect a path starved long enough to give up rather than
   finish: that is the same contention, reported rather than hidden.
 
+A third control appears whenever the bulk reader is one of the paths. **Snapshot**: take a fresh one
+for the read, or re-read the one the last bulk query took.
+
+Taking a snapshot hardlinks every SSTable of the table, so it costs the same whether the query then
+reads all of it or one window — a fixed cost that a bounded read pays in full. Measured on this laptop:
+
+| | Total | Of which the snapshot |
+| --- | --- | --- |
+| Bounded read of the fleet, fresh | 0.84 s | 0.24 s |
+| Bounded read of the fleet, reusing | 0.35 s | 0.06 s |
+| One closed window, fresh | 4.07 s | 0.92 s |
+| One closed window, reusing | 3.04 s | 0.05 s |
+
+So it is a quarter of a bounded read, and a larger share the more files the table has — not most of the
+cost, but the part that does not shrink when the question does. What reuse spends is currency: the rows
+are as of when that snapshot was taken rather than now, so the bulk reader stops answering the same
+instant as the other three. That is why it is off by default, and why every bulk result says whether
+its snapshot was reused and how old it was.
+
+Reuse is refused, and a fresh snapshot taken, in three cases: nothing has been taken yet, what was
+taken has since gone, or too little of its TTL is left to survive the read. That last one matters
+because Cassandra expires a snapshot on time regardless of who is reading it, and a read that loses its
+snapshot half way through fails outright.
+
+It pairs particularly well with the window preset once that window has closed, and for a reason worth
+understanding. A finished window cannot change, so any snapshot taken *after* it closed holds all of
+it: measured, the three analytical paths still agreed to the row, on the same five group counts
+totalling 448,555 events, with the bulk reader reading a snapshot 63 seconds old. The staleness costs nothing there. A snapshot taken *during* the window being
+queried is a different matter: it holds only part of it, and then the bulk reader's total will be lower
+than the others'. The reported age is what tells the two cases apart.
+
 Each path holds its own connection, including the two Spark paths, which is what lets them genuinely
 overlap rather than queueing behind a shared HiveServer2 session.
 

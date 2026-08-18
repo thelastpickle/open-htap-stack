@@ -26,3 +26,7 @@ venv/
 
 # Local compose override (see the file header)
 podman-compose.local.yml
+
+# Where a CI step's helpers land when the workflow is run by hand rather than
+# on a runner, which has RUNNER_TEMP set (see the .claude/skills/ci-step skill)
+.ci-tmp/

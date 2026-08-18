@@ -1,18 +1,21 @@
 # Vendor-Neutral Open Source HTAP Data Platform
 
 _Proof of Concept that takes 4 minutes to demonstrate._
+
 An enterprise-grade Hybrid Transactional/Analytical Processing (HTAP) data platform, built from Apache-licensed components you already know.
 
-## Key characteristics
+Comes with a [web drone dashboard demo](docs/MISSION-CONTROL.md) of realtime data filtering and visualisation.
 
-- **Record of Truth** — one dataset, one governance surface, one schema; no ETL copies, no reconciliation debt
+** Key characteristics**
+
+- **Record of Truth** — one dataset, one store, one governance surface, one schema; no ETL copies, no reconciliation debt
 - **Strict-Serializable ACID transactions** via Accord (CEP-15) — the same isolation class Google Spanner offers
-- **OLTP store** with high concurrency and horizontal scaling; write p99 under 5ms and read p99 under 50ms
+- **OLTP** first capabilities: high concurrency and horizontal scaling; write p99 under 5ms and read p99 under 50ms
 - **Multiple SQL interfaces over the same data**:
   - SparkSQL and Presto for analytics
   - Postgres wire-protocol + dialect adapter for application SQL (PoC subset, via Apache Calcite)
-- **Resource isolation by construction** — OLAP reads via persisted-structure paths do not contend with the OLTP request path
-- **Native CDC to Kafka** via the Sidecar, with replication-factor-aware deduplication
+- **Resource isolation by construction** — OLAP reads via persisted-structure paths that do not contend with the OLTP request path
+- **Native CDC to Kafka** via the Sidecar, easy to plug into existing platforms, ecosystems, and migration paths
 - **Ecosystem integration**: Apache Kafka, Apache Spark, Presto, Apache Parquet, Apache Iceberg
 - **Freedom to operate** — Apache-licensed, deployable anywhere, no per-credit or per-DBU licensing
 - **80%+ Lower TCO** than OLTP + ETL + warehouse stacks — see the [TCO worksheet](docs/TCO-Comparisons.md)

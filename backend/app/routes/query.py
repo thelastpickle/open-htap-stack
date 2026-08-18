@@ -128,7 +128,7 @@ ENGINES = {
 }
 
 
-def _run(engine: str, sql: str, limit: int) -> EngineResult:
+def _run(engine: str, sql: str, limit: int, reuse_snapshot: bool = False) -> EngineResult:
     """Run one query on one engine, reporting failure in the result rather than
     raising, so a partial outage still renders."""
     client, dialect = ENGINES[engine]
@@ -140,10 +140,17 @@ def _run(engine: str, sql: str, limit: int) -> EngineResult:
     if not client.connected:
         return EngineResult(available=False, error="Engine not connected")
 
+    # Only the bulk reader has a snapshot to reuse, and it says so itself rather than
+    # this being keyed on its name.
+    options = (
+        {"reuse_snapshot": True}
+        if reuse_snapshot and getattr(client, "SUPPORTS_SNAPSHOT_REUSE", False)
+        else {}
+    )
     statement = dialect(sql, limit)
     start = time.perf_counter()
     try:
-        rows = client.execute_query(statement)
+        rows = client.execute_query(statement, **options)
         elapsed_ms = round((time.perf_counter() - start) * 1000, 1)
     except Exception as e:
         # Time the failure too.  A path refused in a millisecond because CQL cannot
@@ -162,8 +169,13 @@ def _run(engine: str, sql: str, limit: int) -> EngineResult:
         rows=[[r.get(c) for c in columns] for r in rows],
         row_count=len(rows),
         query_time_ms=elapsed_ms,
-        # Only the bulk reader offers this, so it is asked for rather than required.
+        # Only the bulk reader offers these, so they are asked for rather than
+        # required.  Reporting the snapshot's cost and age is what lets a viewer see
+        # what reuse saved and what it cost in currency.
         snapshot_bytes=getattr(client, "last_snapshot_bytes", None),
+        snapshot_ms=getattr(client, "last_snapshot_ms", None),
+        snapshot_reused=bool(getattr(client, "last_snapshot_reused", False)),
+        snapshot_age_s=getattr(client, "last_snapshot_age_s", None),
     )
 
 
@@ -172,7 +184,7 @@ def execute_sql(req: SQLQueryRequest) -> SQLQueryResult:
     """Run one SELECT on the chosen engine."""
     if req.engine not in ENGINES:
         raise HTTPException(status_code=400, detail=f"Unknown engine: {req.engine}")
-    result = _run(req.engine, _validate(req.sql), req.limit)
+    result = _run(req.engine, _validate(req.sql), req.limit, req.reuse_snapshot)
     if not result.available:
         raise HTTPException(status_code=503, detail=result.error or "Engine unavailable")
     if result.error:
@@ -293,7 +305,7 @@ def _requested_engines(names: Optional[List[str]]) -> List[str]:
 
 def _run_sequentially(
     engines: List[str], statement: str, limit: int, subject: Optional[str],
-    results: Dict[str, EngineResult],
+    results: Dict[str, EngineResult], reuse_snapshot: bool = False,
 ) -> None:
     """One path at a time, each probed on its own, filling ``results`` as it goes.
 
@@ -309,15 +321,16 @@ def _run_sequentially(
         if _cancel_requested.is_set():
             return
         if not subject:
-            results[engine] = _run(engine, statement, limit)
+            results[engine] = _run(engine, statement, limit, reuse_snapshot)
             continue
         with _OltpProbe(subject) as probe:
-            results[engine] = _run(engine, statement, limit)
+            results[engine] = _run(engine, statement, limit, reuse_snapshot)
         results[engine].oltp = probe.impact()
 
 
 def _run_together(
-    engines: List[str], statement: str, limit: int, results: Dict[str, EngineResult]
+    engines: List[str], statement: str, limit: int, results: Dict[str, EngineResult],
+    reuse_snapshot: bool = False,
 ) -> None:
     """Every path at once, contending on purpose.
 
@@ -333,7 +346,7 @@ def _run_together(
     for engine in engines:
         def leg(engine: str = engine) -> None:
             try:
-                results[engine] = _run(engine, statement, limit)
+                results[engine] = _run(engine, statement, limit, reuse_snapshot)
             except Exception as e:
                 # _run reports failure in its result rather than raising, so this
                 # is only reached if it fails outright.  Record it, because a
@@ -408,12 +421,12 @@ def run_benchmark(req: BenchmarkRequest) -> BenchmarkResponse:
         if req.mode == "parallel":
             if subject:
                 with _OltpProbe(subject) as probe:
-                    _run_together(engines, statement, req.limit, results)
+                    _run_together(engines, statement, req.limit, results, req.reuse_snapshot)
                 combined = probe.impact()
             else:
-                _run_together(engines, statement, req.limit, results)
+                _run_together(engines, statement, req.limit, results, req.reuse_snapshot)
         else:
-            _run_sequentially(engines, statement, req.limit, subject, results)
+            _run_sequentially(engines, statement, req.limit, subject, results, req.reuse_snapshot)
 
         return BenchmarkResponse(
             mode=req.mode,

@@ -529,6 +529,61 @@ jobs:
           PY
           echo "✓ One closed window, answered identically by every path that can express it"
 
+          echo -e "\n=== The bulk reader can re-read its last snapshot instead of taking one ==="
+          # Taking a snapshot hardlinks every SSTable, so it is a fixed cost per read
+          # that a bounded query pays in full.  Reuse skips it and answers as of that
+          # snapshot instead of now, so what is asserted here is the bookkeeping, not a
+          # timing: a fresh run must say it took one, and the run after it must say it
+          # reused one and how old that was.  Timings would depend on how many files
+          # the table happens to have.
+          python3 - "$TMP_DIR/benchmark-window.json" > "$TMP_DIR/snapshot-fresh.json" << 'PY'
+          import json, sys
+          body = json.load(open(sys.argv[1]))
+          body.update({"engines": ["spark_bulk"], "reuse_snapshot": False})
+          print(json.dumps(body))
+          PY
+          python3 - "$TMP_DIR/benchmark-window.json" > "$TMP_DIR/snapshot-reuse.json" << 'PY'
+          import json, sys
+          body = json.load(open(sys.argv[1]))
+          body.update({"engines": ["spark_bulk"], "reuse_snapshot": True})
+          print(json.dumps(body))
+          PY
+          curl -s --max-time 900 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/snapshot-fresh.json" \
+            > "$TMP_DIR/snapshot-fresh-result.json"
+          curl -s --max-time 900 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/snapshot-reuse.json" \
+            > "$TMP_DIR/snapshot-reuse-result.json"
+          python3 - "$TMP_DIR/snapshot-fresh-result.json" "$TMP_DIR/snapshot-reuse-result.json" << 'PY'
+          import json, sys
+          fresh = (json.load(open(sys.argv[1])).get("spark_bulk") or {})
+          reused = (json.load(open(sys.argv[2])).get("spark_bulk") or {})
+          problems = []
+          for label, result in (("fresh", fresh), ("reusing", reused)):
+              if result.get("error") or not result.get("row_count"):
+                  problems.append(f"the {label} run did not answer: {result.get('error')}")
+          if fresh.get("snapshot_reused"):
+              problems.append("a run asked for a fresh snapshot reported reusing one")
+          if not fresh.get("snapshot_ms"):
+              problems.append("taking a snapshot was not timed, so its cost cannot be seen")
+          if not reused.get("snapshot_reused"):
+              problems.append(
+                  "a run asked to reuse the snapshot took a new one instead"
+                  f" (age {reused.get('snapshot_age_s')})"
+              )
+          elif not (reused.get("snapshot_age_s") or 0) > 0:
+              problems.append("a reused snapshot reported no age, so its staleness is invisible")
+          if problems:
+              print("::error::snapshot reuse: " + "; ".join(problems))
+              sys.exit(1)
+          print(
+              f"  fresh: took the snapshot in {fresh['snapshot_ms']}ms."
+              f"  reusing: read one {reused['snapshot_age_s']}s old,"
+              f" preparing it in {reused.get('snapshot_ms')}ms"
+          )
+          PY
+          echo "✓ A snapshot can be re-read, and each result says whether it was and how old it is"
+
           echo -e "\n=== Two paths only, and run all at once rather than one at a time ==="
           # The compare page offers both choices, so both are exercised here.  A
           # subset must come back as a subset: the paths not asked for are absent

@@ -1,5 +1,5 @@
 /* HTAP Mission Control — dark theme design tokens. */
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700;800;900&family=Fira+Code:wght@400;500;600&display=swap');
 @import 'tailwindcss';
 
 /* Tailwind v4 reads its palette and fonts from here, so `bg-surface-container`
@@ -35,6 +35,7 @@
   --font-headline: 'Space Grotesk', sans-serif;
   --font-body: 'Inter', sans-serif;
   --font-label: 'Inter', sans-serif;
+  --font-code: 'Fira Code', 'Courier New', monospace;
 }
 
 html,
@@ -102,6 +103,101 @@ body {
   animation: fade-in 0.3s ease-out;
 }
 
+/* Staggered card entrance animation for KPI cards and panels */
+@keyframes stagger-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-stagger-in {
+  opacity: 0;
+  animation: stagger-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation-delay: var(--stagger-delay, 0ms);
+}
+
+/* Skeleton loading placeholders */
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 0.1; }
+  50% { opacity: 0.25; }
+}
+
+.skeleton {
+  background: var(--color-surface-container-high);
+  border-radius: 6px;
+  animation: skeleton-pulse 1.5s ease-in-out infinite;
+}
+
+/* Custom range input styling for the dark theme */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: var(--color-outline-variant);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid var(--color-background);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-primary) 40%, transparent);
+  cursor: pointer;
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+  box-shadow: 0 0 14px color-mix(in srgb, var(--color-primary) 60%, transparent);
+  transform: scale(1.15);
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  border: 2px solid var(--color-background);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-primary) 40%, transparent);
+  cursor: pointer;
+}
+
+input[type="range"]::-moz-range-track {
+  height: 6px;
+  background: var(--color-outline-variant);
+  border-radius: 3px;
+}
+
+/* Leaflet cluster override for dark theme */
+.marker-cluster-small,
+.marker-cluster-medium,
+.marker-cluster-large {
+  background: color-mix(in srgb, var(--color-primary) 20%, transparent) !important;
+  border-radius: 50% !important;
+}
+.marker-cluster-small div,
+.marker-cluster-medium div,
+.marker-cluster-large div {
+  background: color-mix(in srgb, var(--color-primary) 55%, var(--color-background)) !important;
+  color: var(--color-on-background) !important;
+  font-family: var(--font-headline) !important;
+  font-weight: 700 !important;
+  font-size: 12px !important;
+  border-radius: 50% !important;
+  box-shadow: 0 0 12px color-mix(in srgb, var(--color-primary) 30%, transparent);
+}
+
 /* Respect a reader who has asked for less motion: the dashboard's pulses and
    spinners are decoration, and the numbers they sit beside carry the meaning. */
 @media (prefers-reduced-motion: reduce) {
@@ -113,3 +209,4 @@ body {
     transition-duration: 0.01ms !important;
   }
 }
+

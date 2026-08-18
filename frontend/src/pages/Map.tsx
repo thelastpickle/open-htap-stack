@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { MapContainer, Marker, Polygon, Polyline, Popup, TileLayer, useMap } from 'react-leaflet'
+import MarkerClusterGroup from 'react-leaflet-cluster'
 import { Icon, type LatLngExpression, type LatLngTuple } from 'leaflet'
 import { useQuery } from '@tanstack/react-query'
 import MaterialIcon from '../components/MaterialIcon'
 import { getJson } from '../lib/api'
+import 'leaflet.markercluster/dist/MarkerCluster.css'
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
 
 interface DronePosition {
   entity_id: string
@@ -358,6 +361,13 @@ export default function MapPage() {
               />
             )}
 
+            <MarkerClusterGroup
+              chunkedLoading
+              maxClusterRadius={40}
+              spiderfyOnMaxZoom
+              showCoverageOnHover={false}
+              disableClusteringAtZoom={14}
+            >
             {visible.map((drone) => {
               if (!drone.latitude || !drone.longitude) return null
               const isSelected = selected === drone.entity_id
@@ -413,11 +423,12 @@ export default function MapPage() {
                 </Marker>
               )
             })}
+            </MarkerClusterGroup>
           </MapContainer>
         )}
       </div>
 
-      <div className="text-on-surface-variant mt-4 flex flex-wrap gap-6 text-xs font-bold uppercase tracking-wider">
+      <div className="glass-panel mt-4 flex flex-wrap gap-6 rounded-lg px-6 py-3 text-xs font-bold uppercase tracking-wider text-on-surface-variant">
         {[
           { colour: palette.flying, label: 'Flying' },
           { colour: palette.grounded, label: 'Grounded' },

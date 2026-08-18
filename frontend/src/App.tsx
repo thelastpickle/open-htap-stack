@@ -60,10 +60,10 @@ function Sidebar() {
             to={item.path}
             end={item.path === '/'}
             className={({ isActive }) =>
-              `flex items-center gap-4 px-4 py-3 transition-colors ${
+              `flex items-center gap-4 px-4 py-3 transition-all duration-200 ease-out ${
                 isActive
-                  ? 'border-l-4 border-primary bg-primary/10 text-primary'
-                  : 'text-on-surface-variant hover:bg-white/5 hover:text-on-surface'
+                  ? 'border-l-4 border-primary bg-primary/10 text-primary shadow-[inset_0_0_20px_rgba(153,247,255,0.05)]'
+                  : 'text-on-surface-variant hover:bg-white/5 hover:text-on-surface hover:translate-x-1'
               }`
             }
           >

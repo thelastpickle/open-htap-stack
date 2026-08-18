@@ -240,39 +240,47 @@ export default function OverviewPage() {
       </section>
 
       <section className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-4">
-        <KPICard
-          icon="database"
-          label="Ingestion rate"
-          value={formatCount(Math.round(kpis?.ingestion_rate_per_sec ?? 0))}
-          unit="events/sec"
-          note="measured"
-          progress={((kpis?.ingestion_rate_per_sec ?? 0) / RATE_SCALE_MAX) * 100}
-        />
-        <KPICard
-          icon="flight"
-          label="Airborne"
-          value={formatCount(kpis?.active_flying_drones)}
-          unit={`of ${formatCount(kpis?.total_drones)}`}
-          note={`${formatCount(kpis?.grounded_drones)} grounded`}
-          progress={flyingPercent}
-          colour="var(--color-primary)"
-        />
-        <KPICard
-          icon="gpp_maybe"
-          label="Zone exposure"
-          value={formatCount(threats)}
-          unit="assets"
-          note={threats > 0 ? 'action needed' : 'clear'}
-          progress={kpis?.total_drones ? (threats / kpis.total_drones) * 100 : 0}
-          colour={threats > 0 ? 'var(--color-tertiary)' : 'var(--color-positive)'}
-        />
-        <KPICard
-          icon="inventory_2"
-          label="Events stored"
-          value={formatCount(kpis?.total_events)}
-          unit="rows"
-          note="since reset"
-        />
+        <div className="animate-stagger-in" style={{ '--stagger-delay': '0ms' } as React.CSSProperties}>
+          <KPICard
+            icon="database"
+            label="Ingestion rate"
+            value={formatCount(Math.round(kpis?.ingestion_rate_per_sec ?? 0))}
+            unit="events/sec"
+            note="measured"
+            progress={((kpis?.ingestion_rate_per_sec ?? 0) / RATE_SCALE_MAX) * 100}
+          />
+        </div>
+        <div className="animate-stagger-in" style={{ '--stagger-delay': '60ms' } as React.CSSProperties}>
+          <KPICard
+            icon="flight"
+            label="Airborne"
+            value={formatCount(kpis?.active_flying_drones)}
+            unit={`of ${formatCount(kpis?.total_drones)}`}
+            note={`${formatCount(kpis?.grounded_drones)} grounded`}
+            progress={flyingPercent}
+            colour="var(--color-primary)"
+          />
+        </div>
+        <div className="animate-stagger-in" style={{ '--stagger-delay': '120ms' } as React.CSSProperties}>
+          <KPICard
+            icon="gpp_maybe"
+            label="Zone exposure"
+            value={formatCount(threats)}
+            unit="assets"
+            note={threats > 0 ? 'action needed' : 'clear'}
+            progress={kpis?.total_drones ? (threats / kpis.total_drones) * 100 : 0}
+            colour={threats > 0 ? 'var(--color-tertiary)' : 'var(--color-positive)'}
+          />
+        </div>
+        <div className="animate-stagger-in" style={{ '--stagger-delay': '180ms' } as React.CSSProperties}>
+          <KPICard
+            icon="inventory_2"
+            label="Events stored"
+            value={formatCount(kpis?.total_events)}
+            unit="rows"
+            note="since reset"
+          />
+        </div>
       </section>
 
       <section className="grid grid-cols-1 gap-8 lg:grid-cols-3">
@@ -302,30 +310,69 @@ export default function OverviewPage() {
               ))}
             </div>
           </div>
-          <div className="relative flex h-64 items-end justify-between gap-1 pl-10">
+          <div className="relative h-64 pl-10">
             <AxisLabels max={peakBucket} />
             {buckets.length === 0 ? (
-              <p className="text-on-surface-variant/60 w-full self-center text-center text-xs uppercase tracking-wider">
+              <p className="text-on-surface-variant/60 flex h-full items-center justify-center text-xs uppercase tracking-wider">
                 No ingestion counted yet
               </p>
             ) : (
-              buckets.map((bucket, index) => (
-                <div
-                  key={bucket.timestamp}
-                  className="bg-primary/20 hover:bg-primary group relative flex-1 rounded-sm transition-colors"
-                  style={{ height: `${Math.max((bucket.count / peakBucket) * 100, 1)}%` }}
-                  title={`${bucket.timestamp}: ${bucket.count.toLocaleString()} events`}
-                >
-                  <span className="text-primary absolute -top-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[10px] font-bold opacity-0 transition-opacity group-hover:opacity-100">
-                    {formatCount(bucket.count)}
+              <svg viewBox={`0 0 ${buckets.length} 100`} preserveAspectRatio="none" className="h-full w-full">
+                <defs>
+                  <linearGradient id="areaGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--color-primary)" stopOpacity="0.35" />
+                    <stop offset="100%" stopColor="var(--color-primary)" stopOpacity="0.02" />
+                  </linearGradient>
+                </defs>
+                {/* Area fill */}
+                <polygon
+                  points={`0,100 ${buckets.map((b, i) => `${i},${100 - (b.count / peakBucket) * 95}`).join(' ')} ${buckets.length - 1},100`}
+                  fill="url(#areaGrad)"
+                />
+                {/* Line */}
+                <polyline
+                  points={buckets.map((b, i) => `${i},${100 - (b.count / peakBucket) * 95}`).join(' ')}
+                  fill="none"
+                  stroke="var(--color-primary)"
+                  strokeWidth="0.8"
+                  vectorEffect="non-scaling-stroke"
+                  strokeLinejoin="round"
+                />
+                {/* Interactive hover bars (invisible but catch mouse events) */}
+                {buckets.map((bucket, i) => (
+                  <g key={bucket.timestamp}>
+                    <rect
+                      x={i}
+                      y={0}
+                      width={1}
+                      height={100}
+                      fill="transparent"
+                      className="cursor-crosshair"
+                    >
+                      <title>{`${bucket.time}: ${bucket.count.toLocaleString()} events`}</title>
+                    </rect>
+                    {/* Dot on hover */}
+                    <circle
+                      cx={i + 0.5}
+                      cy={100 - (bucket.count / peakBucket) * 95}
+                      r="1.5"
+                      fill="var(--color-primary)"
+                      className="opacity-0 hover:opacity-100 transition-opacity"
+                      style={{ pointerEvents: 'none' }}
+                    />
+                  </g>
+                ))}
+              </svg>
+            )}
+            {/* X-axis labels */}
+            {buckets.length > 0 && (
+              <div className="mt-2 flex justify-between">
+                {buckets.filter((_, i) => i % labelEvery === 0).map((bucket) => (
+                  <span key={bucket.timestamp} className="text-on-surface-variant/60 text-[9px] font-bold">
+                    {bucket.time}
                   </span>
-                  {index % labelEvery === 0 && (
-                    <span className="text-on-surface-variant/60 absolute -bottom-6 left-1/2 -translate-x-1/2 whitespace-nowrap text-[9px] font-bold">
-                      {bucket.time}
-                    </span>
-                  )}
-                </div>
-              ))
+                ))}
+              </div>
             )}
           </div>
         </div>

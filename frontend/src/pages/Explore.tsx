@@ -26,7 +26,7 @@ interface EngineResult extends QueryResult {
   error: string | null
   oltp?: OltpImpact | null
   /** Bulk reader only: the size of the snapshot it read, so growth is visible. */
-  bytes_scanned?: number | null
+  snapshot_bytes?: number | null
 }
 
 /** A path the request did not ask for is absent, so the keys are partial. */
@@ -111,12 +111,34 @@ const ENGINES: { key: Engine; label: string; role: string; colour: string }[] = 
 ]
 
 /**
- * Three queries of deliberately different size, because one query cannot show
+ * Which window to ask about, as the backend reports it.  Read from the stack rather
+ * than computed here, because the answer depends on the data: a bucket exists only
+ * because the sink wrote it, so the stack's clock, configuration and contents decide
+ * which one is worth naming.  `closed` is false when nothing has closed since ingest
+ * began and the window on offer is the one still filling — which changes what the
+ * comparison can claim, so the page says so.
+ */
+interface EventWindow {
+  bucket_minutes: number
+  shards: number
+  current: string
+  bucket: string
+  closed: boolean
+}
+
+/** `0,1,2,…,n-1`, the shards of one window, for an IN list. */
+function shardList(shards: number): string {
+  return Array.from({ length: Math.max(1, shards) }, (_, i) => i).join(',')
+}
+
+/**
+ * Four queries of deliberately different size, because one query cannot show
  * what four access paths are for, and because the size is most of the answer.
  * The bounded read is where the transactional path wins; grouping the fleet is
- * the smallest question CQL cannot express at all; the full history is the one
- * where reading SSTables directly pays off, and it is opt-in because on a
- * single node it is measured in minutes rather than seconds.
+ * the smallest question CQL cannot express at all; one window is the same grouping
+ * bounded to the partitions that hold it, which is what the data model is shaped
+ * for; and the full history is the one where reading SSTables directly pays off,
+ * opt-in because on a single node it is measured in minutes rather than seconds.
  */
 const COMPARE_PRESETS = [
   {
@@ -135,6 +157,23 @@ const COMPARE_PRESETS = [
       'SELECT event_type, count(*) AS assets,\n' +
       '       min(temp_internal_c) AS coldest, max(temp_internal_c) AS hottest\n' +
       'FROM drone_latest_status\n' +
+      'GROUP BY event_type\n' +
+      'ORDER BY event_type\n' +
+      'LIMIT 5',
+  },
+  {
+    key: 'window',
+    label: 'One window',
+    cost: 'seconds',
+    hint: 'The same grouping, bounded to the partitions holding one window — the question the data model was shaped for',
+    // Built rather than fixed: the window has to be a bucket the sink actually
+    // wrote, and which one that is changes every quarter of an hour.
+    build: (window: EventWindow) =>
+      'SELECT event_type, count(*) AS event_count,\n' +
+      '       min(temp_internal_c) AS coldest, max(temp_internal_c) AS hottest\n' +
+      'FROM events\n' +
+      "WHERE event_bucket = '" + window.bucket + "'\n" +
+      '  AND shard IN (' + shardList(window.shards) + ')\n' +
       'GROUP BY event_type\n' +
       'ORDER BY event_type\n' +
       'LIMIT 5',
@@ -229,6 +268,16 @@ const REFUSAL_MS = 1000
  * mechanism.  The volume is still worth showing; the rate is not.
  */
 const RATE_WORTH_QUOTING_BYTES = 10_000_000
+
+/**
+ * Whether a result's statement read everything available to it, judged by whether
+ * it restricts anything.  A statement naming partitions reads only those, so
+ * dividing the snapshot's size by its duration would describe a scan that never
+ * happened.
+ */
+function scannedItAll(result: EngineResult): boolean {
+  return !/\bWHERE\b/i.test(result.sql ?? '')
+}
 
 /**
  * The reference read is taken immediately before the run, which is not the same
@@ -368,19 +417,23 @@ function EngineCard({
               {formatMs(result.query_time_ms)}
             </p>
             <p className="text-on-surface-variant text-[9px]">{result.row_count} rows</p>
-            {/* Only the bulk reader can say what it read, because it reads files.
-                Worth the line: this preset's cost tracks a table that grows while
-                the demo runs, and without the volume a bigger scan is
+            {/* Only the bulk reader can say how much data was behind a read,
+                because only it reads files.  Worth the line: this table grows while
+                the demo runs, so without the volume a bigger read is
                 indistinguishable from a slower one. */}
-            {result.bytes_scanned != null && result.bytes_scanned > 0 && (
-              <p className="text-on-surface-variant mt-0.5 text-[9px] tabular-nums" title="Size of the snapshot this read streamed from the Sidecar, and the rate it managed">
-                {formatBytes(result.bytes_scanned)} scanned
-                {/* A rate is only worth quoting once the data outweighs the fixed
-                    cost of taking a snapshot and starting a job; on a small table
-                    those dominate and the figure would say nothing. */}
-                {result.bytes_scanned >= RATE_WORTH_QUOTING_BYTES &&
+            {result.snapshot_bytes != null && result.snapshot_bytes > 0 && (
+              <p
+                className="text-on-surface-variant mt-0.5 text-[9px] tabular-nums"
+                title="The snapshot this read was taken over. A statement that names partitions reads only those, so the rate is quoted only when the query scans the lot."
+              >
+                {formatBytes(result.snapshot_bytes)} snapshot
+                {/* The rate is a throughput only for a query that reads all of it,
+                    and only once the data outweighs the fixed cost of taking the
+                    snapshot and starting a job. */}
+                {scannedItAll(result) &&
+                  result.snapshot_bytes >= RATE_WORTH_QUOTING_BYTES &&
                   result.query_time_ms > 0 &&
-                  ` · ${Math.round(result.bytes_scanned / 1_000 / result.query_time_ms)} MB/s`}
+                  ` · ${Math.round(result.snapshot_bytes / 1_000 / result.query_time_ms)} MB/s`}
               </p>
             )}
           </div>
@@ -423,7 +476,15 @@ function EngineCard({
 
 function ComparePanel() {
   const [preset, setPreset] = useState<string>(COMPARE_PRESETS[0].key)
-  const [sql, setSql] = useState<string>(COMPARE_PRESETS[0].sql)
+  const [sql, setSql] = useState<string>(COMPARE_PRESETS[0].sql ?? DEFAULT_SQL)
+
+  // Which window can be named, refreshed often enough that the preset does not
+  // offer a bucket that has since stopped being the last complete one.
+  const { data: eventWindow } = useQuery<EventWindow>({
+    queryKey: ['event-window'],
+    queryFn: () => getJson<EventWindow>('/api/query/window'),
+    refetchInterval: 60000,
+  })
   const [chosen, setChosen] = useState<Engine[]>(ENGINES.map((engine) => engine.key))
   const [mode, setMode] = useState<RunMode>('sequential')
   const [error, setError] = useState<string | null>(null)
@@ -556,15 +617,25 @@ function ComparePanel() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-b border-white/5 px-6 py-3">
-          {COMPARE_PRESETS.map((option) => (
+          {COMPARE_PRESETS.map((option) => {
+            // A preset that names a window cannot be offered until the stack has
+            // said which window that is.
+            const statement = 'build' in option ? (eventWindow ? option.build(eventWindow) : null) : option.sql
+            return (
             <button
               key={option.key}
+              disabled={statement === null}
               onClick={() => {
+                if (statement === null) return
                 setPreset(option.key)
-                setSql(option.sql)
+                setSql(statement)
               }}
-              title={option.hint}
-              className={`rounded px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors ${
+              title={
+                statement === null
+                  ? 'Waiting for the stack to report which window is complete'
+                  : option.hint
+              }
+              className={`rounded px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
                 preset === option.key
                   ? 'bg-primary text-on-primary'
                   : 'bg-surface-container-highest text-on-surface-variant hover:text-primary'
@@ -573,9 +644,22 @@ function ComparePanel() {
               {option.label}
               <span className="ml-1.5 font-normal normal-case opacity-60">{option.cost}</span>
             </button>
-          ))}
+            )
+          })}
           <span className="text-on-surface-variant/60 ml-2 text-[10px]">
             {COMPARE_PRESETS.find((option) => option.key === preset)?.hint}
+            {preset === 'window' && eventWindow
+              ? ' · ' +
+                eventWindow.bucket +
+                ', ' +
+                eventWindow.bucket_minutes +
+                ' minutes over ' +
+                eventWindow.shards +
+                ' shards' +
+                (eventWindow.closed
+                  ? ' · closed, so the paths that can answer it must agree exactly'
+                  : ' · still filling, because none has closed since ingest began, so the totals will differ by whatever arrives in between')
+              : ''}
           </span>
         </div>
 
@@ -747,6 +831,19 @@ function ComparePanel() {
                 tells you what a path costs; all at once tells you what the paths cost each other,
                 which is the question worth asking of a stack that is meant to keep them apart.
                 Timings from the two modes are not comparable, so the mode is stated above them.
+              </p>
+              <p>
+                <strong className="font-bold">One window is the same question, bounded.</strong> Events
+                are partitioned by a 15-minute window and a shard, so naming the window names the
+                partitions that hold it: Cassandra reads them and needs no ALLOW FILTERING, Presto and
+                the connector push the predicate down, and the bulk reader turns it into a
+                partition-key lookup instead of a scan. Compare it against the whole history above and
+                the difference is the data model, not the engines. Cassandra still declines the
+                grouping, because a bounded question is not the same as an expressible one. And a
+                window that has closed cannot change, so the paths that can answer it agree on the
+                totals exactly, where the unbounded presets see the table grow underneath them — the
+                line above the statement says whether the window on offer has closed yet, since for
+                the first quarter of an hour after a wipe none has.
               </p>
               <p>
                 Run the whole history twice an hour apart and the second run is slower, because the

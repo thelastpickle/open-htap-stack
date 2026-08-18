@@ -338,7 +338,7 @@ class SparkBulkClient:
         return self._thrift.busy
 
     @property
-    def last_bytes_scanned(self) -> Optional[int]:
+    def last_snapshot_bytes(self) -> Optional[int]:
         """Bytes in the snapshot this thread's last read used, if it could be sized.
 
         The comparison reports this beside the duration.  A read of the whole
@@ -346,7 +346,7 @@ class SparkBulkClient:
         tens of megabytes a minute that is otherwise indistinguishable from
         something having gone wrong.
         """
-        return getattr(self._measured, "bytes_scanned", None)
+        return getattr(self._measured, "snapshot_bytes", None)
 
     def connect(self) -> None:
         self._thrift.connect()
@@ -356,7 +356,7 @@ class SparkBulkClient:
 
     def execute_query(self, sql: str) -> List[Dict[str, Any]]:
         """Snapshot what the statement reads, size it, then run it."""
-        self._measured.bytes_scanned = None
+        self._measured.snapshot_bytes = None
         with self._query_lock:
             total: Optional[int] = None
             for table in self._tables_in(sql):
@@ -364,7 +364,7 @@ class SparkBulkClient:
                 measured = sidecar.snapshot_bytes(table, snapshot)
                 if measured is not None:
                     total = (total or 0) + measured
-            self._measured.bytes_scanned = total
+            self._measured.snapshot_bytes = total
             return self._run_statement(sql)
 
     def _run_statement(self, sql: str) -> List[Dict[str, Any]]:

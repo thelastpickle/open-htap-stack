@@ -3,6 +3,7 @@ import asyncio
 import re
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -162,7 +163,7 @@ def _run(engine: str, sql: str, limit: int) -> EngineResult:
         row_count=len(rows),
         query_time_ms=elapsed_ms,
         # Only the bulk reader offers this, so it is asked for rather than required.
-        bytes_scanned=getattr(client, "last_bytes_scanned", None),
+        snapshot_bytes=getattr(client, "last_snapshot_bytes", None),
     )
 
 
@@ -646,6 +647,88 @@ def _render_hint(prompt: str) -> str:
     if any(w in prompt for w in ("trend", "history", "over time")):
         return "chart"
     return "table"
+
+
+# ──────────────────── Which window to ask about ────────────────────
+
+
+def _bucket_for(moment: datetime) -> str:
+    """The event bucket a moment falls in, spelled as the sink spells it.
+
+    The same arithmetic as event_bucket() in ingress/consumer/consumer.py, which is
+    the writer.  Two copies because they are separate services; the two values it
+    depends on come from one declaration in compose so they cannot disagree.
+    """
+    minutes = max(1, settings.event_bucket_minutes)
+    utc = moment.astimezone(timezone.utc)
+    floored = utc.replace(minute=(utc.minute // minutes) * minutes, second=0, microsecond=0)
+    return floored.strftime("%Y-%m-%dT%H:%M")
+
+
+# How far back to look for a window holding events.  Bounded because the search is
+# one read per window and the answer is wanted while a page loads; two hours is far
+# more than a demo that has been ingesting needs, and a demo that has not been
+# ingesting for two hours has nothing to show anyway.
+WINDOW_LOOKBACK = 8
+
+
+def _holds_events(bucket: str) -> bool:
+    """Whether any shard of this window has a row in it.
+
+    One read of the window's partitions, stopped at the first row, so the cost does
+    not depend on how full the window is.  The bucket is this process's own clock
+    formatted, never anything a caller sent, so interpolating it is safe.
+    """
+    shards = ",".join(str(i) for i in range(max(1, settings.event_shards)))
+    statement = (
+        f"SELECT event_bucket FROM events "
+        f"WHERE event_bucket = '{bucket}' AND shard IN ({shards}) LIMIT 1"
+    )
+    try:
+        return bool(cassandra_client.execute_query(statement))
+    except Exception as e:
+        # A window whose contents cannot be read is treated as empty, which makes the
+        # caller fall through to the one now filling rather than fail.
+        print(f"[api] could not check window {bucket} for events: {e}")
+        return False
+
+
+@router.get("/window")
+def get_window() -> Dict[str, Any]:
+    """Which window the compare page should ask about, and whether it is closed.
+
+    Built here rather than in the browser because the answer depends on the data:
+    the buckets exist only because the sink wrote them, so it is the stack's clock,
+    its configuration and its contents that decide which one is worth naming.
+
+    A closed window is the one to prefer, since it cannot change while the paths
+    read it and they therefore agree on the totals exactly.  But a demo minutes old
+    has no closed window that holds anything — the first quarter of an hour after a
+    wipe is all in the window still filling — so this walks back to the newest closed
+    window with events in it and falls back to the current one when there is none.
+    ``closed`` says which happened, because it is the difference between "these
+    totals must agree" and "they will differ by whatever arrived in between".
+    """
+    now = datetime.now(timezone.utc)
+    minutes = max(1, settings.event_bucket_minutes)
+    current = _bucket_for(now)
+    for step in range(1, WINDOW_LOOKBACK + 1):
+        candidate = _bucket_for(now - timedelta(minutes=minutes * step))
+        if _holds_events(candidate):
+            return {
+                "bucket_minutes": minutes,
+                "shards": settings.event_shards,
+                "current": current,
+                "bucket": candidate,
+                "closed": True,
+            }
+    return {
+        "bucket_minutes": minutes,
+        "shards": settings.event_shards,
+        "current": current,
+        "bucket": current,
+        "closed": False,
+    }
 
 
 def engine_status() -> Dict[str, bool]:

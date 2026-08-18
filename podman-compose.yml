@@ -252,6 +252,11 @@ services:
       KEYSPACE: "${DEMO_KEYSPACE:-demo}"
       TABLE: "${DEMO_TABLE:-events}"
       BATCH_SIZE: "${DEMO_BATCH_SIZE:-200}"
+      # How events are partitioned.  Declared once here because the dashboard's
+      # backend has to name the same buckets and shards when it queries them; the
+      # two reading different values would produce queries that match nothing.
+      EVENT_BUCKET_MINUTES: "${DEMO_EVENT_BUCKET_MINUTES:-15}"
+      EVENT_SHARDS: "${DEMO_EVENT_SHARDS:-16}"
     restart: unless-stopped
 
 
@@ -277,6 +282,10 @@ services:
       CASSANDRA_HOST: "cassandra"
       CASSANDRA_PORT: "9042"
       CASSANDRA_KEYSPACE: "${DEMO_KEYSPACE:-demo}"
+      # The same two values the sink writes with, so the window the compare page
+      # offers names partitions that exist.
+      EVENT_BUCKET_MINUTES: "${DEMO_EVENT_BUCKET_MINUTES:-15}"
+      EVENT_SHARDS: "${DEMO_EVENT_SHARDS:-16}"
       PRESTO_HOST: "presto"
       PRESTO_PORT: "8080"
       SPARK_THRIFT_HOST: "spark"

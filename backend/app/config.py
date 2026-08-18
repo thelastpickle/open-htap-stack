@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     # concerned.  Used to size the snapshot a bulk read is about to stream, so the
     # result can say how much data it went through.
     sidecar_port: int = 9043
+
+    # How demo.events is partitioned: a window of this many minutes, spread over
+    # this many shards.  The sink writes with these values and the compare page has
+    # to name them, so compose sets both services from one declaration.  Read here
+    # rather than inferred from the data, because inferring the shard count from
+    # what happens to be present would silently narrow a query.
+    event_bucket_minutes: int = 15
+    event_shards: int = 16
     # When the backend runs on the host rather than inside the compose network,
     # the driver discovers the node's broadcast address (172.20.0.10) and cannot
     # reach it.  Set this to 127.0.0.1 to rewrite every discovered address to the

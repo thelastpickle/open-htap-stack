@@ -79,7 +79,7 @@ The paths are not interchangeable, and that is the point:
 | **Spark SQL** | CQL request path, via spark-cassandra-connector | Full SQL in a Spark job. Per-partition work, and anything you want to hand to Spark afterwards. |
 | **Spark bulk reader** | SSTable files, via the Sidecar | Reads a coordinated snapshot straight off disk. Never enters the request path, so a scan here cannot contend with OLTP latency. |
 
-Three presets of deliberately different size, because one query cannot show what four paths are for,
+Four presets of deliberately different size, because one query cannot show what four paths are for,
 and because the size of the question is most of the answer:
 
 - **Latest state**, milliseconds — one bounded read of `drone_latest_status`. Cassandra answers in
@@ -87,8 +87,46 @@ and because the size of the question is most of the answer:
 - **Group the fleet**, under a second — `GROUP BY` over the current fleet only. This is the smallest
   question CQL cannot express, so it is the default way to show the refusal without anybody waiting:
   *"Group by is currently only supported on the columns of the PRIMARY KEY"*.
+- **One window**, seconds — the same grouping as the next preset, bounded to the partitions that hold
+  one 15-minute window. This is the data model doing its job, and the difference between it and the
+  whole history is the model rather than the engines.
 - **Every event ever ingested**, minutes — the same grouping over the whole history. Opt-in, because
   on one node it is minutes rather than seconds.
+
+Which window is asked about comes from the backend's `/api/query/window`, not from the page, because
+the answer depends on the data: a bucket exists only because the sink wrote it. It prefers a window
+that has **closed**, since a closed window cannot change while the paths read it, which is what makes
+the next paragraph possible. But a demo minutes old has no closed window holding anything — for the
+first quarter of an hour after a wipe every event is in the window still filling — so it walks back
+from the last complete window to the newest one with events in it, up to two hours, and falls back to
+the window now filling when there is none. The page says which it got, because that is the difference
+between "these totals must agree" and "they differ by whatever arrived in between".
+
+The same grouping bounded to one closed window against the whole history. Both presets return the five
+commonest event types, so their totals are the sum of those five groups rather than the whole window:
+the producer emits twenty types round-robin, and a 15-minute window holds about 1.8M events at the
+demo's ~2,000/s — measured, one closed window held 1,794,153.
+
+| Path | One closed window | Whole history |
+| --- | --- | --- |
+| Cassandra | declines the grouping | declines the grouping |
+| Presto | 3.1 s | 6.7 s |
+| Spark SQL, connector | 10.0 s | 7.2 s |
+| Spark bulk reader | 9.2 s | 23.6 s |
+
+**All three analytical paths returned the same five counts, to the row**, 448,610 events across them.
+That is the property a closed window buys and
+the unbounded presets cannot offer: they see the table grow underneath them and disagree by a few
+thousand rows, while a finished window is immutable and they agree to the row. CI asserts that
+equality whenever the window it was given had closed, and says so when it had not: a fresh stack is
+minutes old, so the assertion would otherwise be claiming that no event arrived mid-comparison, which
+is false by design.
+
+**The connector is slower with the bound, and the reason is worth knowing.** It prunes correctly —
+Spark reports it reading exactly the window's rows — but it plans a partition-key query as a *single*
+task, where the unbounded scan splits into seventeen. So a third of the data is read by one core while
+four sit idle. Pruning and parallelism are not the same thing, and this is the path where they pull
+against each other; bounding the question on the other three makes them two to three times faster.
 
 One measured run of the last preset, one path at a time, over 36.4M events on a seven-core laptop
 with the ingest running, gives the shape of it:
@@ -246,9 +284,13 @@ read p50 3.5 ms and p95 9.8 ms.
 
 Growth is easy to mistake for decay, and after wiping the data it is dramatic: the table refills from
 nothing, so it doubles, then triples, and each read of it costs proportionally more. So every bulk
-result carries the size of the snapshot it streamed and the rate that implies. It is the only path that
-can say — the other three read through Cassandra and see rows, not files — and it is the figure that
-separates "this scan was bigger" from "this scan was slower".
+result carries the size of the snapshot it was taken over. It is the only path that can say — the other
+three read through Cassandra and see rows, not files — and it is the figure that separates "this read
+was bigger" from "this read was slower".
+
+The rate it implies is quoted only when the statement scanned all of it. A statement naming partitions,
+as the windowed preset does, reads only those, so dividing the snapshot's size by the duration would
+describe a scan that never happened.
 
 Measured on a table refilling after a wipe, one preset, four data points: 34.5 s over 1.5 GB, 45.3 s
 over 2.3 GB, 33.7 s over 2.8 GB, then four consecutive reads at 3.0 GB of 31.9, 33.0, 28.7 and 28.7 s.

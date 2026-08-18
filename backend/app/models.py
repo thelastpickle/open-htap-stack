@@ -191,12 +191,16 @@ class EngineResult(SQLQueryResult):
     # distinguishes from a query that reached it and failed.
     available: bool = True
     error: Optional[str] = None
-    # How much data the path went through, where it can say.  Only the bulk reader
-    # can: it streams SSTable files, so the size of the snapshot it took is exactly
-    # what it read.  Reported because a scan of the whole history is slow for the
-    # honest reason that it is large, and a demo table that grows by tens of
-    # megabytes a minute otherwise looks like something degrading.
-    bytes_scanned: Optional[int] = None
+    # The size of the snapshot a bulk read was taken over, which only the bulk
+    # reader can report because only it reads files.  Reported because a scan of the
+    # whole history is slow for the honest reason that it is large, and a demo table
+    # that grows by tens of megabytes a minute otherwise looks like something
+    # degrading.
+    #
+    # It is the volume the read had available, not always the volume it consumed: a
+    # statement that names partitions reads only those, so the rate this implies is
+    # only a throughput for a query that scans the lot.
+    snapshot_bytes: Optional[int] = None
     # Absent unless the result came from the comparison endpoint, which is the
     # only caller that probes the OLTP path while a query runs.
     oltp: Optional[OltpImpact] = None

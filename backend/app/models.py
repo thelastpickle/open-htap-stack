@@ -142,10 +142,25 @@ class AlertsResponse(BaseModel):
 # ──────────────────────── Query ────────────────────────
 
 
+# Whether the bulk reader may read the snapshot the last query took instead of
+# taking another.  Taking one is a hardlink pass over every SSTable, so it is a fixed
+# cost per read that a bounded query pays in full; reusing skips it, and answers as
+# of when that snapshot was taken rather than now.  Off by default, because "the same
+# rows at the same moment" is the claim the comparison exists to make.
+_REUSE_SNAPSHOT_FIELD = Field(
+    default=False,
+    description=(
+        "Let the bulk reader re-read its last snapshot rather than take a new one. "
+        "Faster, but the rows are as of that snapshot; the response says how old it was."
+    ),
+)
+
+
 class SQLQueryRequest(BaseModel):
     sql: str
     limit: int = Field(default=10, ge=1, le=1000)
     engine: str = "cassandra"
+    reuse_snapshot: bool = _REUSE_SNAPSHOT_FIELD
 
 
 class SQLQueryResult(BaseModel):
@@ -169,6 +184,7 @@ class BenchmarkRequest(BaseModel):
     # the figures show what that costs.  Both are legitimate; they answer
     # different questions, and the response says which was asked.
     mode: Literal["sequential", "parallel"] = "sequential"
+    reuse_snapshot: bool = _REUSE_SNAPSHOT_FIELD
 
 
 class OltpImpact(BaseModel):
@@ -201,6 +217,13 @@ class EngineResult(SQLQueryResult):
     # statement that names partitions reads only those, so the rate this implies is
     # only a throughput for a query that scans the lot.
     snapshot_bytes: Optional[int] = None
+    # What preparing that snapshot cost, and how current it was.  Taking one is a
+    # hardlink pass over every SSTable, so it costs the same however small the query
+    # is; these three say what that came to, whether an older snapshot was read
+    # instead, and how old the answer therefore is.
+    snapshot_ms: Optional[float] = None
+    snapshot_reused: bool = False
+    snapshot_age_s: Optional[float] = None
     # Absent unless the result came from the comparison endpoint, which is the
     # only caller that probes the OLTP path while a query runs.
     oltp: Optional[OltpImpact] = None

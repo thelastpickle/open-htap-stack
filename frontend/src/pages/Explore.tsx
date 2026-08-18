@@ -27,6 +27,12 @@ interface EngineResult extends QueryResult {
   oltp?: OltpImpact | null
   /** Bulk reader only: the size of the snapshot it read, so growth is visible. */
   snapshot_bytes?: number | null
+  /** Bulk reader only: what preparing that snapshot cost, in milliseconds. */
+  snapshot_ms?: number | null
+  /** Bulk reader only: whether it re-read the last snapshot instead of taking one. */
+  snapshot_reused?: boolean
+  /** Bulk reader only: the snapshot's age, which is the age of these rows. */
+  snapshot_age_s?: number | null
 }
 
 /** A path the request did not ask for is absent, so the keys are partial. */
@@ -422,19 +428,35 @@ function EngineCard({
                 the demo runs, so without the volume a bigger read is
                 indistinguishable from a slower one. */}
             {result.snapshot_bytes != null && result.snapshot_bytes > 0 && (
-              <p
-                className="text-on-surface-variant mt-0.5 text-[9px] tabular-nums"
-                title="The snapshot this read was taken over. A statement that names partitions reads only those, so the rate is quoted only when the query scans the lot."
-              >
-                {formatBytes(result.snapshot_bytes)} snapshot
-                {/* The rate is a throughput only for a query that reads all of it,
-                    and only once the data outweighs the fixed cost of taking the
-                    snapshot and starting a job. */}
-                {scannedItAll(result) &&
-                  result.snapshot_bytes >= RATE_WORTH_QUOTING_BYTES &&
-                  result.query_time_ms > 0 &&
-                  ` · ${Math.round(result.snapshot_bytes / 1_000 / result.query_time_ms)} MB/s`}
-              </p>
+              <>
+                <p
+                  className="text-on-surface-variant mt-0.5 text-[9px] tabular-nums"
+                  title="The snapshot this read was taken over. A statement that names partitions reads only those, so the rate is quoted only when the query scans the lot."
+                >
+                  {formatBytes(result.snapshot_bytes)} snapshot
+                  {/* The rate is a throughput only for a query that reads all of it,
+                      and only once the data outweighs the fixed cost of taking the
+                      snapshot and starting a job. */}
+                  {scannedItAll(result) &&
+                    result.snapshot_bytes >= RATE_WORTH_QUOTING_BYTES &&
+                    result.query_time_ms > 0 &&
+                    ` · ${Math.round(result.snapshot_bytes / 1_000 / result.query_time_ms)} MB/s`}
+                </p>
+                {/* What the snapshot cost, and how current it leaves the answer.  A
+                    reused one is the whole point of the control: its age is the age
+                    of these rows, while the other paths answered as of now. */}
+                <p
+                  className={`mt-0.5 text-[9px] tabular-nums ${
+                    result.snapshot_reused ? 'text-secondary' : 'text-on-surface-variant/70'
+                  }`}
+                >
+                  {result.snapshot_reused
+                    ? `reused · ${formatMs((result.snapshot_age_s ?? 0) * 1000)} old`
+                    : result.snapshot_ms != null
+                      ? `taken in ${formatMs(result.snapshot_ms)}`
+                      : ''}
+                </p>
+              </>
             )}
           </div>
         )}
@@ -487,6 +509,9 @@ function ComparePanel() {
   })
   const [chosen, setChosen] = useState<Engine[]>(ENGINES.map((engine) => engine.key))
   const [mode, setMode] = useState<RunMode>('sequential')
+  // Off by default: taking a snapshot per read is what makes "the same rows at the
+  // same moment" true, and that is the claim the comparison exists to make.
+  const [reuseSnapshot, setReuseSnapshot] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<BenchmarkResponse | null>(null)
 
@@ -497,6 +522,7 @@ function ComparePanel() {
         limit: 10,
         engines: chosen,
         mode,
+        reuse_snapshot: reuseSnapshot,
       }),
     onSuccess: (data) => {
       setResults(data)
@@ -614,6 +640,43 @@ function ComparePanel() {
                 : 'Each path timed alone, so a figure is that path and nothing else'}
             </span>
           </div>
+
+          {/* Only the bulk reader takes a snapshot, so the control is only shown
+              when it is one of the paths being compared. */}
+          {chosen.includes('spark_bulk') && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-on-surface-variant text-[9px] font-bold uppercase tracking-wider">
+                Snapshot
+              </span>
+              {[
+                { reuse: false, label: 'Fresh each run' },
+                { reuse: true, label: 'Reuse the last' },
+              ].map((option) => (
+                <button
+                  key={String(option.reuse)}
+                  onClick={() => setReuseSnapshot(option.reuse)}
+                  aria-pressed={reuseSnapshot === option.reuse}
+                  title={
+                    option.reuse
+                      ? 'Read the snapshot the last bulk query took, skipping the hardlink pass over every SSTable. Faster, but the rows are as of that snapshot.'
+                      : 'Take a coordinated snapshot for this read, so the bulk reader answers as of now like the other paths'
+                  }
+                  className={`cursor-pointer rounded px-3 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                    reuseSnapshot === option.reuse
+                      ? 'bg-primary text-on-primary'
+                      : 'bg-surface-container-highest text-on-surface-variant hover:text-primary'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+              <span className="text-on-surface-variant/60 text-[10px]">
+                {reuseSnapshot
+                  ? 'Skips a fixed cost the bulk reader pays per read, and answers as of that snapshot rather than now'
+                  : 'The bulk reader answers as of this moment, like the other three'}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2 border-b border-white/5 px-6 py-3">
@@ -831,6 +894,18 @@ function ComparePanel() {
                 tells you what a path costs; all at once tells you what the paths cost each other,
                 which is the question worth asking of a stack that is meant to keep them apart.
                 Timings from the two modes are not comparable, so the mode is stated above them.
+              </p>
+              <p>
+                <strong className="font-bold">A snapshot is a fixed cost per bulk read.</strong>{' '}
+                Taking one hardlinks every SSTable of the table, so it costs the same whether the query
+                then reads all of it or one window — measured here, a quarter of a bounded read's total,
+                and a larger share the more files the table has. Reusing the last one skips it: 0.84 s
+                to 0.35 s on the bounded read above, 4.07 s to 3.04 s on one window. What it costs is
+                currency. The rows are then as of when that snapshot was taken, not now, so the bulk
+                reader is no longer answering the same instant as the other three — which is why it is
+                off by default and why each result says whether its snapshot was reused and how old it
+                was. A snapshot too near the end of its life to survive the read is refused and a fresh
+                one taken, because Cassandra expires it on time regardless of who is reading.
               </p>
               <p>
                 <strong className="font-bold">One window is the same question, bounded.</strong> Events

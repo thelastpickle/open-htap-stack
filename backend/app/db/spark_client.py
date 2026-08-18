@@ -26,7 +26,7 @@ import re
 import socket as stdlib_socket
 import threading
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from thrift.transport import TSocket, TTransport
 from thrift.transport.TTransport import TTransportException
@@ -317,6 +317,22 @@ class SparkBulkClient:
     CLEAR_SNAPSHOT_STRATEGY = f"OnCompletionOrTTL {SNAPSHOT_TTL_MINUTES}m"
     NUM_CORES = 4
 
+    # Taking a snapshot is a hardlink pass over every SSTable of the table, so it
+    # costs the same whether the read that follows is large or small.  On a bounded
+    # read that fixed cost is a serious fraction of the total, so a caller can ask
+    # to read the snapshot the last query took instead of taking another.
+    SUPPORTS_SNAPSHOT_REUSE = True
+
+    # A reused snapshot must outlive the read that reuses it: Cassandra expires it on
+    # the TTL it was created with, whatever is still reading, and losing it mid-read
+    # fails the read outright.  So a snapshot is only reused while it has more life
+    # left than the longest a read may take.
+    REUSE_SAFETY_MARGIN_S = settings.spark_query_timeout_s
+
+    # The clock is in the snapshot's name, which is how its age is known without
+    # asking Cassandra.
+    _SNAPSHOT_STAMP_RE = re.compile(r"_(\d{10,})_(\d+)$")
+
     def __init__(self, thrift: SparkThriftClient):
         self._thrift = thrift
         # Registering the view and running the statement have to be one operation.
@@ -324,9 +340,13 @@ class SparkBulkClient:
         # would have the second replace the first's view — and with it the snapshot
         # the first was about to read — between its registration and its SELECT.
         self._query_lock = threading.Lock()
-        # How much the last read on *this thread* went through.  Thread-local
-        # because each path of a parallel comparison is its own thread, and the
-        # figure belongs to whichever query the caller just ran, not to the client.
+        # The last snapshot taken per table, so a later query can be asked to read
+        # it again.  Held per client rather than per thread: the point of reuse is
+        # that a snapshot outlives the query that took it.
+        self._last_snapshot: Dict[str, str] = {}
+        # What the last read on *this thread* cost and read.  Thread-local because
+        # each path of a parallel comparison is its own thread, and the figures
+        # belong to whichever query the caller just ran, not to the client.
         self._measured = threading.local()
 
     @property
@@ -348,23 +368,71 @@ class SparkBulkClient:
         """
         return getattr(self._measured, "snapshot_bytes", None)
 
+    @property
+    def last_snapshot_ms(self) -> Optional[float]:
+        """What preparing the snapshot cost this thread's last read.
+
+        Reported so the case for reusing one is measured rather than assumed: this
+        is the part of a bulk read that does not depend on how much the query goes
+        on to read.
+        """
+        return getattr(self._measured, "snapshot_ms", None)
+
+    @property
+    def last_snapshot_reused(self) -> bool:
+        return bool(getattr(self._measured, "snapshot_reused", False))
+
+    @property
+    def last_snapshot_age_s(self) -> Optional[float]:
+        """How old the snapshot was when this thread's last read used it.
+
+        A fresh snapshot is seconds old and this says so; a reused one may be
+        minutes old, and then it is the answer's age as well as the snapshot's.
+        """
+        return getattr(self._measured, "snapshot_age_s", None)
+
     def connect(self) -> None:
         self._thrift.connect()
 
     def abort(self) -> bool:
         return self._thrift.abort()
 
-    def execute_query(self, sql: str) -> List[Dict[str, Any]]:
-        """Snapshot what the statement reads, size it, then run it."""
+    def execute_query(self, sql: str, reuse_snapshot: bool = False) -> List[Dict[str, Any]]:
+        """Prepare a snapshot of what the statement reads, size it, then run it.
+
+        ``reuse_snapshot`` reads the snapshot the last query took rather than taking
+        another, which skips the hardlink pass at the cost of answering as of when
+        that snapshot was taken.  It falls back to a fresh one whenever reuse would
+        be wrong: nothing taken yet, the snapshot has since gone, or too little of
+        its TTL is left to survive this read.
+        """
         self._measured.snapshot_bytes = None
+        self._measured.snapshot_ms = None
+        self._measured.snapshot_reused = False
+        self._measured.snapshot_age_s = None
         with self._query_lock:
             total: Optional[int] = None
+            prepare_ms = 0.0
+            reused: List[bool] = []
+            ages: List[float] = []
             for table in self._tables_in(sql):
-                snapshot = self._register_bulk_view(table)
+                started = time.perf_counter()
+                snapshot, was_reused = self._register_bulk_view(table, reuse_snapshot)
+                prepare_ms += (time.perf_counter() - started) * 1000
+                reused.append(was_reused)
+                age = self._age_of(snapshot)
+                if age is not None:
+                    ages.append(age)
                 measured = sidecar.snapshot_bytes(table, snapshot)
                 if measured is not None:
                     total = (total or 0) + measured
             self._measured.snapshot_bytes = total
+            self._measured.snapshot_ms = round(prepare_ms, 1)
+            # Reused only if every table's snapshot was, since a statement reading
+            # two tables where one had to be re-taken paid the cost anyway.
+            self._measured.snapshot_reused = bool(reused) and all(reused)
+            # The oldest, because that is the age of the least current thing read.
+            self._measured.snapshot_age_s = round(max(ages), 1) if ages else None
             return self._run_statement(sql)
 
     def _run_statement(self, sql: str) -> List[Dict[str, Any]]:
@@ -396,14 +464,60 @@ class SparkBulkClient:
         lowered = sql.lower()
         return [t for t in REGISTERED_TABLES if f"{BULK_VIEW_PREFIX}{t}" in lowered]
 
-    def _register_bulk_view(self, table: str) -> str:
-        """Re-create the view, which takes the snapshot it will read.
+    def _age_of(self, snapshot: str) -> Optional[float]:
+        """How long ago this snapshot was taken, from the clock in its name."""
+        match = self._SNAPSHOT_STAMP_RE.search(snapshot)
+        if not match:
+            return None
+        return max(0.0, time.time() - int(match.group(1)))
 
-        Returns the snapshot's name, so the caller can ask the Sidecar how big it
-        is.  Names carry the clock as well as a counter, so a restarted backend
-        cannot ask for a name that an earlier run took and has not yet released.
+    def _reusable(self, table: str) -> Optional[str]:
+        """The last snapshot of this table, if reading it again would be sound.
+
+        Three ways it would not be.  Nothing has been taken yet.  What was taken has
+        since gone, which the Sidecar answers by failing to list it — Cassandra
+        expires these on a TTL and an operator can clear them by hand.  Or too little
+        of that TTL is left: Cassandra removes a snapshot when its time is up
+        regardless of who is reading, and a read that loses its snapshot half way
+        through fails with "Required 1 replicas but only 0 responded", so a snapshot
+        with less life left than a read may take is no use.
         """
-        snapshot = f"htap_dashboard_{table}_{int(time.time())}_{next(_bulk_snapshot_counter)}"
+        snapshot = self._last_snapshot.get(table)
+        if not snapshot:
+            return None
+        age = self._age_of(snapshot)
+        if age is None:
+            return None
+        remaining = self.SNAPSHOT_TTL_MINUTES * 60 - age
+        if remaining <= self.REUSE_SAFETY_MARGIN_S:
+            print(
+                f"[db] snapshot {snapshot} has {int(remaining)}s of its TTL left, "
+                "which is too little to read under; taking a fresh one"
+            )
+            return None
+        if sidecar.snapshot_bytes(table, snapshot) is None:
+            print(f"[db] snapshot {snapshot} is gone; taking a fresh one")
+            return None
+        return snapshot
+
+    def _register_bulk_view(self, table: str, reuse: bool = False) -> Tuple[str, bool]:
+        """Point the view at a snapshot, taking one unless an old one will serve.
+
+        Returns the snapshot's name and whether it was reused, so the caller can
+        report both what was read and how current it is.  Names carry the clock as
+        well as a counter, so a restarted backend cannot ask for a name an earlier
+        run took and has not yet released — and the clock is what later tells the
+        snapshot's age.
+        """
+        existing = self._reusable(table) if reuse else None
+        snapshot = existing or (
+            f"htap_dashboard_{table}_{int(time.time())}_{next(_bulk_snapshot_counter)}"
+        )
+        # Nothing to create and nothing to clear when reusing: the snapshot already
+        # carries the TTL it was created with, and Cassandra enforces that whatever
+        # this reader says about it.
+        create = "false" if existing else "true"
+        strategy = "NoOp" if existing else self.CLEAR_SNAPSHOT_STRATEGY
         ddl = (
             f"CREATE OR REPLACE TEMP VIEW {BULK_VIEW_PREFIX}{table} "
             "USING org.apache.cassandra.spark.sparksql.CassandraDataSource "
@@ -412,14 +526,15 @@ class SparkBulkClient:
             f"  keyspace '{settings.cassandra_keyspace}',"
             f"  table '{table}',"
             f"  DC '{settings.cassandra_datacenter}',"
-            "  createSnapshot 'true',"
+            f"  createSnapshot '{create}',"
             f"  snapshotName '{snapshot}',"
-            f"  clearSnapshotStrategy '{self.CLEAR_SNAPSHOT_STRATEGY}',"
+            f"  clearSnapshotStrategy '{strategy}',"
             f"  numCores '{self.NUM_CORES}'"
             ")"
         )
         self._thrift.execute_ddl(ddl)
-        return snapshot
+        self._last_snapshot[table] = snapshot
+        return snapshot, existing is not None
 
 
 spark_client = SparkThriftClient(name="connector")

@@ -38,9 +38,6 @@ Everything runs under podman-compose. `compose.yml` is a symlink to `podman-comp
 # whole stack (needs a podman machine with >12 GB)
 podman compose -f podman-compose.yml up -d
 
-# on macOS, ControlCenter holds port 7000; add the untracked local override
-podman compose -f podman-compose.yml -f podman-compose.local.yml up -d
-
 # rebuild and restart one service after a code change
 podman compose -f podman-compose.yml build backend frontend
 podman compose -f podman-compose.yml up -d --no-deps backend frontend

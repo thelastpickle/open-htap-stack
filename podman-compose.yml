@@ -65,7 +65,9 @@ services:
     ports:
       - "9042:9042"
       - "9043:9043"
-      - "7000:7000"
+      # Internode gossip, 7000, is deliberately not published; nothing outside
+      # this network needs it on a single-node stack, and on macOS the port is
+      # already held by ControlCenter (AirPlay Receiver).
     volumes:
       - ./cassandra-data:/var/lib/cassandra
       - ./cassandra/sidecar.yaml:/config/sidecar.yaml:ro

@@ -17,11 +17,7 @@ Eight containers: `cassandra`, `kafka`, `presto`, `spark`, `backend`, `frontend`
 podman compose -f podman-compose.yml up -d
 ```
 
-The podman machine needs more than 12 GB; Cassandra, Presto and Spark each want a JVM heap.  On macOS, ControlCenter holds port 7000, so add the untracked local override that drops the mapping:
-
-```bash
-podman compose -f podman-compose.yml -f podman-compose.local.yml up -d
-```
+The podman machine needs more than 12 GB; Cassandra, Presto and Spark each want a JVM heap.  No host port conflicts with macOS ControlCenter any more: internode gossip, 7000, is no longer published, so the untracked `podman-compose.local.yml` override that used to drop that mapping is not needed.
 
 ## Getting a change into a running service
 

@@ -6,7 +6,7 @@ An enterprise-grade Hybrid Transactional/Analytical Processing (HTAP) data platf
 
 Comes with a [web drone dashboard demo](docs/MISSION-CONTROL.md) of realtime data filtering and visualisation.
 
-** Key characteristics**
+**Key characteristics**
 
 - **Record of Truth** — one dataset, one store, one governance surface, one schema; no ETL copies, no reconciliation debt
 - **Strict-Serializable ACID transactions** via Accord (CEP-15) — the same isolation class Google Spanner offers

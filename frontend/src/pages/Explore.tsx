@@ -733,7 +733,7 @@ function ComparePanel() {
           id="compare-sql"
           value={sql}
           onChange={(e) => setSql(e.target.value)}
-          className="text-primary h-40 w-full resize-none bg-transparent p-6 font-mono text-sm leading-relaxed focus:outline-none"
+          className="text-primary h-40 w-full resize-none bg-surface-container-lowest/40 p-6 font-code text-sm leading-relaxed focus:outline-none"
           spellCheck={false}
         />
       </div>
@@ -1090,7 +1090,7 @@ export default function ExplorePage() {
                       id="console-sql"
                       value={sql}
                       onChange={(e) => setSql(e.target.value)}
-                      className="text-primary h-60 w-full resize-none bg-transparent p-6 font-mono text-sm leading-relaxed focus:outline-none"
+                      className="text-primary h-60 w-full resize-none bg-surface-container-lowest/40 p-6 font-code text-sm leading-relaxed focus:outline-none"
                       spellCheck={false}
                     />
                   </>

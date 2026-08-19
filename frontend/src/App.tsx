@@ -60,10 +60,10 @@ function Sidebar() {
             to={item.path}
             end={item.path === '/'}
             className={({ isActive }) =>
-              `flex items-center gap-4 px-4 py-3 transition-colors ${
+              `flex items-center gap-4 px-4 py-3 transition-all duration-200 ease-out ${
                 isActive
-                  ? 'border-l-4 border-primary bg-primary/10 text-primary'
-                  : 'text-on-surface-variant hover:bg-white/5 hover:text-on-surface'
+                  ? 'border-l-4 border-primary bg-primary/10 text-primary shadow-[inset_0_0_20px_rgba(153,247,255,0.05)]'
+                  : 'text-on-surface-variant hover:bg-white/5 hover:text-on-surface hover:translate-x-1'
               }`
             }
           >
@@ -79,11 +79,14 @@ function Sidebar() {
         ))}
       </nav>
 
-      <p className="text-on-surface-variant/60 border-t border-white/5 pt-4 text-[9px] leading-relaxed">
-        Cassandra for the live fleet, Presto for analytics over the same rows, and Spark for batch by
-        two routes: through the request path, and straight off the SSTable files. One store, no ETL
-        between them.
-      </p>
+      <div className="mt-auto flex flex-col items-center gap-4 border-t border-white/5 pt-6">
+        <img src="/KTlogo-white.svg" alt="Kermit Technology" className="h-10 w-auto opacity-80" />
+        <p className="text-on-surface-variant/60 text-[9px] leading-relaxed text-center">
+          Cassandra for the live fleet, Presto for analytics over the same rows, and Spark for batch by
+          two routes: through the request path, and straight off the SSTable files. One store, no ETL
+          between them.
+        </p>
+      </div>
     </aside>
   )
 }

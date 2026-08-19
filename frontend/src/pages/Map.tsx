@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { MapContainer, Marker, Polygon, Polyline, Popup, TileLayer, useMap } from 'react-leaflet'
+import MarkerClusterGroup from 'react-leaflet-cluster'
 import { Icon, type LatLngExpression, type LatLngTuple } from 'leaflet'
 import { useQuery } from '@tanstack/react-query'
 import MaterialIcon from '../components/MaterialIcon'
 import { getJson } from '../lib/api'
+import 'leaflet.markercluster/dist/MarkerCluster.css'
+import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
 
 interface DronePosition {
   entity_id: string
@@ -77,13 +80,28 @@ const FILTERS = ['all', 'flying', 'at risk'] as const
 type Filter = (typeof FILTERS)[number]
 
 function droneIcon(colour: string, grounded = false): Icon {
-  const size = grounded ? 20 : 30
+  const size = grounded ? 22 : 32
+  const opacity = grounded ? 0.5 : 1.0
+  const bodyFill = grounded ? 0.3 : 0.85
+  const rotorDash = grounded ? ' stroke-dasharray="2 2"' : ''
+  const sw = grounded ? '1.2' : '1.8'
   const svg = `
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-         stroke="${colour}" stroke-width="${grounded ? 1.5 : 2.2}">
-      <circle cx="12" cy="12" r="${grounded ? 3 : 3.5}" fill="${colour}" fill-opacity="${grounded ? 0.35 : 0.9}"/>
-      <path d="M12 2v4M12 18v4M2 12h4M18 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M5.6 18.4l2.8-2.8M15.6 8.4l2.8-2.8"
-            ${grounded ? 'stroke-dasharray="3 2"' : ''}/>
+         stroke="${colour}" stroke-width="${sw}" opacity="${opacity}" stroke-linecap="round">
+      <!-- four arms from centre to rotor positions -->
+      <line x1="12" y1="12" x2="5" y2="5"/>
+      <line x1="12" y1="12" x2="19" y2="5"/>
+      <line x1="12" y1="12" x2="5" y2="19"/>
+      <line x1="12" y1="12" x2="19" y2="19"/>
+      <!-- four rotors -->
+      <circle cx="5" cy="5" r="3.5" fill="${colour}" fill-opacity="0.15"${rotorDash}/>
+      <circle cx="19" cy="5" r="3.5" fill="${colour}" fill-opacity="0.15"${rotorDash}/>
+      <circle cx="5" cy="19" r="3.5" fill="${colour}" fill-opacity="0.15"${rotorDash}/>
+      <circle cx="19" cy="19" r="3.5" fill="${colour}" fill-opacity="0.15"${rotorDash}/>
+      <!-- central body -->
+      <rect x="9.5" y="9.5" width="5" height="5" rx="1.2" fill="${colour}" fill-opacity="${bodyFill}"/>
+      <!-- front indicator (top edge) -->
+      <line x1="10.5" y1="9.5" x2="13.5" y2="9.5" stroke="${colour}" stroke-width="2.5"/>
     </svg>`
   return new Icon({
     iconUrl: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
@@ -343,6 +361,13 @@ export default function MapPage() {
               />
             )}
 
+            <MarkerClusterGroup
+              chunkedLoading
+              maxClusterRadius={40}
+              spiderfyOnMaxZoom
+              showCoverageOnHover={false}
+              disableClusteringAtZoom={14}
+            >
             {visible.map((drone) => {
               if (!drone.latitude || !drone.longitude) return null
               const isSelected = selected === drone.entity_id
@@ -398,11 +423,12 @@ export default function MapPage() {
                 </Marker>
               )
             })}
+            </MarkerClusterGroup>
           </MapContainer>
         )}
       </div>
 
-      <div className="text-on-surface-variant mt-4 flex flex-wrap gap-6 text-xs font-bold uppercase tracking-wider">
+      <div className="glass-panel mt-4 flex flex-wrap gap-6 rounded-lg px-6 py-3 text-xs font-bold uppercase tracking-wider text-on-surface-variant">
         {[
           { colour: palette.flying, label: 'Flying' },
           { colour: palette.grounded, label: 'Grounded' },

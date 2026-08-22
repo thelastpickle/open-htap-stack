@@ -6,7 +6,8 @@ batch analytics.  It also reads those rows itself, with the cqlite reader, which
 parses Cassandra's SSTable files in this process.  Every endpoint reports which
 engine answered it, because showing that is the point of the demo.
 """
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
@@ -57,7 +58,17 @@ async def lifespan(app: FastAPI):
             client.connect()
         except Exception as e:
             print(f"[startup] {name} unavailable: {e}")
-    yield
+
+    # The live embedder, which keeps the vector index following the snippets the
+    # sink writes.  One task for the process's lifetime; it idles until the Explore
+    # page turns it on, and it never sits in a write.
+    embedder_task = asyncio.create_task(vector.live_embedder.run())
+    try:
+        yield
+    finally:
+        embedder_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await embedder_task
 
 
 def create_app() -> FastAPI:

@@ -292,6 +292,36 @@ class VectorSearchResponse(BaseModel):
     query_time_ms: float = 0.0
 
 
+class LiveEmbeddingRequest(BaseModel):
+    enabled: bool
+
+
+class LiveEmbeddingStatus(BaseModel):
+    """What the live embedder is doing, in the terms the Explore page shows.
+
+    Each figure names what it measures.  ``pending`` is what the last pass had to
+    defer and ``behind_s`` is how long ago that pass ran, so the two together say
+    whether the index is following the writes or falling behind them.
+    """
+
+    enabled: bool = False
+    embedder: str = "local"
+    interval_s: float = 0.0
+    # Totals since this backend started, not since the loop was last enabled: the
+    # loop keeps what it has embedded across a disable, so resetting the counts
+    # would misreport the work already done.
+    embedded: int = 0
+    failed: int = 0
+    passes: int = 0
+    # The last completed pass.
+    last_embedded: int = 0
+    last_pass_ms: float = 0.0
+    pending: int = 0
+    behind_s: Optional[float] = None
+    tracked: int = 0
+    error: Optional[str] = None
+
+
 # ──────────────────────── Demo controls ────────────────────────
 
 

@@ -67,6 +67,8 @@ curl -s "localhost:4040/api/v1/applications/$APP/jobs?status=running" | jq -r '.
 
 **cqlite prints a `float` in full.**  A `float` column is 32 bits, and this path renders the double it widens to, so 41.8 arrives as 41.79999923706055 where the CQL path shortens it.  Compare such a column with a tolerance; the CI identity check uses 0.1 °C.  A row that differs only in that expansion is the same row.
 
+**Live embedding writes while you measure.**  Explore → Vector search can leave a loop running that re-embeds the changed snippets every five seconds, one CQL write per changed asset.  It is off at startup, and the CI step turns it off after checking it, so a stack that has been driven by hand is where to suspect it: `curl -s localhost:8000/api/vector/live` says whether it is on.  Measured at a hundred assets it did not move the point read, but it is a writer on the same node, so state that it was running or turn it off first.
+
 **A trend across runs is usually the table growing.**  "It is getting slower" turned out to be 34.5 s over 1.5 GB and then 28.7 s over 3.0 GB, a rate rising from 42 to 107 MB/s.  Repeat a measurement, and record the table size beside it, before believing a direction.
 
 **The first run after a restart is not representative.**  JIT, page cache and the connector's session setup all land on it.

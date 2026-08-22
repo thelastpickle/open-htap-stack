@@ -1016,6 +1016,26 @@ jobs:
             -H 'Content-Type: application/json' --data @"$TMP_DIR/vector-search.json" | python3 -m json.tool | head -30
           echo "✓ Vector search returned matches"
 
+          echo -e "\n=== Live embedding follows the writes ==="
+          # Structural, not timed: that a pass runs, embeds and reports, and that the
+          # toggle takes.  How fast it keeps up depends on the fleet size and the
+          # rate, neither of which is fixed on a runner.
+          curl -sf -X POST http://localhost:8000/api/vector/live \
+            -H 'Content-Type: application/json' -d '{"enabled":true}' > /dev/null \
+            || { echo "::error::could not enable live embedding"; exit 1; }
+          timeout 120 bash -c 'while true; do PASSES=$(curl -s http://localhost:8000/api/vector/live | python3 $TMP_DIR/jq-path.py passes); [ "${PASSES:-0}" -gt 0 ] && break; echo "Waiting for a live embedding pass..."; sleep 5; done' \
+            || { echo "::error::live embedding ran no pass in 120s"; exit 1; }
+          curl -s http://localhost:8000/api/vector/live | python3 -m json.tool
+          LIVE_TRACKED=$(curl -s http://localhost:8000/api/vector/live | python3 "$TMP_DIR/jq-path.py" tracked)
+          LIVE_ERROR=$(curl -s http://localhost:8000/api/vector/live | python3 "$TMP_DIR/jq-path.py" error)
+          [ "${LIVE_TRACKED:-0}" -gt 0 ] || { echo "::error::live embedding tracked no assets"; exit 1; }
+          [ "$LIVE_ERROR" = "None" ] || { echo "::error::live embedding reported: $LIVE_ERROR"; exit 1; }
+          LIVE_OFF=$(curl -s -X POST http://localhost:8000/api/vector/live \
+            -H 'Content-Type: application/json' -d '{"enabled":false}' \
+            | python3 "$TMP_DIR/jq-path.py" enabled)
+          [ "$LIVE_OFF" = "False" ] || { echo "::error::live embedding would not turn off"; exit 1; }
+          echo "✓ Live embedding tracked $LIVE_TRACKED assets, and the toggle took"
+
           echo -e "\n=== Flight path from the event history ==="
           ENTITY=$(curl -s "http://localhost:8000/api/map/live?limit=1" | python3 "$TMP_DIR/jq-path.py" drones 0 entity_id)
           POINTS=$(curl -s "http://localhost:8000/api/map/drone/$ENTITY/trail?points=10" | python3 "$TMP_DIR/jq-path.py" points)

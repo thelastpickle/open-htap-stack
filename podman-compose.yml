@@ -319,6 +319,15 @@ services:
       DEMO_MAX_ENTITIES: "${DEMO_MAX_ENTITIES:-2000}"
       DEMO_EVENTS_PER_SEC: "${DEMO_EVENTS_PER_SEC:-2000}"
       DEMO_OUTLIER_PERCENT: "${DEMO_OUTLIER_PERCENT:-5.0}"
+      # Whether the vector index follows the snippets the sink writes, and how
+      # often.  Off at startup: the Explore page turns it on, and the reason to
+      # turn it on there is to watch the point read on the Health page stay where
+      # it was while the embedder works, which is not visible if it was already
+      # running.  The loop reads the snippets after the sink has written them, so
+      # nothing in the write path waits for an embedding.
+      VECTOR_LIVE_EMBEDDINGS: "${DEMO_VECTOR_LIVE_EMBEDDINGS:-false}"
+      VECTOR_LIVE_INTERVAL_S: "${DEMO_VECTOR_LIVE_INTERVAL_S:-5}"
+      VECTOR_LIVE_MAX_PER_CYCLE: "${DEMO_VECTOR_LIVE_MAX_PER_CYCLE:-64}"
       # Optional.  Without a key the backend embeds text locally, so the AI
       # search still works; see backend/app/routes/vector.py.
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"

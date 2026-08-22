@@ -82,6 +82,21 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     embedding_model: str = "text-embedding-3-small"
 
+    # Live embedding: keep drone_text_embeddings following the snippets the sink
+    # writes, instead of embedding once on demand.  Off at startup, because it is a
+    # claim the demo should make deliberately rather than by default: the work runs
+    # behind the writes and never in them, so an operator turning it on should see
+    # the point-read latency stay where it was.
+    vector_live_embeddings: bool = False
+    # How long the loop waits between passes.  The producer rotates each asset's
+    # snippet every 5 to 30 seconds, so a shorter interval would mostly find
+    # nothing, and a much longer one would let the index fall behind visibly.
+    vector_live_interval_s: float = 5.0
+    # Most assets embedded in one pass.  A bound rather than the whole fleet, so a
+    # pass stays short at 2,000 assets and the loop keeps reporting; whatever it
+    # defers is embedded by the next pass, and the status says how much that is.
+    vector_live_max_per_cycle: int = 64
+
     # Optional: an OpenAI-compatible chat endpoint for natural-language → SQL.
     openrouter_api_key: str = ""
     openrouter_model: str = "openai/gpt-4o-mini"

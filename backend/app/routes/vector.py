@@ -24,7 +24,12 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from app.config import settings
 from app.db.cassandra_client import cassandra_client
-from app.models import VectorSearchRequest, VectorSearchResponse
+from app.models import (
+    LiveEmbeddingRequest,
+    LiveEmbeddingStatus,
+    VectorSearchRequest,
+    VectorSearchResponse,
+)
 
 router = APIRouter(prefix="/api/vector", tags=["vector"])
 
@@ -219,3 +224,196 @@ def probe_vector(dimensions: int = EMBEDDING_DIMS) -> Optional[List[float]]:
     vector = [0.0] * dimensions
     vector[0] = 1.0
     return vector
+
+
+# ──────────────────────── Live embedding ────────────────────────
+
+
+def _snippet_key(text: str) -> str:
+    """A short digest of a snippet, to tell a changed one from an unchanged one.
+
+    The digest rather than the snippet itself: the producer samples paragraphs of
+    Wikipedia, and holding one per asset for a fleet of two thousand would keep
+    megabytes of prose alive for a comparison that eight bytes settles.
+    """
+    return hashlib.blake2b(text.encode("utf-8"), digest_size=8).hexdigest()
+
+
+class LiveEmbedder:
+    """Keeps ``drone_text_embeddings`` following the snippets the sink writes.
+
+    The sink writes an asset's new snippet and waits for nothing else; this loop
+    reads the snippets afterwards and embeds the ones that changed.  So the cost of
+    keeping a vector index current is paid beside the write path rather than in it,
+    which is the same separation the analytical paths claim for scans, and the
+    reason the toggle is worth having: turn it on and the point-read latency on the
+    Health page should not move.
+
+    The alternative was to embed in the ingest sink, on the write itself.  That was
+    rejected for two reasons.  It would put an embedding call, and with a key
+    configured a network round trip, in front of every write, which is the coupling
+    this demo exists to argue against.  And it would make the sink depend on this
+    backend for the embedder, where today nothing in the data path depends on the
+    dashboard and either dashboard service can be stopped without touching ingest.
+    """
+
+    def __init__(self) -> None:
+        self._enabled = settings.vector_live_embeddings
+        # entity_id → digest of the snippet already embedded for it.  In memory
+        # only: on a restart the first pass primes it from the table, which costs
+        # one fleet-sized read and saves re-embedding the whole fleet.
+        self._seen: Dict[str, str] = {}
+        self._primed = False
+        self._embedded = 0
+        self._failed = 0
+        self._passes = 0
+        self._last_embedded = 0
+        self._last_pass_ms = 0.0
+        self._pending = 0
+        self._last_pass_at: Optional[float] = None
+        self._error: Optional[str] = None
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Turn the loop on or off.  Its counts and its digests survive either."""
+        self._enabled = enabled
+        if not enabled:
+            self._error = None
+
+    def status(self) -> LiveEmbeddingStatus:
+        behind = (
+            round(time.time() - self._last_pass_at, 1)
+            if self._last_pass_at is not None
+            else None
+        )
+        return LiveEmbeddingStatus(
+            enabled=self._enabled,
+            embedder="remote" if settings.openai_api_key else "local",
+            interval_s=settings.vector_live_interval_s,
+            embedded=self._embedded,
+            failed=self._failed,
+            passes=self._passes,
+            last_embedded=self._last_embedded,
+            last_pass_ms=self._last_pass_ms,
+            pending=self._pending,
+            behind_s=behind,
+            tracked=len(self._seen),
+            error=self._error,
+        )
+
+    async def run(self) -> None:
+        """The loop itself, started once at startup and cancelled at shutdown.
+
+        It runs whether or not the toggle is on, and does nothing while it is off:
+        one task for the process's lifetime is easier to reason about than a task
+        started and cancelled on each toggle, and an idle pass costs a sleep.
+        """
+        while True:
+            if not self._enabled:
+                await asyncio.sleep(settings.vector_live_interval_s)
+                continue
+            try:
+                await self._pass()
+                self._error = None
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                # Report rather than stop: Cassandra restarting under the loop is
+                # an expected state in this stack, and the loop should resume when
+                # it comes back rather than needing the toggle cycled.
+                self._error = str(e)
+                print(f"[vector] live embedding pass failed: {e}")
+            await asyncio.sleep(settings.vector_live_interval_s)
+
+    async def _prime(self) -> None:
+        """Learn which snippets are already embedded, without reading the vectors.
+
+        The vector column is 1536 floats per row and is not needed to answer "has
+        this snippet been embedded", so this reads two columns and leaves the third.
+        """
+        rows = await asyncio.to_thread(
+            cassandra_client.execute_query,
+            "SELECT entity_id, text_payload FROM drone_text_embeddings",
+        )
+        for row in rows:
+            text = row.get("text_payload") or ""
+            if text:
+                self._seen[str(row["entity_id"])] = _snippet_key(text)
+        self._primed = True
+        print(f"[vector] live embedding primed with {len(self._seen)} assets")
+
+    async def _pass(self) -> None:
+        """Embed the snippets that changed since the last pass."""
+        if not cassandra_client.connected:
+            cassandra_client.connect()
+        if not cassandra_client.connected:
+            raise RuntimeError("Cassandra unavailable")
+
+        started = time.perf_counter()
+        if not self._primed:
+            await self._prime()
+
+        rows = await asyncio.to_thread(
+            cassandra_client.execute_query,
+            "SELECT entity_id, text_payload FROM drone_latest_status",
+        )
+        changed = [
+            (str(row["entity_id"]), row["text_payload"])
+            for row in rows
+            if (row.get("text_payload") or "").strip()
+            and self._seen.get(str(row["entity_id"])) != _snippet_key(row["text_payload"])
+        ]
+        # Whatever this pass defers, the next one takes.
+        batch = changed[: settings.vector_live_max_per_cycle]
+        self._pending = len(changed) - len(batch)
+
+        semaphore = asyncio.Semaphore(INDEX_CONCURRENCY)
+        embedded = 0
+
+        async def embed_one(entity_id: str, text: str) -> None:
+            nonlocal embedded
+            async with semaphore:
+                try:
+                    vector = await get_embedding(text)
+                    await asyncio.to_thread(
+                        cassandra_client.execute_query,
+                        "INSERT INTO drone_text_embeddings "
+                        "(entity_id, text_payload, payload_vector, updated_at) "
+                        "VALUES (%s, %s, %s, toTimestamp(now()))",
+                        (entity_id, text, vector),
+                    )
+                    # Recorded only after the write, so a failed write is retried
+                    # by the next pass rather than counted as done.
+                    self._seen[entity_id] = _snippet_key(text)
+                    embedded += 1
+                except Exception as e:
+                    self._failed += 1
+                    print(f"[vector] live embedding of {entity_id} failed: {e}")
+
+        if batch:
+            await asyncio.gather(*(embed_one(eid, text) for eid, text in batch))
+
+        self._embedded += embedded
+        self._last_embedded = embedded
+        self._last_pass_ms = round((time.perf_counter() - started) * 1000, 1)
+        self._last_pass_at = time.time()
+        self._passes += 1
+
+
+live_embedder = LiveEmbedder()
+
+
+@router.get("/live", response_model=LiveEmbeddingStatus)
+def get_live_embedding() -> LiveEmbeddingStatus:
+    """What the live embedder is doing.  Polled by the Explore page."""
+    return live_embedder.status()
+
+
+@router.post("/live", response_model=LiveEmbeddingStatus)
+def set_live_embedding(req: LiveEmbeddingRequest) -> LiveEmbeddingStatus:
+    """Turn live embedding on or off.  Takes effect within one interval."""
+    live_embedder.set_enabled(req.enabled)
+    return live_embedder.status()

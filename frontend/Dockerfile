@@ -1,6 +1,6 @@
 # Build the dashboard, then serve the static bundle from nginx.  nginx also
 # proxies /api to the backend, so the browser talks to one origin.
-FROM node:22-alpine AS build
+FROM node:24-alpine AS build
 
 WORKDIR /app
 
@@ -15,7 +15,7 @@ COPY src/ ./src/
 RUN npm run build
 
 
-FROM nginx:1.27-alpine
+FROM nginx:1.30-alpine
 
 # The image's entrypoint renders anything in templates/ before starting nginx,
 # and populates NGINX_LOCAL_RESOLVERS from the container's resolv.conf when asked.

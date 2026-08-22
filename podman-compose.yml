@@ -19,7 +19,7 @@ services:
 ###############################################################################
 
   kafka:
-    image: apache/kafka:4.1.1
+    image: apache/kafka:4.3.1
     container_name: kafka
     networks: [htap-net]
     ports:
@@ -88,8 +88,10 @@ services:
       start_period: 60s
 
   spark:
-    # cassandra-analytics does not support spark 4 yet, ref CASSANALYTICS-34
-    image: apache/spark:3.5.8-scala2.12-java17-python3-ubuntu
+    # Spark stays on 3.5 because spark-cassandra-connector publishes nothing above 3.5.1,
+    # for either Scala version, so Spark 4 would take the spark access path with it.
+    # cassandra-analytics is no longer the blocker: CASSANALYTICS-34 is fixed for 0.5.0.
+    image: apache/spark:3.5.9-scala2.12-java17-python3-ubuntu
 
     container_name: spark
     hostname: spark
@@ -118,9 +120,9 @@ services:
       # cache this repository vendors.  Same coordinates as the CI SparkSQL tests.
       CASSANDRA_SPARK_PACKAGES: >-
         com.datastax.spark:spark-cassandra-connector_2.12:3.5.1,
-        org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,
-        org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,
-        org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0
+        org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0,
+        org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0,
+        org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0
     command: >
       bash -lc '
         set -euo pipefail;
@@ -189,7 +191,7 @@ services:
     # tips for debugging: check /opt/spark/work/*/*/stderr
 
   presto:
-    image: prestodb/presto:0.296
+    image: prestodb/presto:0.298.1
     container_name: presto
     networks: [htap-net]
     depends_on:

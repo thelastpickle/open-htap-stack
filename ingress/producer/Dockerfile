@@ -1,7 +1,7 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 RUN apt-get -o Acquire::Retries=5 update && apt-get install -y wget unzip
-RUN pip install --no-cache-dir --retries 5 kafka-python-ng==2.2.2 numpy==1.26.4 lz4==4.3.3 cassandra-driver==3.29.2
+RUN pip install --no-cache-dir --retries 5 kafka-python-ng==2.2.3 numpy==2.5.2 lz4==4.4.5 cassandra-driver==3.30.1
 
 WORKDIR /app
 

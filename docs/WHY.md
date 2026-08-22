@@ -84,13 +84,13 @@ SQL, particularly the Postgres dialect, is the lingua franca of developers and d
 
 **A trade-off worth naming**: for applications with static, prepared access patterns, persisting a rigid relational schema to disk carries overhead that a wide-column or key-value layout does not. &emsp;Whether that overhead matters depends on your workload: it is nearly invisible for many transactional workloads and meaningful for high-throughput write paths. &emsp;This is why Cassandra's data model is what it is.
 
-SQL, however, is an **interface layer**. &emsp;It does not dictate storage. &emsp;In this stack, SQL is implemented as a Postgres wire-protocol + dialect adapter over the transaction layer, using Apache Calcite, and with both Spark and Presto. &emsp;SQL can be implemented on top of many storage engines given transactions and a key-value store. &emsp;The same mechanism extends to document, graph, and other modalities.
+SQL, however, is an **interface layer**. &emsp;It does not dictate storage. &emsp;SQL can be implemented on top of many storage engines given transactions and a key-value store, and the same mechanism extends to document, graph, and other modalities. &emsp;The design puts application SQL on the transaction layer as a Postgres wire-protocol and dialect adapter, using Apache Calcite, beside the analytical SQL that Spark and Presto give.
 
-This stack demonstrates three SQL interfaces against one data store:
+This stack runs two of those three SQL interfaces against one data store, and the third is designed but not built:
 
-- **Application SQL** (Postgres shim, proof-of-concept subset): for workloads migrating from Postgres, or applications that want SQL's ergonomics without the overhead of Postgres itself
 - **Partition-based analytical SQL** (Spark / Presto via Cassandra connector): for targeted analytical queries on known partitions
-- **File-direct analytical SQL** (Spark Bulk Reader, optionally with Iceberg): for wide scans and bulk analytics
+- **File-direct analytical SQL** (Spark Bulk Reader, and cqlite over the live files): for wide scans and bulk analytics
+- **Application SQL** (Accord SQL, the Postgres adapter): deferred. &emsp;It needs Accord, Accord needs Cassandra 6.0, and 6.0's SSTable format has no reader for either file-direct path, so this stack holds Cassandra at 5.0
 
 Different SQL interfaces for different access patterns. &emsp;Federation with existing data sources becomes an integration problem rather than an architectural one.
 

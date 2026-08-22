@@ -46,6 +46,13 @@ IVY_HOME="${IVY_HOME:-/opt/spark/work-dir/.ivy2}"
 SPARK_JARS="${SPARK_JARS:-/opt/spark/jars}"
 
 echo "Resolving the Cassandra libraries: ${PACKAGES}"
+# Empty the staging directory first.  It is a bind mount that outlives the container,
+# so a version change would otherwise leave the previous jars beside the new ones and
+# copy both onto the system classpath, where which one loads is not decided by us.
+# Measured: after 0.4.0-mck0 became 0.4.0, all six artifacts were present twice.
+# The Ivy cache beside it, which is what makes resolution work without the network,
+# is committed and is not touched here.
+rm -f "${IVY_HOME}"/jars/*.jar
 # spark-submit resolves --packages before it looks at the application, so this
 # stages every jar in ${IVY_HOME}/jars and then fails on the empty application.
 # There is no resolve-only mode; the failure is the point at which we stop.

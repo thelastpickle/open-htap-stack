@@ -1,5 +1,5 @@
 #
-# Cassandra Sidecar 0.2.0 configuration file
+# Cassandra Sidecar 0.4.0 configuration file
 #
 cassandra_instances:
     - id: 1
@@ -257,8 +257,13 @@ access_control:
 driver_parameters:
   contact_points:
     - "cassandra:9042"
-  username: cassandra
-  password: cassandra
+  # cassandra_latest.yaml turns PasswordAuthenticator on, so the Sidecar's own driver needs
+  # credentials.  0.4.0 deprecates the flat username and password keys in favour of this block.
+  auth_provider:
+    class_name: org.apache.cassandra.sidecar.cluster.auth.ConfigProvider
+    parameters:
+      username: cassandra
+      password: cassandra
   ssl:
     enabled:  false
     keystore:
@@ -408,7 +413,7 @@ live_migration:
     - glob:${DATA_FILE_DIR}/*/*/snapshots # Excludes snapshot directories in data folder to copy to destination
   migration_map:                          # Map of source and destination Cassandra instances
 #    localhost1: localhost4               # This entry says that localhost1 will be migrated to localhost4
-  max_concurrent_downloads: 20            # Maximum number of concurrent downloads allowed
+  max_concurrent_file_requests: 20        # Maximum number of concurrent file requests allowed
 
 # Configuration to allow sidecar start and stop Cassandra instances via the lifecycle API (disabled by default)
 lifecycle:

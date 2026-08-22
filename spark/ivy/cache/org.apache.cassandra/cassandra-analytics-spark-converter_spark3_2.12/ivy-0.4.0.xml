@@ -1,12 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ivy-module version="2.0" xmlns:m="http://ant.apache.org/ivy/maven">
 	<info organisation="org.apache.cassandra"
-		module="cassandra-analytics-common"
-		revision="0.4.0-mck0"
+		module="cassandra-analytics-spark-converter_spark3_2.12"
+		revision="0.4.0"
 		status="release"
-		publication="20260308133319"
+		publication="20260507070000"
 	>
-		<description homepage="" />
+		<license name="The Apache License, Version 2.0" url="https://www.apache.org/licenses/LICENSE-2.0.txt" />
+		<description homepage="https://cassandra.apache.org/" />
 	</info>
 	<configurations>
 		<conf name="default" visibility="public" description="runtime dependencies and master artifact can be used with this conf" extends="runtime,master"/>
@@ -21,9 +22,6 @@
 		<conf name="optional" visibility="public" description="contains all optional dependencies"/>
 	</configurations>
 	<publications>
-		<artifact name="cassandra-analytics-common" type="jar" ext="jar" conf="master"/>
+		<artifact name="cassandra-analytics-spark-converter_spark3_2.12" type="jar" ext="jar" conf="master"/>
 	</publications>
-	<dependencies>
-		<dependency org="org.slf4j" name="slf4j-api" rev="1.7.30" force="true" conf="runtime->compile(*),runtime(*),master(*)"/>
-	</dependencies>
 </ivy-module>

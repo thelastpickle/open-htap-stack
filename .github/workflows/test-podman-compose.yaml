@@ -278,7 +278,7 @@ jobs:
           echo "Executing bulk SparkSQL queries..."
           set +e
           RESULT=$(podman exec spark spark-sql \
-            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0 \
+            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0 \
             -f /tmp/spark_bulk_test.sql 2>&1)
           EXIT_CODE=$?
           set -e
@@ -873,9 +873,26 @@ jobs:
       - name: Test Parquet Export
         run: |
           echo -e "\n=== Testing Parquet Export ==="
-          
-          # Test exporting to Parquet using the bulk reader view
-          cat > /tmp/spark_parquet_export.sql << 'EOF'
+
+          # A snapshot name of its own per run.  The Sidecar keeps the file listing
+          # it answers with for two hours (sstable_snapshot.snapshot_list_cache in
+          # cassandra/sidecar.yaml), keyed by the snapshot's name, so a second run
+          # under a fixed name is answered with the first run's generations.  This
+          # step passes in CI, which runs it once; by hand it fails the moment the
+          # SSTable set has changed, and the failure arrives as 404 per component,
+          # then "FSReadError", then "Required 1 replicas but only 0 responded".
+          # Measured: a re-run after the import step's TRUNCATE asked the Sidecar
+          # for six generations the truncate had destroyed, and got a listing of
+          # exactly the 11989 bytes the first run received.  The backend's bulk
+          # reader never meets this because it names each snapshot for its epoch
+          # second; this does the same.
+          SNAPSHOT="htap_demo_parquet_export_$(date +%s)"
+          echo "Snapshot name: $SNAPSHOT"
+
+          # Test exporting to Parquet using the bulk reader view.  The heredoc is
+          # unquoted so $SNAPSHOT is substituted; nothing else in the SQL is
+          # shell-significant.
+          cat > /tmp/spark_parquet_export.sql << EOF
           CREATE OR REPLACE TEMP VIEW events_for_bulk_queries
           USING org.apache.cassandra.spark.sparksql.CassandraDataSource
           OPTIONS (
@@ -884,19 +901,19 @@ jobs:
             table "events",
             DC "datacenter1",
             createSnapshot "true",
-            snapshotName "htap_demo_parquet_export",
+            snapshotName "$SNAPSHOT",
             numCores "4"
           );
-          
+
           INSERT OVERWRITE DIRECTORY '/var/lib/cassandra/parquet-exports/demo_events' USING parquet
           SELECT /*+ COALESCE(1) */ * FROM events_for_bulk_queries;
           EOF
-          
+
           podman cp /tmp/spark_parquet_export.sql spark:/tmp/spark_parquet_export.sql
           echo "Executing Parquet export..."
           set +e
           RESULT=$(podman exec spark spark-sql \
-            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0 \
+            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0 \
             -f /tmp/spark_parquet_export.sql 2>&1)
           EXIT_CODE=$?
           set -e
@@ -908,9 +925,13 @@ jobs:
           echo "Verifying Parquet file..."
           podman exec cassandra ls -lh /var/lib/cassandra/parquet-exports/demo_events/
           
-          # Count parquet files (should be exactly 1 due to COALESCE(1))
+          # Count parquet files (should be exactly 1 due to COALESCE(1)).  The
+          # pipe is outside podman exec, so wc runs on whichever host is running
+          # this step; macOS pads the count to eight columns where Linux does not,
+          # which failed a string comparison locally and passed on the runner.
+          # Compare numerically, which ignores the padding either way.
           PARQUET_COUNT=$(podman exec cassandra find /var/lib/cassandra/parquet-exports/demo_events/ -name "*.parquet" | wc -l)
-          [ "$PARQUET_COUNT" != "1" ] && { echo "❌ Expected exactly 1 Parquet file, found $PARQUET_COUNT"; exit 1; }
+          [ "$PARQUET_COUNT" -ne 1 ] && { echo "❌ Expected exactly 1 Parquet file, found $PARQUET_COUNT"; exit 1; }
           
           # Verify the parquet file is not empty
           PARQUET_FILE=$(podman exec cassandra find /var/lib/cassandra/parquet-exports/demo_events/ -name "*.parquet" -type f)
@@ -955,9 +976,29 @@ jobs:
           
           podman cp /tmp/parquet_import.scala spark:/tmp/parquet_import.scala
           echo "Executing Parquet import via spark-shell..."
+          # The bulk writer does not work here, and the row-count assertion below is
+          # disabled rather than removed so the step still exercises the path.  Two
+          # separate obstacles were measured, in this order:
+          #
+          # First, the write never starts.  The shaded Vert.x client resolves
+          # "cassandra" through its own Netty resolver rather than the JDK's, and in
+          # this container that resolver queried a public nameserver and the host's
+          # search domains instead of podman's 172.20.0.1, so every task failed
+          # startup validation with "Sidecar is unreachable".  The bulk reader is
+          # unaffected and reaches the same Sidecar from the same container.
+          # -Dvertx.disableDnsResolver=true on the executor options gets past it:
+          # SidecarValidation and CassandraValidation then both PASSED.
+          #
+          # Second, with validation passing the write reaches its shuffle and the
+          # executor dies with "OutOfMemoryError: unable to create native thread",
+          # exit code 52, then retries until it is stopped.  That is container
+          # sizing, not a version problem, and fixing it is not attempted here.
+          #
+          # So README's recorded failure, "DecoratedKey ... not serializable", is
+          # not what this reproduces now; do not quote it as the current error.
           set +e
           RESULT=$(podman exec spark spark-shell \
-            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0 \
+            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0 \
             -i /tmp/parquet_import.scala 2>&1)
           EXIT_CODE=$?
           set -e

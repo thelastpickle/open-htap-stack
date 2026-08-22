@@ -9,11 +9,11 @@ Comes with a [web drone dashboard demo](docs/MISSION-CONTROL.md) of realtime dat
 **Key characteristics**
 
 - **Record of Truth** — one dataset, one store, one governance surface, one schema; no ETL copies, no reconciliation debt
-- **Strict-Serializable ACID transactions** via Accord (CEP-15) — the same isolation class Google Spanner offers
+- **Strict-Serializable ACID transactions** via Accord (CEP-15) — the same isolation class Google Spanner offers.&emsp;Not in this stack: Accord needs Cassandra 6.0, and 6.0's SSTable format has no reader on two of the five access paths below, so this stack holds Cassandra at 5.0
 - **OLTP** first capabilities: high concurrency and horizontal scaling; write p99 under 5ms and read p99 under 50ms
 - **Multiple SQL interfaces over the same data**:
-  - SparkSQL and Presto for analytics
-  - Postgres wire-protocol + dialect adapter for application SQL (PoC subset, via Apache Calcite)
+  - SparkSQL and Presto for analytics, both running here
+  - Postgres wire-protocol and dialect adapter for application SQL, via Apache Calcite: designed, not built.&emsp;See `accord-sql/Dockerfile`
 - **Resource isolation by construction** — OLAP reads via persisted-structure paths that do not contend with the OLTP request path
 - **Native CDC to Kafka** via the Sidecar, easy to plug into existing platforms, ecosystems, and migration paths
 - **Ecosystem integration**: Apache Kafka, Apache Spark, Presto, Apache Parquet, Apache Iceberg
@@ -135,7 +135,7 @@ Queries using the Cassandra Spark Bulk Reader via the Cassandra Sidecar:
 ```shell
 podman exec -it spark \
   spark-sql \
-    --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0
+    --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0
 ```
 
 ```sql
@@ -174,12 +174,13 @@ This writes the entire `demo.events` table to a single Parquet file in the `cass
 
 ### Move Parquet files quickly into the database
 
-> FIXME: currently broken with `DecoratedKey … not serializable result: java.nio.HeapByteBuffer`
+> FIXME: still broken, and no longer with the error recorded here before. &emsp;`DecoratedKey … not serializable result: java.nio.HeapByteBuffer` does not reproduce; two other obstacles were measured, in this order. &emsp;First, every task failed startup validation with "Sidecar is unreachable", because the shaded Vert.x client resolves `cassandra` through its own Netty resolver rather than the JDK's, and in this container that resolver queries the host's nameserver instead of podman's. &emsp;`-Dvertx.disableDnsResolver=true`, in the command below, gets past it: `SidecarValidation` and `CassandraValidation` then both pass. &emsp;Second, the write reaches its shuffle and the executor dies with `OutOfMemoryError: unable to create native thread`, exit code 52, and retries until it is stopped. &emsp;That is container sizing rather than a version problem, and the bulk **reader** is unaffected throughout: it reaches the same Sidecar from the same container.
 
 ```shell
 podman exec -it spark \
   spark-shell \
-    --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0-mck0
+    --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0 \
+    --conf spark.executor.extraJavaOptions=-Dvertx.disableDnsResolver=true
 ```
 
 ```scala
@@ -208,11 +209,13 @@ todo
 
 ### Example Accord transactions
 
-See `mck/cassandra-6` branch.
+Neither of these runs in this stack, and the `mck/cassandra-6` branch shares no history with trunk, so it cannot be merged into what runs here.
+
+Accord needs Cassandra 6.0.&emsp;6.0 writes BTI SSTables at version `ea`, which cqlite cannot parse and for which cassandra-analytics has no bridge, so moving to 6.0 takes the `cqlite` and `spark_bulk` paths with it.&emsp;No setting holds BTI at `da`.&emsp;See the comment in `cassandra/entrypoint.sh`.
 
 ### Example Application (OLTP) SQL
 
-See `mck/cassandra-6` branch.
+The Postgres-dialect prototype, Accord SQL, is deferred for the same reason and for now is a placeholder directory: `accord-sql/`.
 
 ---
 

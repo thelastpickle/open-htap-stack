@@ -38,13 +38,13 @@ This document supports the general claim of 80%+ TCO savings over Snowflake or D
 
 ## How this HTAP stack delivers these savings
 
-The unified architecture demonstrated in this repository eliminates costs through:
+The unified architecture eliminates costs through the items below. &emsp;Two of them are design rather than demonstration, and are marked; the repository runs the rest.
 
-- **Accord transactions, Cassandra Enhancement Proposal 15 (CEP-15)**: strict-serializable atomicity, consistency, isolation and durability (ACID) without separate transaction coordinators or external consensus overhead. &emsp;Neither OLTP nor online analytical processing (OLAP) systems achieve strict serializability alone; Accord now provides that guarantee across a unified data platform. &emsp;This has a material impact on developer productivity and operational complexity.
+- **Accord transactions, Cassandra Enhancement Proposal 15 (CEP-15)**: strict-serializable atomicity, consistency, isolation and durability (ACID) without separate transaction coordinators or external consensus overhead. &emsp;Neither OLTP nor online analytical processing (OLAP) systems achieve strict serializability alone. &emsp;**Not demonstrated here**: Accord needs Cassandra 6.0, and this stack holds Cassandra at 5.0 so that both file-direct access paths keep a reader.
 - **Spark Bulk Reader/Writer via Sidecar (CEP-28)**: analytics on persisted structures (SSTables) without extract-transform-load (ETL) pipelines.
 - **Multiple SQL interfaces on one data store**:
-  - Postgres wire-protocol for OLTP (application SQL)
   - Spark / Presto for OLAP (analytical SQL)
+  - Postgres wire-protocol for OLTP (application SQL). &emsp;**Not demonstrated here**, for the same reason as Accord
   - No data duplication between interfaces
 - **Snapshot-coordinated analytics**: point-in-time consistency for analytics without copying data to warehouses.
 - **Native Kafka change data capture (CDC) via Sidecar**: built-in change streams with replication-factor-aware deduplication, no third-party connectors.

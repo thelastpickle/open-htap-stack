@@ -53,13 +53,14 @@ interface OperationResult {
   actions: string[]
 }
 
-type ReconnectTarget = 'cassandra' | 'presto' | 'spark' | 'spark_bulk'
+type ReconnectTarget = 'cassandra' | 'presto' | 'spark' | 'spark_bulk' | 'cqlite'
 
 const SERVICE_ICONS: Record<string, string> = {
   Cassandra: 'database',
   Kafka: 'stream',
   Presto: 'analytics',
   Spark: 'bolt',
+  'cqlite reader': 'folder_open',
 }
 
 /**
@@ -73,19 +74,26 @@ const SERVICE_CONTAINERS: Record<string, string> = {
   Kafka: 'kafka',
   Presto: 'presto',
   Spark: 'spark',
+  // The reader is a library in the backend, not a service of its own, so the
+  // command that restarts it is the command that restarts the backend.
+  'cqlite reader': 'backend',
 }
 
 /**
  * Which of the backend's clients belong to each service, for the reconnect
  * control.  Spark has two, because the connector and the bulk reader hold their
  * own sessions so they can run at once.  Kafka has none: nothing here queries it,
- * the health probe just opens a socket.
+ * the health probe just opens a socket.  Reconnecting the cqlite reader opens no
+ * connection; it lists each table's directory again and takes the CREATE TABLE
+ * statement from Cassandra afresh, which is what a table that has since been
+ * flushed, or recreated, needs.
  */
 const SERVICE_CLIENTS: Record<string, ReconnectTarget[]> = {
   Cassandra: ['cassandra'],
   Presto: ['presto'],
   Spark: ['spark', 'spark_bulk'],
   Kafka: [],
+  'cqlite reader': ['cqlite'],
 }
 
 /** Colour per engine, matching the compare panel on Explore. */
@@ -94,6 +102,20 @@ const ENGINE_COLOURS: Record<string, string> = {
   presto: 'var(--color-secondary)',
   spark: 'var(--color-accent)',
   spark_bulk: 'var(--color-positive)',
+  cqlite: 'var(--color-pink)',
+}
+
+/**
+ * The name each path goes by on the compare panel.  The backend reports its wire
+ * name, and `spark_bulk` read as a column name rather than as a path an operator
+ * recognises.
+ */
+const ENGINE_LABELS: Record<string, string> = {
+  cassandra: 'Cassandra',
+  presto: 'Presto',
+  spark: 'Spark SQL',
+  spark_bulk: 'Spark bulk reader',
+  cqlite: 'cqlite SQL',
 }
 
 /** How often the running-work view refreshes.  It is a live view, so: often. */
@@ -105,6 +127,8 @@ const SERVICE_ROLES: Record<string, string> = {
   Kafka: 'Event transport between the producer and the ingest sink',
   Presto: 'Analytical SQL over the same Cassandra rows, with no copy in between',
   Spark: 'Batch analytics and bulk reads, over the same rows again',
+  'cqlite reader':
+    "Reads Cassandra's live SSTable files in this backend's own process, with no snapshot and no JVM",
 }
 
 /**
@@ -268,7 +292,7 @@ function WorkInFlight({ onResult }: { onResult: (message: string, kind?: ToastKi
               className="text-[10px] font-black uppercase tracking-wider"
               style={{ color: ENGINE_COLOURS[query.engine] ?? 'var(--color-on-surface-variant)' }}
             >
-              {query.engine}
+              {ENGINE_LABELS[query.engine] ?? query.engine}
             </span>
             <span className="text-on-surface-variant font-mono text-[10px]">{query.id}</span>
             <span className="text-on-surface-variant text-[10px] uppercase tracking-wider opacity-70">
@@ -303,7 +327,10 @@ function WorkInFlight({ onResult }: { onResult: (message: string, kind?: ToastKi
         <div className="text-on-surface-variant mt-4 space-y-1 border-t border-white/5 pt-4 text-[10px] leading-relaxed opacity-70">
           {Object.entries(data.unreadable).map(([engine, reason]) => (
             <p key={engine}>
-              <span className="uppercase tracking-wider">{engine}</span>: {reason}
+              <span className="uppercase tracking-wider">
+                {ENGINE_LABELS[engine] ?? engine}
+              </span>
+              : {reason}
             </p>
           ))}
         </div>
@@ -445,8 +472,13 @@ export default function HealthPage() {
                   {clients.length > 0 && (
                     <div className="flex items-center justify-between gap-3">
                       <span className="text-on-surface-variant text-[10px] leading-tight">
-                        Rebuild this backend's{' '}
-                        {clients.length > 1 ? `${clients.length} connections` : 'connection'} to it
+                        {/* The reader holds no connection, so saying it rebuilds one
+                            would misdescribe the only control this card has. */}
+                        {clients[0] === 'cqlite'
+                          ? 'List the table directories again, and re-read the schema'
+                          : `Rebuild this backend's ${
+                              clients.length > 1 ? `${clients.length} connections` : 'connection'
+                            } to it`}
                       </span>
                       <button
                         onClick={() => reconnect.mutate(clients)}

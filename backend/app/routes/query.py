@@ -1,4 +1,4 @@
-"""Query routes — ad-hoc SQL, the four-path comparison, and NL → SQL."""
+"""Query routes — ad-hoc SQL, the five-path comparison, and NL → SQL."""
 import asyncio
 import re
 import threading
@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from app.config import settings
 from app.db import spark_ui
 from app.db.cassandra_client import cassandra_client
+from app.db.cqlite_client import cqlite_client
 from app.db.presto_client import presto_client
 from app.db.spark_client import BULK_VIEW_PREFIX, spark_bulk_client, spark_client
 from app.models import (
@@ -117,14 +118,23 @@ def sql_for_spark_bulk(sql: str, limit: int) -> str:
     return statement if _has_limit(statement) else f"{statement} LIMIT {limit}"
 
 
+def sql_for_cqlite(sql: str, limit: int) -> str:
+    """DataFusion executes the statement itself, over tables registered under
+    their own names, so only the Cassandra-only clause has to go."""
+    statement = _rewrite_tables(_ALLOW_FILTERING_RE.sub(" ", sql).strip())
+    return statement if _has_limit(statement) else f"{statement} LIMIT {limit}"
+
+
 # Order matters: it is the order the dashboard shows the engines in, and the order
 # the benchmark runs them in.  Cassandra first because it is the transactional
-# path the other three are being contrasted with.
+# path the other four are being contrasted with, and the cqlite reader last
+# because it is the newest and the one a viewer reads against the rest.
 ENGINES = {
     "cassandra": (cassandra_client, sql_for_cassandra),
     "presto": (presto_client, sql_for_presto),
     "spark": (spark_client, sql_for_spark),
     "spark_bulk": (spark_bulk_client, sql_for_spark_bulk),
+    "cqlite": (cqlite_client, sql_for_cqlite),
 }
 
 
@@ -155,11 +165,14 @@ def _run(engine: str, sql: str, limit: int, reuse_snapshot: bool = False) -> Eng
     except Exception as e:
         # Time the failure too.  A path refused in a millisecond because CQL cannot
         # express the question and a path that gave up after a quarter of an hour
-        # are different findings, and without the clock they read alike.
+        # are different findings, and without the clock they read alike.  The
+        # figures come too: a scan that was cancelled had already opened its files,
+        # and how much it had in front of it is part of why it was still running.
         return EngineResult(
             sql=statement,
             error=str(e),
             query_time_ms=round((time.perf_counter() - start) * 1000, 1),
+            **_reported_figures(client),
         )
 
     columns = list(rows[0].keys()) if rows else []
@@ -169,14 +182,29 @@ def _run(engine: str, sql: str, limit: int, reuse_snapshot: bool = False) -> Eng
         rows=[[r.get(c) for c in columns] for r in rows],
         row_count=len(rows),
         query_time_ms=elapsed_ms,
-        # Only the bulk reader offers these, so they are asked for rather than
-        # required.  Reporting the snapshot's cost and age is what lets a viewer see
-        # what reuse saved and what it cost in currency.
-        snapshot_bytes=getattr(client, "last_snapshot_bytes", None),
-        snapshot_ms=getattr(client, "last_snapshot_ms", None),
-        snapshot_reused=bool(getattr(client, "last_snapshot_reused", False)),
-        snapshot_age_s=getattr(client, "last_snapshot_age_s", None),
+        **_reported_figures(client),
     )
+
+
+def _reported_figures(client: Any) -> Dict[str, Any]:
+    """What a path measured about its own read, if it measures anything.
+
+    Asked for rather than required, because only two paths read files and can say
+    anything here: the bulk reader reports its snapshot, and the cqlite reader the
+    live files it merged instead of one.  Reporting the snapshot's cost and age is
+    what lets a viewer see what reuse saved and what it cost in currency; the four
+    beside them are the same questions asked of a path that takes no snapshot.
+    """
+    return {
+        "snapshot_bytes": getattr(client, "last_snapshot_bytes", None),
+        "snapshot_ms": getattr(client, "last_snapshot_ms", None),
+        "snapshot_reused": bool(getattr(client, "last_snapshot_reused", False)),
+        "snapshot_age_s": getattr(client, "last_snapshot_age_s", None),
+        "sstable_files": getattr(client, "last_sstable_files", None),
+        "sstable_bytes": getattr(client, "last_sstable_bytes", None),
+        "reader_open_ms": getattr(client, "last_reader_open_ms", None),
+        "data_age_s": getattr(client, "last_data_age_s", None),
+    }
 
 
 @router.post("/sql", response_model=SQLQueryResult)
@@ -198,7 +226,7 @@ def execute_sql(req: SQLQueryRequest) -> SQLQueryResult:
     )
 
 
-# ──────────────────────── Comparing the four paths ────────────────────────
+# ──────────────────────── Comparing the five paths ────────────────────────
 
 # One comparison at a time.  Two overlapping ones would each be timed while the
 # other was running, and both sets of numbers would be wrong without saying so.
@@ -459,12 +487,13 @@ def running_comparison() -> Optional[ComparisonRun]:
 def cancel_comparison() -> List[str]:
     """Stop the comparison in flight, and report what that took.
 
-    Three different mechanisms, because the paths are three different kinds of
+    Four different mechanisms, because the paths are four different kinds of
     client: the paths that have not started are stopped by a flag, a Presto query
-    is cancelled by the coordinator, and a Spark statement has its connection taken
-    away because PyHive cannot cancel one it is already waiting on.  Cassandra is
-    absent from the list on purpose: its legs are single-digit milliseconds, so
-    there is never one to stop.
+    is cancelled by the coordinator, a Spark statement has its connection taken
+    away because PyHive cannot cancel one it is already waiting on, and the cqlite
+    reader is asked to stop its own scan, since it is running in this process.
+    Cassandra is absent from the list on purpose: its legs are single-digit
+    milliseconds, so there is never one to stop.
 
     The run itself ends the moment its paths stop; the HTTP request that started it
     gets an ordinary response marked cancelled, if anything is still listening.
@@ -497,6 +526,15 @@ def cancel_comparison() -> List[str]:
                     actions.append(f"took the connection away from {name}")
             except Exception as e:
                 actions.append(f"could not stop {name}: {e}")
+
+    if "cqlite" in run["engines"]:
+        # No connection to take away, and none to rebuild afterwards: the scan is
+        # in this process and stops at its next partition when the flag is set.
+        try:
+            if cqlite_client.abort():
+                actions.append("stopped the cqlite scan")
+        except Exception as e:
+            actions.append(f"could not stop cqlite: {e}")
 
     if run["spark_statements"]:
         # Both halves are needed.  The abort above stops the dashboard waiting; this

@@ -6,9 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A runnable demonstration that one Cassandra dataset can serve transactional and analytical work without ETL copies, and that analytical scans need not touch the OLTP request path. Everything here exists to make that claim checkable, so **a change is not finished until it has been run against the stack and measured**. Numbers in the docs, the PR body and the UI copy are measurements from a real run, not estimates; if you cannot measure a claim, do not make it.
 
-## The four access paths
+## The five access paths
 
-The same rows are reachable four ways, and the difference between them is the whole point of the demo. Every part of `backend/app/db/` and the compare page exists to keep them comparable:
+The same rows are reachable five ways, and the difference between them is the whole point of the demo. Every part of `backend/app/db/` and the compare page exists to keep them comparable:
 
 | Path | Route | Property it demonstrates |
 | --- | --- | --- |
@@ -16,6 +16,7 @@ The same rows are reachable four ways, and the difference between them is the wh
 | `presto` | Presto → Cassandra connector → CQL | full SQL, distributed scan, still over the request path |
 | `spark` | Spark Thrift Server → spark-cassandra-connector → CQL | batch SQL over the request path |
 | `spark_bulk` | Spark Thrift Server → Cassandra Analytics → Sidecar → SSTable files | reads a coordinated snapshot directly; **cannot** contend with OLTP; rows are as of the snapshot, not now |
+| `cqlite` | DataFusion → cqlite → the live SSTable files, in the backend process | reads the files where they lie: no snapshot, no Sidecar and no JVM; **cannot** contend with OLTP; rows are as of the last flush, so what is still in a memtable is not read |
 
 Cassandra failing a query is often the correct, interesting result. Do not "fix" it by widening the SQL — the refusal is the finding, and the UI reports it as a decline rather than an error.
 
@@ -52,11 +53,13 @@ Frontend: `cd frontend && npm run build` — this runs `tsc -b` first, so it is 
 
 Backend: no test suite. `python3 -m py_compile backend/app/**/*.py` is the syntax check; correctness is verified by running queries against the stack. To run the backend on the host instead of in the network, set `CASSANDRA_TRANSLATE_ADDRESSES_TO=127.0.0.1` — otherwise the driver discovers `172.20.0.10` and cannot reach it.
 
+Rust: `cd cqlite-datafusion && cargo test --all && cargo fmt --all --check && cargo clippy --all-targets` — the reader has its own tests over committed fixture SSTables, and they run in seconds, so run them before rebuilding the backend image.
+
 Ports: dashboard `4000`, backend API and `/docs` `8000`, Cassandra `9042`, Sidecar `9043`, Presto `8088`, Spark master UI `8080`, Spark application UI `4040`, Thrift Server `10000`, Kafka `9092`.
 
 ## Testing
 
-There is one test suite and it is `.github/workflows/test-podman-compose.yaml`: a single job that builds the stack, waits on each service, then asserts behaviour through the CLIs and the dashboard API. The "Test Mission Control dashboard" step is the largest and covers the four paths.
+There is one test suite and it is `.github/workflows/test-podman-compose.yaml`: a single job that builds the stack, waits on each service, then asserts behaviour through the CLIs and the dashboard API. The "Test Mission Control dashboard" step is the largest and covers the five paths.
 
 CI is slow (~15 min to a first failure) and podman on the runner has no systemd, so healthchecks never leave "starting" — the workflow does its own ordering and waiting rather than trusting `depends_on: service_healthy`. **Run a step locally before pushing**; see the `ci-step` skill, which extracts a step from the YAML and runs it verbatim against the running stack.
 
@@ -72,9 +75,13 @@ Assertions must be structural, not timing-based, and must hold on a stack that i
 
 **The bulk reader takes a snapshot per read.** `backend/app/db/spark_client.py` derives the snapshot TTL from `spark_query_timeout_s` — Cassandra expires a snapshot on time regardless of who is reading, and a read that loses its snapshot mid-scan fails with "Required 1 replicas but only 0 responded". A caller may reuse the last snapshot (`reuse_snapshot`), which is refused when too little TTL remains. Registering the view and running the statement are one locked operation, because the view name is per-table and a second query would otherwise replace the first's snapshot mid-flight.
 
+**The cqlite reader is a Rust crate built into the backend image.** `cqlite-datafusion/` is a self-contained Cargo workspace that refers to nothing in this repository, so it can be offered upstream to cqlite as it stands; `backend/Dockerfile` builds it with maturin in a first stage and installs the wheel in the second, which is why the `backend` build context is the repository root. It reads `cassandra-data/` mounted read-only, in the backend's own process, and its answer is as of the last flush: an unflushed table has no file, so the path declines rather than returning nothing, and `data_age_s` says how far behind the answer is. Registration needs Cassandra once, for each table's `CREATE TABLE`, so the reader cannot parse files with a schema the cluster has since changed.
+
+**A predicate that names partitions is pushed into the reader.** `cqlite-datafusion/crates/cqlite-datafusion/src/predicate.rs` recognises equality and `IN` on every partition-key column, and reports those filters `Exact` so DataFusion drops them; the scan then seeks to each key through the BTI trie instead of walking the table and discarding rows. Measured: one shard of a 15-minute window took 2.9 s where the whole-table walk took 237 s. All the keys go into one merger rather than one merger per key, because the merger sorts them by token and prunes a generation once.
+
 **One comparison runs at a time** (`backend/app/routes/query.py`): two overlapping runs would each be timed while the other ran. The lock records what is running, so the Health page can show and cancel it. Cancelling a Spark query means closing its socket (`shutdown(SHUT_RDWR)`, not `close()`) *and* killing the job group via the Spark UI REST API — HiveServer2 leaves jobs running otherwise.
 
-**Reported figures are labelled with what they measure.** `snapshot_bytes` is the size of the snapshot a bulk read was taken over, which is not what it consumed when the statement names partitions; a MB/s rate is therefore quoted only for a statement with no `WHERE`. Likewise the compare presets group by `event_type` and return the five commonest of twenty, so the sum of their rows is a quarter of the window rather than its total. Both mistakes have been made here and corrected; see the `measure` skill for how each was caught.
+**Reported figures are labelled with what they measure.** `snapshot_bytes` is the size of the snapshot a bulk read was taken over, and `sstable_bytes` the size of the live files a cqlite read opened; neither is what the read consumed when the statement names partitions, so a MB/s rate is quoted only for a statement with no `WHERE`. Likewise the compare presets group by `event_type` and keep five of the twenty types, ordered by name, so the sum of their rows is about a quarter of the window rather than its total. Both mistakes have been made here and corrected; see the `measure` skill for how each was caught.
 
 ## Conventions
 

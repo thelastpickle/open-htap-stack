@@ -365,6 +365,18 @@ jobs:
           if "spark_bulk" in required and not bulk.get("error"):
               if not bulk.get("snapshot_bytes"):
                   problems.append("spark_bulk answered without saying how many bytes it scanned")
+          # The cqlite path reads the live files in place, so it reports the same
+          # volume without a snapshot to name — and one figure the others cannot,
+          # how far behind the flush its answer is.  A run that named no file read
+          # nothing, and must not be allowed to look like a fast path.
+          live = engines.get("cqlite") or {}
+          if "cqlite" in required and not live.get("error"):
+              if not live.get("sstable_files"):
+                  problems.append("cqlite answered without naming one SSTable file")
+              if not live.get("sstable_bytes"):
+                  problems.append("cqlite answered without saying how large those files are")
+              if live.get("data_age_s") is None:
+                  problems.append("cqlite answered without saying how stale the files are")
           if not (baseline or {}).get("samples"):
               problems.append("no OLTP reference read before the run")
           if mode == "parallel" and not (combined or {}).get("samples"):
@@ -392,6 +404,19 @@ jobs:
                   rate = result["snapshot_bytes"] / 1e3 / max(result["query_time_ms"], 1)
                   quote_rate = scanned_all and mb >= 10
                   volume = f" [{mb:.1f} MB snapshot{f', {rate:.0f} MB/s' if quote_rate else ''}]"
+              elif result.get("sstable_bytes"):
+                  # The same caveat on the rate, for the same reason, and the age of
+                  # the newest file besides it: this path answers as of the last
+                  # flush, so the log should never show a timing without it.
+                  mb = result["sstable_bytes"] / 1e6
+                  scanned_all = "WHERE" not in (result.get("sql") or "").upper()
+                  rate = result["sstable_bytes"] / 1e3 / max(result["query_time_ms"], 1)
+                  quote_rate = scanned_all and mb >= 10
+                  volume = (
+                      f" [{result['sstable_files']} live files, {mb:.1f} MB"
+                      f"{f', {rate:.0f} MB/s' if quote_rate else ''};"
+                      f" flushed {result.get('data_age_s')}s ago]"
+                  )
               print(
                   f"  {name}: {result['query_time_ms']}ms, {result['row_count']} rows{volume}{cost}"
                   if answered
@@ -437,6 +462,19 @@ jobs:
             || { echo "::error::the frontend is not proxying /api to the backend"; exit 1; }
           echo "✓ Dashboard served, and proxying the API"
 
+          echo -e "\n=== Flush, so the live-file reader has files to read ==="
+          # The cqlite path reads what Cassandra has written to disk, and nothing
+          # else.  On a stack minutes old the fleet table has never filled a memtable,
+          # so it has no file at all and the path rightly declines every query about
+          # it.  Flushing makes the comparisons below deterministic instead of
+          # dependent on when Cassandra happened to flush.  It is also what an
+          # operator would do, and it does not favour the path: it still reads no
+          # more than what is on disk, and the age it reports says so.
+          podman exec cassandra nodetool flush demo
+          podman exec cassandra nodetool tablestats demo.drone_latest_status 2>/dev/null \
+            | grep -E "SSTable count|Space used \(live\)" || true
+          echo "✓ The demo keyspace is on disk"
+
           echo -e "\n=== Every service reachable from the backend ==="
           curl -s http://localhost:8000/api/platform/health | tee "$TMP_DIR/platform-health.json"
           echo
@@ -452,14 +490,14 @@ jobs:
           curl -s http://localhost:8000/api/overview/kpis | python3 -m json.tool | head -20
           echo "✓ KPIs populated"
 
-          echo -e "\n=== One bounded read, all four access paths ==="
+          echo -e "\n=== One bounded read, all five access paths ==="
           # Spark starts a job for its first query, and the bulk reader takes a
           # snapshot before it reads, so allow a generous window.
           curl -s --max-time 600 -X POST http://localhost:8000/api/query/benchmark \
             -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-bounded.json" \
             > "$TMP_DIR/bounded-result.json"
           python3 -m json.tool < "$TMP_DIR/bounded-result.json"
-          python3 "$TMP_DIR/check-benchmark.py" cassandra presto spark spark_bulk \
+          python3 "$TMP_DIR/check-benchmark.py" cassandra presto spark spark_bulk cqlite \
             < "$TMP_DIR/bounded-result.json"
           echo "✓ Every access path answered the bounded read"
 
@@ -471,7 +509,7 @@ jobs:
             -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-fleet-group.json" \
             > "$TMP_DIR/fleet-group-result.json"
           python3 -m json.tool < "$TMP_DIR/fleet-group-result.json"
-          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk \
+          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk cqlite \
             < "$TMP_DIR/fleet-group-result.json"
           grep -q "PRIMARY KEY" "$TMP_DIR/fleet-group-result.json" \
             || { echo "::error::Cassandra was expected to decline the GROUP BY; it did not"; exit 1; }
@@ -484,6 +522,13 @@ jobs:
           # was written.  It also says whether that window has closed: this stack is
           # minutes old, so every event so far is in the window still filling, and the
           # equality check below only applies once one has closed.
+          #
+          # Flush again first, and immediately before asking which window: the reader
+          # of the live files can only answer about a window whose rows have reached
+          # disk, and a bucket that began after the earlier flush would have none of
+          # them there.  Flushing here, rather than trusting the flush above, is what
+          # makes that independent of where the 15-minute boundary happens to fall.
+          podman exec cassandra nodetool flush demo events
           curl -sf --max-time 30 http://localhost:8000/api/query/window > "$TMP_DIR/window.json" \
             || { echo "::error::the backend could not say which event window to ask about"; exit 1; }
           python3 -m json.tool < "$TMP_DIR/window.json"
@@ -506,7 +551,7 @@ jobs:
           # Cassandra is not required to answer: the grouping is still by a non-key
           # column, so it declines.  Bounding the question does not make it expressible,
           # which is the distinction this preset draws.
-          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk \
+          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk cqlite \
             < "$TMP_DIR/window-result.json"
           python3 - "$TMP_DIR/window-result.json" "$TMP_DIR/window.json" << 'PY'
           import json, sys
@@ -532,16 +577,135 @@ jobs:
           if window["closed"]:
               if len(set(totals.values())) > 1:
                   problems.append(f"a closed window gave different totals per path: {totals}")
+          # The live-file reader is held to a different rule, and is checked apart from
+          # the others for that reason: it sees only what has been flushed, so it may
+          # legitimately report fewer events than a path that reads through the
+          # coordinator.  More than the most any of them reported is the failure worth
+          # catching, because that is what a merge counting a superseded cell twice
+          # would look like.
+          live = document.get("cqlite") or {}
+          live_total = sum(row[1] for row in live.get("rows") or [])
+          if live.get("error") or not live_total:
+              problems.append(f"cqlite did not answer the windowed query: {live.get('error')}")
+          elif totals and live_total > max(totals.values()):
+              problems.append(
+                  f"cqlite counted {live_total} events, more than any path that reads"
+                  f" through the coordinator: {totals}"
+              )
           if problems:
               print("::error::windowed comparison: " + "; ".join(problems))
               sys.exit(1)
           if window["closed"]:
-              print(f"  window {window['bucket']} has closed, and every analytical path agreed to the row: {sorted(set(totals.values()))[0]:,} events across the five types the preset returns")
+              print(f"  window {window['bucket']} has closed, and every path reading through the coordinator agreed to the row: {sorted(set(totals.values()))[0]:,} events across the five types the preset returns")
           else:
               print(f"  window {window['bucket']} is still filling — nothing has closed since ingest began —"
                     f" so the totals are only required to be non-empty: {totals}")
+          print(f"  cqlite read {live_total:,} of them, as of a flush {live.get('data_age_s')}s ago")
           PY
           echo "✓ One window, answered by every path that can express it"
+
+          echo -e "\n=== The rows read out of the live files are Cassandra's rows ==="
+          # A count agreeing proves less than it looks: a merge that returned a
+          # superseded cell, or a row twice, can still add up.  So take the rows the
+          # live-file reader actually produced for one partition, then ask Cassandra
+          # for those same event_ids by primary key and compare value for value.
+          #
+          # The direction of the check is deliberate.  Every row this path returns must
+          # be in Cassandra; the reverse does not hold, because a row written since the
+          # flush is in a memtable and in no file.
+          python3 - "$TMP_DIR/window.json" > "$TMP_DIR/identity-cqlite.json" << 'PY'
+          import json, sys
+          window = json.load(open(sys.argv[1]))
+          sql = (
+              "SELECT event_id, event_type, temp_internal_c FROM events"
+              f" WHERE event_bucket = '{window['bucket']}' AND shard = 0 LIMIT 10"
+          )
+          print(json.dumps({"sql": sql, "limit": 10, "engines": ["cqlite"]}))
+          PY
+          curl -s --max-time 300 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/identity-cqlite.json" \
+            > "$TMP_DIR/identity-cqlite-result.json"
+          python3 -m json.tool < "$TMP_DIR/identity-cqlite-result.json"
+          python3 - "$TMP_DIR/identity-cqlite-result.json" "$TMP_DIR/window.json" \
+            > "$TMP_DIR/identity-cassandra.json" << 'PY'
+          import json, sys
+          result = json.load(open(sys.argv[1])).get("cqlite") or {}
+          window = json.load(open(sys.argv[2]))
+          if result.get("error") or not result.get("rows"):
+              print(f"::error::cqlite read no row of one partition to check: {result.get('error')}",
+                    file=sys.stderr)
+              sys.exit(1)
+          ids = [row[result["columns"].index("event_id")] for row in result["rows"]]
+          listed = ", ".join(ids)
+          sql = (
+              "SELECT event_id, event_type, temp_internal_c FROM events"
+              f" WHERE event_bucket = '{window['bucket']}' AND shard = 0"
+              f" AND event_id IN ({listed}) LIMIT 10"
+          )
+          print(json.dumps({"sql": sql, "limit": 10, "engines": ["cassandra"]}))
+          PY
+          curl -s --max-time 300 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/identity-cassandra.json" \
+            > "$TMP_DIR/identity-cassandra-result.json"
+          python3 -m json.tool < "$TMP_DIR/identity-cassandra-result.json"
+          python3 - "$TMP_DIR/identity-cqlite-result.json" "$TMP_DIR/identity-cassandra-result.json" << 'PY'
+          import json, sys
+          # A float32 column is one value on disk and two renderings above it, so the
+          # temperatures are compared with a tolerance rather than for equality: this
+          # reader prints the whole double expansion of the stored float where the CQL
+          # driver may not.  A tenth of a degree is far tighter than the difference
+          # between two rows and far wider than that rendering.
+          TOLERANCE_C = 0.1
+          def keyed(document, name):
+              result = document.get(name) or {}
+              if result.get("error") or not result.get("rows"):
+                  print(f"::error::{name} answered nothing to compare: {result.get('error')}")
+                  sys.exit(1)
+              index = {column: i for i, column in enumerate(result["columns"])}
+              return {
+                  str(row[index["event_id"]]): (
+                      row[index["event_type"]], row[index["temp_internal_c"]]
+                  )
+                  for row in result["rows"]
+              }, len(result["rows"])
+
+          live, live_rows = keyed(json.load(open(sys.argv[1])), "cqlite")
+          oltp, _ = keyed(json.load(open(sys.argv[2])), "cassandra")
+          problems = []
+          if live_rows != len(live):
+              problems.append(f"cqlite returned {live_rows} rows for {len(live)} distinct event_ids, so the merge returned one twice")
+          for event_id, (event_type, temp) in live.items():
+              if event_id not in oltp:
+                  problems.append(f"{event_id} was read out of the files but Cassandra does not have it")
+                  continue
+              their_type, their_temp = oltp[event_id]
+              if event_type != their_type:
+                  problems.append(f"{event_id}: event_type {event_type!r} in the files, {their_type!r} in Cassandra")
+              if abs((temp or 0) - (their_temp or 0)) > TOLERANCE_C:
+                  problems.append(f"{event_id}: temp_internal_c {temp} in the files, {their_temp} in Cassandra")
+          if problems:
+              print("::error::the live files and Cassandra disagree: " + "; ".join(problems))
+              sys.exit(1)
+          print(f"  {len(live)} rows read out of the live SSTable files, each present in Cassandra with the same values")
+          PY
+          echo "✓ The merge over the live files agrees with the request path, row by row"
+
+          echo -e "\n=== The backend can read the data files and cannot write them ==="
+          # The reader parses the dataset the other four paths are reading, so the
+          # mount is read-only.  Asserted because a writable mount would be invisible
+          # until something corrupted the files, and because the flag is one word in
+          # podman-compose.yml that a later edit could drop.
+          # Read from the running configuration, so the two cannot drift apart.
+          DATA_DIR=$(podman exec backend python -c 'from app.config import settings; print(settings.cqlite_data_dir)')
+          echo "the backend parses $DATA_DIR"
+          podman exec backend sh -c "ls '$DATA_DIR/demo' | head -5" \
+            || { echo "::error::the backend cannot read the Cassandra data directory it parses"; exit 1; }
+          if podman exec backend sh -c "touch '$DATA_DIR/demo/.write-probe'" 2>/dev/null; then
+            podman exec backend sh -c "rm -f '$DATA_DIR/demo/.write-probe'" || true
+            echo "::error::the backend can write the Cassandra data directory; the mount must be read-only"
+            exit 1
+          fi
+          echo "✓ The data files are readable from the backend and not writable"
 
           echo -e "\n=== The bulk reader can re-read its last snapshot instead of taking one ==="
           # Taking a snapshot hardlinks every SSTable, so it is a fixed cost per read
@@ -619,14 +783,14 @@ jobs:
           python3 - "$TMP_DIR/parallel-result.json" << 'PY'
           import json, sys
           document = json.load(open(sys.argv[1]))
-          extra = [name for name in ("presto", "spark") if document.get(name) is not None]
+          extra = [name for name in ("presto", "spark", "cqlite") if document.get(name) is not None]
           if extra:
               print(f"::error::asked for two paths, but the response also carries {extra}")
               sys.exit(1)
           if document.get("mode") != "parallel":
               print(f"::error::asked to run in parallel, response says {document.get('mode')!r}")
               sys.exit(1)
-          print("  the two paths not asked for are absent, and the mode is reported back")
+          print("  the three paths not asked for are absent, and the mode is reported back")
           PY
           echo "✓ A subset of paths, run together, is honoured and labelled"
 
@@ -657,7 +821,7 @@ jobs:
           done
           [ -n "$WINNER" ] && [ "$CODE_A" != "$CODE_B" ] \
             || { echo "::error::expected one 200 and one 409, got $CODE_A and $CODE_B"; exit 1; }
-          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk \
+          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk cqlite \
             < "$TMP_DIR/concurrent-$WINNER.json"
           echo "✓ The overlapping comparison was refused, and the other still completed"
 
@@ -720,7 +884,7 @@ jobs:
                   )
           # A cancelled run still answers: the paths that got as far as running report
           # why they stopped, and the ones that never started are absent.
-          for name in ("presto", "spark", "spark_bulk"):
+          for name in ("presto", "spark", "spark_bulk", "cqlite"):
               result = run.get(name)
               if result and not result.get("error"):
                   problems.append(f"{name} answered normally, so nothing was actually stopped")
@@ -769,7 +933,7 @@ jobs:
           echo "✓ Work in flight is visible, stoppable, and leaves nothing behind"
 
           echo -e "\n=== The whole event history, grouped ==="
-          # Minutes, not seconds: this groups every event ingested so far, on three
+          # Minutes, not seconds: this groups every event ingested so far, on four
           # paths in sequence.  The dashboard makes this preset opt-in for that
           # reason; CI runs it because it is the path the bulk reader exists for.
           #
@@ -786,7 +950,7 @@ jobs:
             -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-aggregate.json" \
             > "$TMP_DIR/aggregate-result.json"
           python3 -m json.tool < "$TMP_DIR/aggregate-result.json"
-          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk \
+          python3 "$TMP_DIR/check-benchmark.py" presto spark spark_bulk cqlite \
             < "$TMP_DIR/aggregate-result.json"
           echo "✓ The analytical paths scanned the whole history"
 

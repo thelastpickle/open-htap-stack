@@ -1,6 +1,6 @@
 # Mission Control: the dashboard
 
-A web dashboard over the running stack, at <http://localhost:4000>. It exists to make one claim visible: that the transactional store, the analytical engine and both batch paths are reading the same data, at the same moment, with nothing copied between them.
+A web dashboard over the running stack, at <http://localhost:4000>. It exists to make one claim visible: that the transactional store, the analytical engine, both batch paths and the reader inside the dashboard itself are reading the same data, at the same moment, with nothing copied between them.
 
 Everything on every page is a query against the running stack. &emsp;There are no fixtures, no seeded screenshots and no invented numbers. &emsp;Where a figure cannot be measured the page shows a dash.
 
@@ -23,6 +23,16 @@ Everything on every page is a query against the running stack. &emsp;There are n
                         └── Sidecar: snapshot ──┘
 ```
 
+The fifth path is inside the box the dashboard already occupies, which is why it does not appear above:
+
+```
+                     FastAPI backend :8000
+                        │  cqlite + DataFusion, in this process
+                        ▼
+                     cassandra-data/, mounted read-only
+                        └── the live SSTable files, parsed where they lie
+```
+
 ## The pages
 
 | Page         | What it shows                                                              | Where the data comes from                                                        |
@@ -30,7 +40,7 @@ Everything on every page is a query against the running stack. &emsp;There are n
 | **Overview** | Fleet indicators, ingestion volume, service health, the latest alerts       | One bounded scan of `drone_latest_status`, plus the `ingestion_counts` counters    |
 | **Map**      | Live positions, restricted airspace, and an asset's recorded flight path    | `drone_latest_status` for positions; `drone_events_by_entity` for the path         |
 | **Alerts**   | Zone-proximity and breach alerts, newest first                             | `alerts_by_bucket`, read one hourly partition at a time                           |
-| **Explore**  | SQL console, vector search, and the four-path comparison                    | Whichever path you pick; all four read the same Cassandra data                    |
+| **Explore**  | SQL console, vector search, and the five-path comparison                    | Whichever path you pick; all five read the same Cassandra data                    |
 | **Health**   | Reachability, latency by access path, and the work in flight                | A connection probe per service, one timed query per path, and each engine's own query list |
 | **Settings** | Fleet size, event rate, outlier share, pause, and the breach scenario      | Held in the backend; the data producer polls and adopts them                      |
 
@@ -38,7 +48,7 @@ Everything on every page is a query against the running stack. &emsp;There are n
 
 Explore → **Compare engines** runs one statement down the access paths you choose and reports what each took. &emsp;The statement is rewritten per dialect, and the rewrite is shown above each result, so the comparison is inspectable rather than asserted.
 
-Two controls decide what is being asked. &emsp;**Which paths**: all four, or a subset (two against each other, or one on its own as a reference). &emsp;**How to run them**:
+Two controls decide what is being asked. &emsp;**Which paths**: all five, or a subset (two against each other, or one on its own as a reference). &emsp;**How to run them**:
 
 - **One at a time**, the default. &emsp;Each path is timed with nothing else the dashboard controls running, so its figure is its own cost, and the single-partition read sampled four times a second beside it is the price that path alone charged the transactional path.
 - **All at once.** The paths contend deliberately. &emsp;Every figure inflates, which is the point: this is the mode that shows what the paths cost each other rather than what each costs alone. &emsp;The probe becomes one measurement covering the whole window, because while the paths overlap that cost belongs to all of them and to none in particular. &emsp;Timings from the two modes are not comparable, so the page states which mode produced the ones on screen. &emsp;Expect it to be slower in wall clock than running the paths in turn, and expect a path starved long enough to give up rather than finish: that is the same contention, reported rather than hidden.
@@ -54,11 +64,11 @@ Taking a snapshot hardlinks every SSTable of the table, so it costs the same whe
 | One closed window, fresh | 4.07 s | 0.92 s |
 | One closed window, reusing | 3.04 s | 0.05 s |
 
-So it is a quarter of a bounded read, and a larger share the more files the table has; not most of the cost, but the part that does not shrink when the question does. &emsp;What reuse spends is currency: the rows are as of when that snapshot was taken rather than now, so the bulk reader stops answering the same instant as the other three. &emsp;That is why it is off by default, and why every bulk result says whether its snapshot was reused and how old it was.
+So it is a quarter of a bounded read, and a larger share the more files the table has; not most of the cost, but the part that does not shrink when the question does. &emsp;What reuse spends is currency: the rows are as of when that snapshot was taken rather than now, so the bulk reader stops answering the same instant as the paths that read through Cassandra. &emsp;That is why it is off by default, and why every bulk result says whether its snapshot was reused and how old it was.
 
 Reuse is refused, and a fresh snapshot taken, in three cases: nothing has been taken yet, what was taken has since gone, or too little of its time-to-live (TTL) is left to survive the read. &emsp;That last one matters because Cassandra expires a snapshot on time regardless of who is reading it, and a read that loses its snapshot half way through fails outright.
 
-It pairs particularly well with the window preset once that window has closed, and for a reason worth understanding. &emsp;A finished window cannot change, so any snapshot taken *after* it closed holds all of it: measured, the three analytical paths still agreed to the row, on the same five group counts totalling 448,555 events, with the bulk reader reading a snapshot 63 seconds old. &emsp;The staleness costs nothing there. &emsp;A snapshot taken *during* the window being queried is a different matter: it holds only part of it, and then the bulk reader's total will be lower than the others'. &emsp;The reported age is what tells the two cases apart.
+It pairs particularly well with the window preset once that window has closed, and for a reason worth understanding. &emsp;A finished window cannot change, so any snapshot taken *after* it closed holds all of it: measured before cqlite was added, the three analytical paths of the time still agreed to the row, on the same five group counts totalling 448,555 events, with the bulk reader reading a snapshot 63 seconds old. &emsp;The staleness costs nothing there. &emsp;A snapshot taken *during* the window being queried is a different matter: it holds only part of it, and then the bulk reader's total will be lower than the others'. &emsp;The reported age is what tells the two cases apart.
 
 Each path holds its own connection, including the two Spark paths, which is what lets them genuinely overlap rather than queueing behind a shared HiveServer2 session.
 
@@ -74,8 +84,9 @@ The paths are not interchangeable, and that is the point:
 | **Presto** | CQL request path | Full SQL, distributed scan. Shares the coordinator with live ingest. |
 | **Spark SQL** | CQL request path, via spark-cassandra-connector | Full SQL in a Spark job. Per-partition work, and anything you want to hand to Spark afterwards. |
 | **Spark bulk reader** | SSTable files, via the Sidecar | Reads a coordinated snapshot straight off disk. Never enters the request path, so a scan here cannot contend with transactional latency. |
+| **cqlite** | The live SSTable files, in the dashboard's own process | Full SQL, planned and executed by DataFusion over files cqlite parses in place. No snapshot, no Sidecar and no JVM, so the whole path is one library. Answers as of the last flush. |
 
-Four presets of deliberately different size, because one query cannot show what four paths are for, and because the size of the question is most of the answer:
+Four presets of deliberately different size, because one query cannot show what five paths are for, and because the size of the question is most of the answer:
 
 - **Latest state**, milliseconds: one bounded read of `drone_latest_status`. Cassandra answers in single-digit milliseconds; everything else pays for planning or for starting a job.
 - **Group the fleet**, under a second: `GROUP BY` over the current fleet only. &emsp;This is the smallest question CQL cannot express, so it is the default way to show the refusal without anybody waiting: *"Group by is currently only supported on the columns of the PRIMARY KEY"*.
@@ -84,34 +95,42 @@ Four presets of deliberately different size, because one query cannot show what 
 
 Which window is asked about comes from the backend's `/api/query/window`, not from the page, because the answer depends on the data: a bucket exists only because the sink wrote it. &emsp;It prefers a window that has **closed**, since a closed window cannot change while the paths read it, which is what makes the next paragraph possible. &emsp;But a demo minutes old has no closed window holding anything, because for the first quarter of an hour after a wipe every event is in the window still filling, so it walks back from the last complete window to the newest one with events in it, up to two hours, and falls back to the window now filling when there is none. &emsp;The page says which it got, because that is the difference between "these totals must agree" and "they differ by whatever arrived in between".
 
-The table below sets the same grouping bounded to one closed window against the same grouping over the whole history. &emsp;Both presets return the five commonest event types, so their totals are the sum of those five groups rather than the whole window: the producer emits twenty types round-robin, and a 15-minute window holds about 1.8M events at the demo's ~2,000/s; measured, one closed window held 1,794,153.
+The table below sets the same grouping bounded to one closed window against the same grouping over the whole history. &emsp;Both presets order by `event_type` and keep five of the twenty types the producer emits round-robin, so their totals are the sum of those five groups rather than the whole window: a 15-minute window holds about 1.8M events at the demo's ~2,000/s, and one closed window measured 1,794,153.
 
 | Path | One closed window | Whole history |
 | --- | --- | --- |
 | Cassandra | declines the grouping | declines the grouping |
-| Presto | 3.1 s | 6.7 s |
-| Spark SQL, connector | 10.0 s | 7.2 s |
-| Spark bulk reader | 9.2 s | 23.6 s |
+| Presto | 8.8 s | 30.5 s |
+| Spark SQL, connector | 22.2 s | 42.8 s |
+| Spark bulk reader | 19.8 s | 94.2 s |
+| cqlite | 74.7 s | 412.5 s |
 
-**All three analytical paths returned the same five counts, to the row**, 448,610 events across them. &emsp;That is the property a closed window buys and the unbounded presets cannot offer: they see the table grow underneath them and disagree by a few thousand rows, while a finished window is immutable and they agree to the row. &emsp;Continuous integration asserts that equality whenever the window it was given had closed, and says so when it had not: a fresh stack is minutes old, so the assertion would otherwise be claiming that no event arrived mid-comparison, which is false by design.
+Each column is its own sequential run on the same stack, one path at a time, with the ingest running throughout.
 
-**The connector is slower with the bound, and the reason is worth knowing.** It prunes correctly, and Spark reports it reading exactly the window's rows, but it plans a partition-key query as a *single* task, where the unbounded scan splits into seventeen. &emsp;So a third of the data is read by one core while four sit idle. &emsp;Pruning and parallelism are not the same thing, and this is the path where they pull against each other; bounding the question on the other three makes them two to three times faster.
+**All four analytical paths returned the same five counts, to the row**, 446,778 events across them for the window `2026-08-22T12:30`. &emsp;That is the property a closed window buys and the unbounded presets cannot offer: they see the table grow underneath them and disagree by a few thousand rows, while a finished window is immutable and they agree to the row. &emsp;Continuous integration asserts that equality whenever the window it was given had closed, and says so when it had not: a fresh stack is minutes old, so the assertion would otherwise be claiming that no event arrived mid-comparison, which is false by design. &emsp;cqlite joins that agreement only because the step flushes the table first; without a flush its answer stops at the newest file on disk, and the reported `data_age_s` is what says so.
 
-One measured run of the last preset, one path at a time, over 36.4M events on a seven-core laptop with the ingest running, gives the shape of it:
+The two file readers agreed with each other over the whole history as well, on all five counts, where the two request-path scans came in lower in the order they ran: 4,397,530 for Presto, 4,410,734 for the connector, then 4,420,748 for the bulk reader and for cqlite. &emsp;The rising figures are the table growing under each scan in turn. &emsp;The last two matching to the row is what should happen when no flush falls between them: the Sidecar snapshot hardlinks the files cqlite went on to read, and cqlite reported its newest file as 95 s old, older than the bulk read before it.
 
-| Path | Answered in | Point read p50 | p95 | max |
-| --- | --- | --- | --- | --- |
-| *before the run* | — | 2.2 ms | 2.7 ms | 2.9 ms |
-| Cassandra | declines | — | — | — |
-| Presto | 241 s | 2.6 ms | 13.5 ms | 72 ms |
-| Spark SQL, connector | 113 s | 2.9 ms | 7.0 ms | 96 ms |
-| Spark bulk reader | 147 s | 2.3 ms | 5.4 ms | 357 ms |
+**cqlite is the slowest path here, and its own figures say why.** Over the whole history it merged 19 live files of 3,241.1 MB at 8 MB/s where the bulk reader read a 3,256.3 MB snapshot at 35 MB/s: near enough the same bytes, a quarter of the throughput. &emsp;Neither statement has a `WHERE`, which is the only case where a rate from those figures means anything. &emsp;Bounding the question is where this path changes character: it recognises equality and `IN` on the partition key and seeks each key through the file's index, so one shard of a window took 2.9 s against 237 s for the same count without the bound.
 
-The bulk reader's figure here predates the Sidecar concurrency fix described under *What limits the bulk reader*; the same path is now about 1.9× faster than this table implies.
+**An earlier run over a smaller history showed the connector *slower* with the bound**, 10.0 s against 7.2 s, and the reason is worth keeping. &emsp;It prunes correctly, and Spark reports it reading exactly the window's rows, but it plans a partition-key query as a *single* task where the unbounded scan splits into seventeen. &emsp;So a third of the data is read by one core while four sit idle. &emsp;Pruning and parallelism are not the same thing, and this is the path where they pull against each other.
 
-Read the right column, not the middle one. &emsp;The bulk reader is not the fastest here and the page does not pretend otherwise: on one node, at this scale, it is not. &emsp;What it is, is the only path that leaves point-read latency where it found it, with p50 unchanged and p95 lowest of the three, because its scan reads SSTable files rather than entering the request path. &emsp;Its one outlier is the snapshot: hardlinking the live SSTables is a brief pass on the node, so expect a single spike at the start and nothing after it. &emsp;The two paths that read through Cassandra move p95 by 2.6× and 5× instead, which on a single shared node is exactly what should happen.
+The whole-history run above, on a seven-core laptop over about 17.7M events, also carries the measurement the mode exists for: a point read sampled throughout each path's scan, and for three seconds beforehand as a reference.
 
-Two things are worth watching beyond the clock. &emsp;The paths that read through Cassandra see the table grow underneath them while they scan, so their totals differ from each other: 1,833,893 against 1,851,178 against 1,857,129 for the same group above; the bulk reader answers from one snapshot, so its groups are consistent with each other. &emsp;And none of these figures is a benchmark: this is one node sharing its cores with Presto, Spark and a live ingest. &emsp;Given more nodes the three analytical paths scale out and the transactional one does not change at all, which is the reason for separating them.
+| Path | Answered in | Point read p50 | p95 | max | Reads sampled |
+| --- | --- | --- | --- | --- | --- |
+| *before the run* | — | 3.1 ms | 4.1 ms | 114.7 ms | 12 |
+| Cassandra | declines | — | — | — | — |
+| Presto | 30.5 s | 10.1 ms | 29.5 ms | 36.6 ms | 116 |
+| Spark SQL, connector | 42.8 s | 5.5 ms | 11.7 ms | 20.6 ms | 167 |
+| Spark bulk reader | 94.2 s | 6.9 ms | 23.4 ms | 1,080.9 ms | 355 |
+| cqlite | 412.5 s | 3.6 ms | 12.3 ms | 395.3 ms | 1,610 |
+
+Read the right-hand columns, not the "answered in" one. &emsp;Neither file reader is fastest here, and the page does not pretend otherwise: on one node, at this scale, neither is. &emsp;What they are is the two paths that leave the point read nearest where they found it, a median of 3.6 ms for cqlite and 6.9 ms for the bulk reader against a 3.1 ms reference, where Presto reading through the coordinator moved it to 10.1 ms. &emsp;The bulk reader's 1.08 s outlier is the snapshot: hardlinking the live SSTables is a brief pass on the node, so expect one spike at the start and nothing after it. &emsp;cqlite takes no snapshot and has no equivalent pass; its 395 ms maximum is a shared machine's cores, not the request path, which is also the honest limit of the claim on a laptop.
+
+Compare the medians rather than the tails, for two reasons. &emsp;Each path is sampled only while it runs, so the row counts differ by more than an order of magnitude and a longer scan has more chance to catch an unlucky read. &emsp;And the reference itself is twelve reads with a 114.7 ms maximum in them, which is the unevenness the page warns about rather than a floor worth quoting.
+
+None of these figures is a benchmark: this is one node sharing seven cores with Presto, Spark, the dashboard's own reader and a live ingest. &emsp;Given more nodes the analytical paths scale out and the transactional one does not change at all, which is the reason for separating them.
 
 ### What bounds a run
 
@@ -123,17 +142,19 @@ Three limits decide when the dashboard stops waiting. &emsp;Running the paths to
 
 A path that fails is reported with how long it ran first, because a path declining a query in a millisecond and a path starved out after a quarter of an hour are different findings.
 
-**All four paths at once, over the whole history, does not finish here, and that is the finding.** One measured run: 27 minutes of wall clock, Presto answering in 17 m 44 s against 241 s alone, and both Spark paths giving up: with seven cores between four scans of 36M rows, the Spark jobs outlast the 900 s guard. &emsp;The Thrift Server log shows the connector's job running the whole 27 minutes and finishing after the dashboard had stopped waiting for it. &emsp;Raising the guard until they finish would trade a demonstrable answer for an hour of waiting and a snapshot pinning SSTables for most of it, so the limit stays and the page says what to expect. &emsp;What survives is the measurement the mode exists for: over 6,335 point reads spanning the window, p50 4.6 ms and p95 23.7 ms against 2.3 ms and 2.9 ms taken just before: the transactional path made twice as slow at the median and eight times at the tail, with no read failing. &emsp;Select fewer paths and they contend and still finish.
+**All five paths at once, over the whole history, is a run whose every figure is inflated by the other four.** One measured run finished in 6 m 42 s, with Presto answering in 58.0 s, the connector in 3 m 5.8 s, the bulk reader in 3 m 16.3 s and cqlite in 6 m 42.3 s, none of them starved out. &emsp;Presto paid 1.9× its sequential figure for the company, the connector 4.3× and the bulk reader 2.1×; cqlite came in level with its own, 402 s here against 412 s alone on a slightly larger table, which is what the timings predict: the other four were all finished by 3 m 16 s, so half of its scan had the machine to itself. &emsp;An earlier run over 36.4M events did not finish at all: Presto took 17 m 44 s against 241 s alone, and both Spark paths outlasted the 900 s guard, with the Thrift Server log showing the connector's job still running after the dashboard had stopped waiting for it. &emsp;That outcome is still reachable on a larger table, and raising the guard until such jobs finish would trade a demonstrable answer for a snapshot pinning SSTables for most of an hour, so the limit stays and a path that gives up is reported with the time it ran. &emsp;What survives either way is the measurement the mode exists for: over 1,534 point reads spanning the run, p50 5.1 ms against 5.5 ms taken just before, one read at 1.9 s, and none failing. &emsp;Read that median rather than the tails: the reference was eleven reads with a 209 ms maximum among them, so the pair of medians is the only like-for-like comparison the run offers.
 
 ## Seeing and stopping what is running
 
 The Health page carries the operator's half of the dashboard: what the engines are working on, and the controls to stop it. &emsp;Each engine is asked directly rather than the dashboard listing what it submitted, so work it knows nothing about appears too: a query from another browser tab, or a `presto-cli` session in a container, which is usually what you want to know when the dashboard has gone slow for no reason of its own. &emsp;Presto's coordinator and Spark's application UI are both read over HTTP rather than through the dashboard's own connections, because the one query worth asking about is the one holding the connection that would answer.
 
-- **A comparison in flight** is shown with its age, its mode, and which paths have answered so far, since that is what a 409 on Explore is about. &emsp;**Stop it** ends it: Presto's query is cancelled by its coordinator, each Spark path has its connection cut, and the Spark jobs are killed as well. &emsp;Both halves are needed. &emsp;Cutting the connection stops the dashboard waiting, but Spark carries on working for a session that has gone, and an orphaned job keeps the cores the next comparison would be timed against. &emsp;The run's own request returns at once, marked cancelled, with each path saying which of the two happened to it.
+- **A comparison in flight** is shown with its age, its mode, and which paths have answered so far, since that is what a 409 on Explore is about. &emsp;**Stop it** ends it: Presto's query is cancelled by its coordinator, each Spark path has its connection cut, the Spark jobs are killed as well, and the cqlite scan is told to stop. &emsp;Both halves are needed. &emsp;Cutting the connection stops the dashboard waiting, but Spark carries on working for a session that has gone, and an orphaned job keeps the cores the next comparison would be timed against. &emsp;The run's own request returns at once, marked cancelled, with each path saying which of the two happened to it.
 - **Any query** can be cancelled on its own, by the handle its engine gave it: a Presto `query_id` or a Spark job id. &emsp;Spark's jobs also show task progress, which is the only honest progress bar in the stack.
 - **Reconnect** rebuilds this backend's connection to a service, two of them for Spark, since the connector and the bulk reader hold their own sessions. &emsp;It costs no downtime and is what clears a session that has gone stale while the service itself is fine. &emsp;A client busy with a query says so instead: rebuilding would queue behind the query rather than replace it, and a control that hangs for a quarter of an hour explains nothing.
 
-Cassandra is listed with the others and says it keeps no register of running queries, because it does not: a point read is milliseconds, so anything worth seeing on this page arrived through one of the other two paths.
+Cassandra is listed with the others and says it keeps no register of running queries, because it does not: a point read is milliseconds, so anything worth seeing on this page arrived through one of the other four paths.
+
+cqlite is listed too, and for the opposite reason: it runs in this backend rather than in a service, so there is no host and port to probe and no query id to cancel. &emsp;Its card gives the directory it reads and how many files are in it, and while a scan is running it says so and points at the comparison's own stop control, which is the only handle that exists. &emsp;Stopping it costs nothing afterwards: the merge gives up at its next partition and the next query starts a fresh scan, so this is the one path that needs no reconnect after a cancel.
 
 **Restarting a service is not offered, on purpose.** The dashboard is a container beside the others, reachable from a browser, so control over its neighbours is exactly what it should not have; giving it the container runtime's socket would be a real escalation for a demo. &emsp;Each service card therefore carries the `podman restart` command rather than a button, next to the wipe and snapshot-clearing commands. &emsp;Reconnecting is the half worth having anyway.
 
@@ -170,7 +191,7 @@ Two consequences worth keeping in mind. &emsp;The cost tracks the table, which g
 
 ### Why every bulk result states its volume
 
-Growth is easy to mistake for decay, and after wiping the data it is dramatic: the table refills from nothing, so it doubles, then triples, and each read of it costs proportionally more. &emsp;So every bulk result carries the size of the snapshot it was taken over. &emsp;It is the only path that can say, since the other three read through Cassandra and see rows rather than files, and it is the figure that separates "this read was bigger" from "this read was slower".
+Growth is easy to mistake for decay, and after wiping the data it is dramatic: the table refills from nothing, so it doubles, then triples, and each read of it costs proportionally more. &emsp;So every bulk result carries the size of the snapshot it was taken over. &emsp;It is one of the two paths that can say, since the three that read through Cassandra see rows rather than files, and it is the figure that separates "this read was bigger" from "this read was slower". &emsp;cqlite reports the size of the live files it merged, for the same reason and with the same caveat.
 
 The rate it implies is quoted only when the statement scanned all of it. &emsp;A statement naming partitions, as the windowed preset does, reads only those, so dividing the snapshot's size by the duration would describe a scan that never happened.
 

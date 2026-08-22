@@ -28,6 +28,8 @@ podman compose -f podman-compose.yml up -d --no-deps backend frontend
 
 `up -d` on its own recreates the container from the **old image**; it looks like your change had no effect.  Always build first.  `--no-deps` keeps compose from restarting Cassandra and Kafka underneath you.
 
+The `backend` image also compiles the cqlite reader from `cqlite-datafusion/`, which is why its build context is the repository root.  Measured: 9 min 25 s cold, 15.5 s after a small Rust change, 35.0 s after a larger one, 2.0 s with nothing changed, and 4.1 s for a Python-only change, whose Rust layer is reused.  A CI runner keeps no cargo cache mount between runs, so CI pays the cold figure every time.
+
 `frontend` serves a build baked into the image, so a change under `frontend/src/` needs the build.  For iteration, `cd frontend && npm run dev` proxies `/api` to `localhost:8000` and reloads.
 
 ## Waiting

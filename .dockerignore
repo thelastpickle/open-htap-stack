@@ -1,0 +1,17 @@
+# This file applies only to a build whose context is the repository root, which
+# is the backend image alone; every other service builds from its own directory
+# and reads that directory's ignore file, if it has one.
+#
+# The backend context is the root because the image builds the cqlite reader
+# from cqlite-datafusion/ as well as installing the Python app.  Everything is
+# excluded and the two directories the image needs are named back in, rather
+# than the other way round: cassandra-data/ alone is several gigabytes, and it
+# would otherwise be copied to the build on every rebuild.
+*
+!backend
+!cqlite-datafusion
+
+# Local build output, which the image builds for itself.  The Rust target
+# directory reaches double figures in gigabytes.
+cqlite-datafusion/target
+backend/**/__pycache__

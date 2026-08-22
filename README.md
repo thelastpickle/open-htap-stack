@@ -70,13 +70,14 @@ started; nothing is seeded or pre-rendered.
 2. **Map** — live positions against restricted airspace. Click an asset for its recorded flight path,
    read back out of Cassandra.
 3. **Explore → Compare engines** — run one query down the access paths you choose: Cassandra,
-   Presto, SparkSQL through the Cassandra connector, and the Analytics bulk reader going straight to
-   SSTable files through the Sidecar. This is the argument of the whole stack in one screen: same
-   data, four paths, no ETL between them. Switch to the *Group the fleet* preset and Cassandra
-   declines the query outright — the clearest statement of why the other three exist. Under each
-   result is the point-read latency measured while that path was working, so the isolation the bulk
-   reader claims is shown rather than asserted. Run the paths one at a time to see what each costs;
-   run them all at once to see what they cost each other.
+   Presto, SparkSQL through the Cassandra connector, the Analytics bulk reader going straight to
+   SSTable files through the Sidecar, and cqlite parsing the live SSTable files inside the
+   dashboard's own backend. This is the argument of the whole stack in one screen: same data, five
+   paths, no ETL between them. Switch to the *Group the fleet* preset and Cassandra declines the
+   query outright, which states plainly why the other four exist. Under each result is the
+   point-read latency measured while that path was working, so the isolation the two file readers
+   claim is shown rather than asserted. Run the paths one at a time to see what each costs; run them
+   all at once to see what they cost each other.
 4. **Explore → Vector search** — semantic search over the assets' text payloads, through Cassandra 5
    SAI, with each hit's live position fetched by point read.
 5. **Settings → Trigger breach scenario** — write a real alert and watch the map, the KPIs and the
@@ -235,7 +236,7 @@ Kafka (ingest)  →  Cassandra (storage of record)  →  Spark / Presto (analyti
 Three access paths share the same persisted data:
 
 - **OLTP path** — point reads and bounded partition reads through Cassandra's request path. Latency performance: p99 write < 5ms, p99 read < 50ms.
-- **OLAP path** — wide scans and aggregations via the Spark Bulk Reader, reading SSTable files directly from coordinated snapshots. Does not contend with OLTP. Scale-out performance at 1.7Gb/s reads and 7Gb/s writes per node.
+- **OLAP path** — wide scans and aggregations via the Spark Bulk Reader, reading SSTable files directly from coordinated snapshots. Does not contend with OLTP. Scale-out performance at 1.7Gb/s reads and 7Gb/s writes per node. The dashboard also reads the same files with no snapshot and no JVM, in its own process, through cqlite; that path answers as of the last flush.
 - **CDC path** — change streams to Kafka via the Sidecar, with RF-aware deduplication.
 
 The architectural property that makes this work, that analytical scans do not touch the OLTP hot path — holds **by construction**, not by tuning. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full technical treatment.
@@ -247,4 +248,5 @@ The architectural property that makes this work, that analytical scans do not to
 - Accord / CEP-15 :: transactions, strict serializability, failure tolerance goals
 - CEP-28 :: Spark bulk reader/writer via Sidecar to persisted storage
 - Cassandra Analytics :: bulk reader/writer examples
+- cqlite :: a Rust library that parses Cassandra SSTable files, <https://github.com/pmcfadin/cqlite>
 - SQL prototype repo :: Postgres wire protocol + Calcite-based dialect coverage

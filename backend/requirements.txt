@@ -17,3 +17,10 @@ thrift==0.24.0
 
 # Outbound HTTP for the optional embedding and NL-to-SQL endpoints
 httpx==0.28.1
+
+# The SQL engine for the cqlite path.  This pin and the datafusion and
+# datafusion-ffi pins in cqlite-datafusion/Cargo.toml are one pin, not three:
+# the reader hands this library a capsule holding a repr(C) struct, and the two
+# sides must agree on its layout.  The cqlite_datafusion wheel beside it is built
+# from cqlite-datafusion/ by the first stage of backend/Dockerfile.
+datafusion==54.0.0

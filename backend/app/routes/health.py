@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.config import settings
 from app.db.cassandra_client import cassandra_client
+from app.db.cqlite_client import cqlite_client
 from app.db.presto_client import presto_client
 from app.db import spark_ui
 from app.models import (
@@ -31,7 +32,7 @@ router = APIRouter(prefix="/api/platform", tags=["platform"])
 
 PROBE_TIMEOUT_S = 2
 # The overview KPIs embed the health score and are polled every few seconds.
-# Probing four sockets on every poll would add seconds of latency whenever a
+# Probing the sockets on every poll would add seconds of latency whenever a
 # service is down, so the score is cached for a little longer than a poll cycle.
 SCORE_CACHE_TTL_S = 10
 
@@ -64,11 +65,36 @@ _score_lock = threading.Lock()
 _cached_score: Optional[Tuple[float, float]] = None  # (expires_at_monotonic, score)
 
 
+def _cqlite_reader_health() -> ServiceHealth:
+    """The cqlite path, which has no socket to probe.
+
+    It is a library in this process reading a directory, so what stands in for
+    reachability is whether it found the SSTable files: a backend without the data
+    directory mounted reports the path down, with the directory it looked in.  The
+    file count says the files are there and not merely the directory.
+
+    Registration is retried here, because there is no socket whose opening would
+    otherwise show that the keyspace has since been created.
+    """
+    cqlite_client.ensure_registered()
+    found = cqlite_client.files_now()
+    return ServiceHealth(
+        name="cqlite reader",
+        status="up" if found["files"] else "down",
+        endpoint=(
+            f"{settings.cqlite_data_dir} — {found['tables']} table(s), "
+            f"{found['files']} SSTable(s)"
+        ),
+    )
+
+
 def _probe_services() -> List[ServiceHealth]:
-    return [
+    services = [
         ServiceHealth(name=name, status=_probe(host, port), endpoint=f"{host}:{port}")
         for name, host, port in _service_targets()
     ]
+    services.append(_cqlite_reader_health())
+    return services
 
 
 def _score(services: List[ServiceHealth]) -> float:
@@ -163,6 +189,13 @@ def get_running_work() -> RunningWorkResponse:
     # point read is milliseconds, so anything worth seeing on this page arrived
     # through one of the two above.  Said rather than silently left out.
     unreadable["cassandra"] = "Cassandra keeps no list of running queries to read"
+    # The cqlite reader runs in this process and gives a scan no handle, so there
+    # is nothing to list and nothing to kill by id.  A scan in flight is stopped
+    # with the comparison it belongs to, through the control above.
+    if cqlite_client.busy:
+        unreadable["cqlite"] = "a scan is running; stop it with the comparison"
+    else:
+        unreadable["cqlite"] = "no scan is running"
 
     return RunningWorkResponse(
         comparison=running_comparison(), queries=queries, unreadable=unreadable

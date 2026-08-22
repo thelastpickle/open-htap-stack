@@ -25,6 +25,11 @@
 
   --color-accent: #a78bfa;
   --color-positive: #10b981;
+  /* The fifth access path's colour, on the compare page and the Health page.  A
+     pink, because the other four paths hold cyan, amber, violet and green, and
+     --color-tertiary cannot be borrowed: an error is drawn in it.  Contrast
+     against --color-background is 10.66:1, measured. */
+  --color-pink: #f9a8d4;
 
   --color-on-background: #f1f3fc;
   --color-on-surface: #f1f3fc;

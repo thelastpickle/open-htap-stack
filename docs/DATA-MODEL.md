@@ -4,8 +4,8 @@ The schema is defined in one place, `ensure_schema()` in [ingress/consumer/consu
 
 | Table                     | Shape                                                   | Read by                                      |
 | ------------------------- | ------------------------------------------------------- | -------------------------------------------- |
-| `events`                  | One row per event, partitioned by a 15-minute bucket and a shard | Presto, the Spark bulk reader        |
-| `drone_latest_status`     | One row per asset, the current state                     | The dashboard's map and indicators; all three engines |
+| `events`                  | One row per event, partitioned by a 15-minute bucket and a shard | Presto, the Spark bulk reader, the cqlite reader |
+| `drone_latest_status`     | One row per asset, the current state                     | The dashboard's map and indicators; every access path |
 | `drone_events_by_entity`  | Per-asset history, clustered by `event_time DESC`        | Flight paths, per-asset analysis             |
 | `drone_text_embeddings`   | One row per asset: its text snippet and a 1536-float vector | Vector search, through a Storage-Attached Index (SAI) |
 | `alerts_by_bucket`        | Alerts, partitioned by hour                              | The dashboard's alert feed                   |
@@ -29,6 +29,7 @@ Keyed on the event alone, a question about a period of time had nothing to prune
 | **Presto** | Pushes the partition-key predicate into its Cassandra connector |
 | **Spark SQL, connector** | Same pushdown, so the scan is issued per partition |
 | **Spark bulk reader** | Turns it into a `PartitionKeyFilter`, and skips SSTables whose token range cannot hold those keys |
+| **cqlite** | Seeks each named key through the file's own index, rather than walking every partition and discarding rows |
 
 A query for one window therefore names the window and every shard:
 

@@ -33,6 +33,14 @@ interface EngineResult extends QueryResult {
   snapshot_reused?: boolean
   /** Bulk reader only: the snapshot's age, which is the age of these rows. */
   snapshot_age_s?: number | null
+  /** cqlite only: live SSTable files this statement merged. */
+  sstable_files?: number | null
+  /** cqlite only: their total size, so growth is visible as it is for a snapshot. */
+  sstable_bytes?: number | null
+  /** cqlite only: what listing the directory and opening those files cost. */
+  reader_open_ms?: number | null
+  /** cqlite only: seconds since the newest file was written, so the age of these rows. */
+  data_age_s?: number | null
 }
 
 /** A path the request did not ask for is absent, so the keys are partial. */
@@ -59,7 +67,7 @@ interface VectorResponse {
 }
 
 type Tab = 'sql' | 'ai' | 'compare'
-type Engine = 'cassandra' | 'presto' | 'spark' | 'spark_bulk'
+type Engine = 'cassandra' | 'presto' | 'spark' | 'spark_bulk' | 'cqlite'
 type RunMode = 'sequential' | 'parallel'
 
 /**
@@ -114,6 +122,12 @@ const ENGINES: { key: Engine; label: string; role: string; colour: string }[] = 
     role: 'Batch · SparkSQL reading SSTable files directly from a coordinated snapshot via the Sidecar. Never touches the request path, so it cannot contend with OLTP latency. Rows are consistent as of the snapshot.',
     colour: 'var(--color-positive)',
   },
+  {
+    key: 'cqlite',
+    label: 'cqlite SQL',
+    role: 'Analytical · DataFusion over the live SSTable files, parsed by cqlite in this process. No snapshot, no Sidecar and no JVM, so it cannot contend with OLTP latency. Rows are as of the last flush.',
+    colour: 'var(--color-pink)',
+  },
 ]
 
 /**
@@ -139,7 +153,7 @@ function shardList(shards: number): string {
 
 /**
  * Four queries of deliberately different size, because one query cannot show
- * what four access paths are for, and because the size is most of the answer.
+ * what five access paths are for, and because the size is most of the answer.
  * The bounded read is where the transactional path wins; grouping the fleet is
  * the smallest question CQL cannot express at all; one window is the same grouping
  * bounded to the partitions that hold it, which is what the data model is shaped
@@ -423,10 +437,10 @@ function EngineCard({
               {formatMs(result.query_time_ms)}
             </p>
             <p className="text-on-surface-variant text-[9px]">{result.row_count} rows</p>
-            {/* Only the bulk reader can say how much data was behind a read,
-                because only it reads files.  Worth the line: this table grows while
-                the demo runs, so without the volume a bigger read is
-                indistinguishable from a slower one. */}
+            {/* Only the two paths that read files can say how much data was behind
+                a read.  Worth the line: this table grows while the demo runs, so
+                without the volume a bigger read is indistinguishable from a slower
+                one. */}
             {result.snapshot_bytes != null && result.snapshot_bytes > 0 && (
               <>
                 <p
@@ -455,6 +469,33 @@ function EngineCard({
                     : result.snapshot_ms != null
                       ? `taken in ${formatMs(result.snapshot_ms)}`
                       : ''}
+                </p>
+              </>
+            )}
+            {/* The same two figures for the path that takes no snapshot: the live
+                files it opened, and how stale they leave the answer.  The rate is
+                quoted on the same condition as the bulk reader's, and for the same
+                reason: a statement that names partitions reads a fraction of what
+                it opened. */}
+            {result.sstable_files != null && result.sstable_files > 0 && (
+              <>
+                <p
+                  className="text-on-surface-variant mt-0.5 text-[9px] tabular-nums"
+                  title="The live SSTable files this read merged, and their total size.  There is no snapshot and no copy: these are the files Cassandra itself is writing, opened where they lie."
+                >
+                  {result.sstable_files} live files · {formatBytes(result.sstable_bytes ?? 0)}
+                  {scannedItAll(result) &&
+                    (result.sstable_bytes ?? 0) >= RATE_WORTH_QUOTING_BYTES &&
+                    result.query_time_ms > 0 &&
+                    ` · ${Math.round((result.sstable_bytes ?? 0) / 1_000 / result.query_time_ms)} MB/s`}
+                </p>
+                {/* Amber, like a reused snapshot, and for the same reason: this
+                    answer is as of a moment that has passed.  Rows written since
+                    the last flush are in a memtable and were not read. */}
+                <p className="text-secondary mt-0.5 text-[9px] tabular-nums">
+                  as of the last flush · {formatMs((result.data_age_s ?? 0) * 1000)} old
+                  {result.reader_open_ms != null &&
+                    ` · opened in ${formatMs(result.reader_open_ms)}`}
                 </p>
               </>
             )}
@@ -673,7 +714,7 @@ function ComparePanel() {
               <span className="text-on-surface-variant/60 text-[10px]">
                 {reuseSnapshot
                   ? 'Skips a fixed cost the bulk reader pays per read, and answers as of that snapshot rather than now'
-                  : 'The bulk reader answers as of this moment, like the other three'}
+                  : 'The bulk reader answers as of this moment, like the three paths that read through CQL'}
               </span>
             </div>
           )}
@@ -750,7 +791,7 @@ function ComparePanel() {
         {run.isPending ? 'Running…' : 'Run'}
         <span className="font-normal opacity-70">
           {chosen.length === ENGINES.length
-            ? 'all four paths'
+            ? 'all five paths'
             : `${chosen.length} ${chosen.length === 1 ? 'path' : 'paths'}`}
           {chosen.length > 1 && (mode === 'parallel' ? ' at once' : ' one at a time')}
         </span>
@@ -760,12 +801,14 @@ function ComparePanel() {
         <div className="border-secondary/30 bg-secondary/5 text-on-surface-variant flex items-start gap-3 rounded-lg border p-4">
           <MaterialIcon name="schedule" className="text-secondary shrink-0 text-[18px]" />
           <p className="text-[11px] leading-relaxed">
-            Measured here, this combination runs for close to half an hour and the two Spark paths do
-            not finish inside it: with four scans of the whole history sharing seven cores, their jobs
-            outlast the timeout that tells a starved query from a wedged one. That is not a defect
-            being hidden, it is the contention you asked to see, and the point read sampled across the
-            window is the measurement that survives it. For a figure per path, run them one at a time;
-            to watch specific paths obstruct each other and still finish, select fewer of them.
+            Measured here, all five over the whole history took 6 min 42 s, and every path that can
+            express the question still answered: Presto in 58 s, Spark in 3 min 6 s, the bulk reader
+            in 3 min 16 s, and cqlite in 6 min 42 s. Every one of those figures is inflated by the
+            other four, which is the contention you asked to see; on a busier stack a path can be
+            starved until its timeout instead, and the run then reports that rather than hiding it.
+            The point read sampled across the window is the measurement that survives the crowding:
+            p50 5.1 ms against 5.5 ms before the run, with one read at 1.9 s. For a figure per path,
+            run them one at a time.
           </p>
         </div>
       )}
@@ -781,7 +824,13 @@ function ComparePanel() {
         <>
           <div
             className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${
-              shown.length >= 4 ? 'xl:grid-cols-4' : shown.length === 3 ? 'xl:grid-cols-3' : ''
+              shown.length >= 5
+                ? 'xl:grid-cols-5'
+                : shown.length === 4
+                  ? 'xl:grid-cols-4'
+                  : shown.length === 3
+                    ? 'xl:grid-cols-3'
+                    : ''
             }`}
           >
             {shown.map((engine) => (
@@ -863,8 +912,9 @@ function ComparePanel() {
                   ? 'These paths ran together, so each figure includes the others getting in its way; that is what the run was for, but it means no figure here is a measure of the path it sits under.'
                   : 'Each path was timed alone, so its figure is its own cost.'}{' '}
                 Read the figures as a floor on what the mechanism costs here, not as a measure of any
-                engine: given more nodes the three analytical paths scale out and the transactional
-                one does not change at all, which is the whole point of separating them.
+                engine: given more nodes the Presto and Spark paths scale out, the transactional one
+                does not change at all, and the in-process reader would want one of itself per node.
+                Separating them is the whole point.
               </p>
               <p>
                 A path reporting an error has usually not failed: it has told you the query is not for
@@ -887,7 +937,9 @@ function ComparePanel() {
                 ingest, so they show up there. The bulk reader reads SSTable files from a coordinated
                 snapshot through the Sidecar instead: taking that snapshot is a brief hardlink pass on
                 the node, which you may see as a single spike, and the scan that follows touches the
-                request path not at all.
+                request path not at all. The cqlite reader takes no snapshot: it opens the live files
+                where they lie and parses them in this dashboard's own process, so it asks the node
+                for nothing and there is no spike to see.
               </p>
               <p>
                 Both run modes are legitimate and they answer different questions. One at a time
@@ -902,7 +954,8 @@ function ComparePanel() {
                 and a larger share the more files the table has. Reusing the last one skips it: 0.84 s
                 to 0.35 s on the bounded read above, 4.07 s to 3.04 s on one window. What it costs is
                 currency. The rows are then as of when that snapshot was taken, not now, so the bulk
-                reader is no longer answering the same instant as the other three — which is why it is
+                reader is no longer answering the same instant as the paths that read through CQL —
+                which is why it is
                 off by default and why each result says whether its snapshot was reused and how old it
                 was. A snapshot too near the end of its life to survive the read is refused and a fresh
                 one taken, because Cassandra expires it on time regardless of who is reading.
@@ -911,8 +964,12 @@ function ComparePanel() {
                 <strong className="font-bold">One window is the same question, bounded.</strong> Events
                 are partitioned by a 15-minute window and a shard, so naming the window names the
                 partitions that hold it: Cassandra reads them and needs no ALLOW FILTERING, Presto and
-                the connector push the predicate down, and the bulk reader turns it into a
-                partition-key lookup instead of a scan. Compare it against the whole history above and
+                the connector push the predicate down, the bulk reader turns it into a partition-key
+                lookup instead of a scan, and the cqlite reader seeks to each of the sixteen
+                partitions through the SSTable index rather than walking the files. Its cost is then
+                proportional to the rows the window holds: measured here, one shard of a window took
+                2.9 s and all sixteen took 47.1 s, on a table of 24 files and 2.5 GB.
+                Compare it against the whole history above and
                 the difference is the data model, not the engines. Cassandra still declines the
                 grouping, because a bounded question is not the same as an expressible one. And a
                 window that has closed cannot change, so the paths that can answer it agree on the
@@ -931,8 +988,11 @@ function ComparePanel() {
                 On the grouped queries, watch the counts rather than only the clock. The two paths that
                 read through Cassandra see the table grow underneath them while they scan, so their
                 totals differ; the bulk reader answers from one snapshot, so its groups are consistent
-                with each other. That is point-in-time consistency, and it is the other half of what
-                reading SSTables directly buys.
+                with each other. So are the cqlite reader's: it opens every generation before the scan
+                begins and an SSTable never changes after it is written, which gives the same
+                consistency without a snapshot, as of the last flush rather than as of now. That is
+                point-in-time consistency, and it is the other half of what reading SSTables directly
+                buys.
               </p>
             </div>
           </div>

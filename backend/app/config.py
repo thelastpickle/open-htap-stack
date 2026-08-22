@@ -50,6 +50,18 @@ class Settings(BaseSettings):
     # db/spark_client.py), and nginx allows longer still in front of it.
     spark_query_timeout_s: int = 900
 
+    # The cqlite reader, which is a library in this process rather than a service.
+    # It parses the SSTable files under this directory in place, so the path must
+    # be the one compose mounts the Cassandra data directory at, read-only.
+    cqlite_data_dir: str = "/var/lib/cassandra/data"
+    # How many slices of the token ring a full scan divides into.  One, because
+    # more is measured as a loss on Cassandra 5 files: cqlite 0.16 filters a token
+    # bound after its BTI walk rather than pushing the bound into it, so N slices
+    # read the whole ring N times.  Raise it only to measure that.
+    cqlite_splits: int = 1
+    # Rows per Arrow record batch handed to DataFusion.
+    cqlite_batch_rows: int = 8192
+
     # Kafka — used by the platform health probe only
     kafka_host: str = "kafka"
     kafka_port: int = 19092

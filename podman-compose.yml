@@ -267,14 +267,18 @@ services:
 ###############################################################################
 ## Mission Control dashboard
 ##
-## The dashboard is the demo's front end: one API over all three engines, and a
+## The dashboard is the demo's front end: one API over all five access paths, and a
 ## web UI on top of it.  Nothing else in the stack depends on either service, so
 ## both can be stopped without affecting ingest.
 ###############################################################################
 
   backend:
     build:
-      context: ./backend
+      # The root, not ./backend, because the image also builds the cqlite reader
+      # from cqlite-datafusion/ into a wheel.  .dockerignore excludes everything
+      # except those two directories, so the context stays small.
+      context: .
+      dockerfile: backend/Dockerfile
     container_name: backend
     networks: [htap-net]
     depends_on:
@@ -282,6 +286,12 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"   # REST API and OpenAPI docs at /docs
+    volumes:
+      # The cqlite path parses these files in place, with no snapshot and no
+      # Sidecar.  Read-only because a reader must never be able to corrupt the
+      # dataset the other four paths are reading; Cassandra mounts the same host
+      # directory read-write, and the spark service mounts it too.
+      - ./cassandra-data:/var/lib/cassandra:ro
     environment:
       CASSANDRA_HOST: "cassandra"
       CASSANDRA_PORT: "9042"
@@ -298,6 +308,11 @@ services:
       KAFKA_PORT: "19092"
       SPARK_UI_HOST: "spark"
       SPARK_UI_PORT: "8080"
+      # Where the cqlite reader looks for the keyspace directories.  Stated here
+      # rather than left to the backend's default, because it and the read-only
+      # mount above are one setting: the two disagreeing gives a path that finds
+      # no table directory and reports every query as a decline.
+      CQLITE_DATA_DIR: "/var/lib/cassandra/data"
       # Shown as the startup defaults on the Settings page, so they must match
       # what data-producer above was started with.
       DEMO_N_ENTITIES: "${DEMO_N_ENTITIES:-100}"

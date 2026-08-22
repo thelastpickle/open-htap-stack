@@ -224,6 +224,19 @@ class EngineResult(SQLQueryResult):
     snapshot_ms: Optional[float] = None
     snapshot_reused: bool = False
     snapshot_age_s: Optional[float] = None
+    # The same four questions asked of the cqlite path, which reads the live files
+    # and takes no snapshot: how many it merged, how big they were, what opening
+    # them cost, and how stale the answer is.  Named for the files rather than for
+    # a snapshot, because there is none to name.
+    sstable_files: Optional[int] = None
+    # Carries the snapshot_bytes caveat above for the same reason: it is what the
+    # scan opened, not what it read when the statement named partitions.
+    sstable_bytes: Optional[int] = None
+    reader_open_ms: Optional[float] = None
+    # Seconds since the newest file read was written, so how far behind the answer
+    # is.  Rows still in a memtable are not in any file and were not read; this is
+    # the counterpart of snapshot_age_s, and the path's one real limitation.
+    data_age_s: Optional[float] = None
     # Absent unless the result came from the comparison endpoint, which is the
     # only caller that probes the OLTP path while a query runs.
     oltp: Optional[OltpImpact] = None
@@ -231,12 +244,15 @@ class EngineResult(SQLQueryResult):
 
 class BenchmarkResponse(BaseModel):
     # A path the request did not ask for is absent rather than empty, so a partial
-    # comparison cannot be mistaken for four paths of which some failed.
+    # comparison cannot be mistaken for five paths of which some failed.
     cassandra: Optional[EngineResult] = None
     presto: Optional[EngineResult] = None
     spark: Optional[EngineResult] = None
-    # The Analytics bulk reader: same rows, read straight from SSTables.
+    # The Analytics bulk reader: same rows, read from a snapshot's SSTables.
     spark_bulk: Optional[EngineResult] = None
+    # The cqlite reader: the same rows again, read from the live SSTables in place,
+    # in this process, with no snapshot and no JVM.
+    cqlite: Optional[EngineResult] = None
     # Which of the two run modes produced these figures.  Without it a parallel
     # run and a sequential one are indistinguishable, and they are not comparable.
     mode: str = "sequential"
@@ -363,8 +379,10 @@ class KillQueryRequest(BaseModel):
 
 
 class ReconnectRequest(BaseModel):
-    # The dashboard's client for one path, or every one of them.
-    target: Literal["cassandra", "presto", "spark", "spark_bulk", "all"]
+    # The dashboard's client for one path, or every one of them.  Reconnecting the
+    # cqlite path re-reads the schema and re-resolves the table directories, which
+    # is what picks up a table that has since been flushed or recreated.
+    target: Literal["cassandra", "presto", "spark", "spark_bulk", "cqlite", "all"]
 
 
 class OperationResult(BaseModel):

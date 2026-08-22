@@ -66,6 +66,26 @@ interface VectorResponse {
   query_time_ms: number
 }
 
+/**
+ * The live embedder's state, as the backend reports it.  `pending` is what the last
+ * pass deferred and `behind_s` is how long ago that pass ran, so the two together
+ * say whether the index is following the writes or falling behind them.
+ */
+interface LiveEmbedding {
+  enabled: boolean
+  embedder: string
+  interval_s: number
+  embedded: number
+  failed: number
+  passes: number
+  last_embedded: number
+  last_pass_ms: number
+  pending: number
+  behind_s?: number | null
+  tracked: number
+  error?: string | null
+}
+
 type Tab = 'sql' | 'ai' | 'compare'
 type Engine = 'cassandra' | 'presto' | 'spark' | 'spark_bulk' | 'cqlite'
 type RunMode = 'sequential' | 'parallel'
@@ -1002,6 +1022,45 @@ function ComparePanel() {
   )
 }
 
+/**
+ * What the live embedder has actually done, rather than that it is switched on.  A
+ * toggle with no figures beside it cannot be checked: `pending` and `behind` are
+ * the two that say whether the index is keeping up.
+ */
+function LiveEmbeddingFigures({ live }: { live: LiveEmbedding }) {
+  const rows: [string, string][] = [
+    ['Embedder', live.embedder === 'remote' ? 'Remote API' : 'Local hashing'],
+    ['Pass interval', `${live.interval_s}s`],
+    ['Assets tracked', live.tracked.toLocaleString()],
+    ['Embedded', live.embedded.toLocaleString()],
+    [
+      'Last pass',
+      live.passes === 0
+        ? 'none yet'
+        : `${live.last_embedded} in ${formatMs(live.last_pass_ms)}`,
+    ],
+    ['Waiting for the next pass', live.pending.toLocaleString()],
+    ['Last pass ran', live.behind_s == null ? '—' : `${live.behind_s.toFixed(0)}s ago`],
+  ]
+  if (live.failed > 0) rows.push(['Failed writes', live.failed.toLocaleString()])
+
+  return (
+    <div className="space-y-1">
+      {rows.map(([label, value]) => (
+        <div key={label} className="flex items-baseline justify-between gap-2">
+          <span className="text-on-surface-variant/70 text-[9px] uppercase tracking-wider">
+            {label}
+          </span>
+          <span className="font-mono text-[10px] tabular-nums">{value}</span>
+        </div>
+      ))}
+      {live.error && (
+        <p className="text-tertiary mt-2 text-[9px] leading-relaxed">{live.error}</p>
+      )}
+    </div>
+  )
+}
+
 export default function ExplorePage() {
   const { toast, show, dismiss } = useToast()
   const [tab, setTab] = useState<Tab>('sql')
@@ -1048,6 +1107,30 @@ export default function ExplorePage() {
     mutationFn: () => postJson<{ message: string; embedder: string }>('/api/vector/index-all'),
     onSuccess: (data) =>
       show(`${data.message} (${data.embedder} embedder)`, 'info'),
+    onError: (e: Error) => show(e.message, 'error'),
+  })
+
+  /* The live embedder, polled only while this tab is open: it is a live figure on
+     one tab, and polling it behind the SQL console would buy nothing. */
+  const { data: live, refetch: refetchLive } = useQuery<LiveEmbedding>({
+    queryKey: ['vector-live'],
+    queryFn: () => getJson<LiveEmbedding>('/api/vector/live'),
+    enabled: tab === 'ai',
+    refetchInterval: 5000,
+  })
+
+  const setLive = useMutation({
+    mutationFn: (enabled: boolean) =>
+      postJson<LiveEmbedding>('/api/vector/live', { enabled }),
+    onSuccess: (data) => {
+      refetchLive()
+      show(
+        data.enabled
+          ? `Live embedding on; each pass runs every ${data.interval_s}s, behind the writes`
+          : 'Live embedding off; embeddings stay as they are',
+        'info',
+      )
+    },
     onError: (e: Error) => show(e.message, 'error'),
   })
 
@@ -1127,17 +1210,50 @@ export default function ExplorePage() {
                     )}
                   </div>
                   {tab === 'ai' && (
-                    <button
-                      onClick={() => buildIndex.mutate()}
-                      disabled={buildIndex.isPending}
-                      className="bg-secondary/10 border-secondary/30 text-secondary hover:bg-secondary/20 flex items-center gap-2 rounded border px-4 py-1.5 text-[10px] font-black uppercase tracking-wider transition-colors"
-                    >
-                      <MaterialIcon
-                        name="refresh"
-                        className={buildIndex.isPending ? 'animate-spin text-[14px]' : 'text-[14px]'}
-                      />
-                      Build embeddings
-                    </button>
+                    <div className="flex flex-wrap items-center gap-3">
+                      {/* On or off, not a third state: the loop runs for the
+                          backend's lifetime and idles while this is off, so there
+                          is nothing to start or stop beyond the flag. */}
+                      <button
+                        onClick={() => setLive.mutate(!live?.enabled)}
+                        disabled={setLive.isPending || live == null}
+                        aria-pressed={live?.enabled ?? false}
+                        title={
+                          'Embed each snippet as the sink writes it, in a loop behind the writes. ' +
+                          'Nothing on the write path waits for it, so the point-read latency on the ' +
+                          'Health page should not move.'
+                        }
+                        className={`flex items-center gap-2 rounded border px-4 py-1.5 text-[10px] font-black uppercase tracking-wider transition-colors disabled:opacity-50 ${
+                          live?.enabled
+                            ? 'border-positive/40 bg-positive/10 text-positive'
+                            : 'text-on-surface-variant border-white/10 hover:text-on-surface'
+                        }`}
+                      >
+                        <MaterialIcon
+                          name={live?.enabled ? 'sync' : 'sync_disabled'}
+                          className={
+                            live?.enabled && (live?.last_embedded ?? 0) > 0
+                              ? 'animate-spin text-[14px]'
+                              : 'text-[14px]'
+                          }
+                        />
+                        Live embedding {live?.enabled ? 'on' : 'off'}
+                      </button>
+                      <button
+                        onClick={() => buildIndex.mutate()}
+                        disabled={buildIndex.isPending}
+                        title="Embed every asset's current snippet once, now"
+                        className="bg-secondary/10 border-secondary/30 text-secondary hover:bg-secondary/20 flex items-center gap-2 rounded border px-4 py-1.5 text-[10px] font-black uppercase tracking-wider transition-colors"
+                      >
+                        <MaterialIcon
+                          name="refresh"
+                          className={
+                            buildIndex.isPending ? 'animate-spin text-[14px]' : 'text-[14px]'
+                          }
+                        />
+                        Build embeddings
+                      </button>
+                    </div>
                   )}
                 </div>
 
@@ -1236,13 +1352,26 @@ export default function ExplorePage() {
                     </p>
                   </div>
                 ) : (
-                  <p className="text-on-surface-variant text-[10px] leading-relaxed">
-                    Build embeddings once to populate payload_vector for every asset that has text.
-                    Searching then embeds your phrase and asks Cassandra for the nearest neighbours,
-                    scoring each with similarity_cosine. Without an embedding API key the backend
-                    hashes tokens locally, so matching is lexical rather than semantic — but it is
-                    real, ranked and reproducible.
-                  </p>
+                  <div className="space-y-4">
+                    <p className="text-on-surface-variant text-[10px] leading-relaxed">
+                      Build embeddings once to populate payload_vector for every asset that has text.
+                      Searching then embeds your phrase and asks Cassandra for the nearest neighbours,
+                      scoring each with similarity_cosine. Without an embedding API key the backend
+                      hashes tokens locally, so matching is lexical rather than semantic — but it is
+                      real, ranked and reproducible.
+                    </p>
+                    <div className="space-y-2 border-t border-white/5 pt-3">
+                      <p className="text-secondary text-[10px] font-bold">Live embedding</p>
+                      <p className="text-on-surface-variant text-[10px] leading-relaxed">
+                        The producer rotates each asset's snippet every few seconds, so a one-off
+                        build goes stale. Turned on, the backend re-embeds the snippets that changed,
+                        in a loop of its own. It reads the snippets after the sink has written them
+                        and writes the vectors separately, so no write waits for an embedding: the
+                        index follows the data instead of standing in front of it.
+                      </p>
+                      {live && <LiveEmbeddingFigures live={live} />}
+                    </div>
+                  </div>
                 )}
               </div>
             </aside>

@@ -166,6 +166,16 @@ Press **Build embeddings** once to populate the table; nothing is indexed until 
 
 With `OPENAI_API_KEY` set the backend embeds through that endpoint. &emsp;Without one it uses a local hashing embedder: no key, no network, and matching that is lexical rather than semantic, but real, ranked and reproducible.
 
+### Live embedding, and why it is not on the write path
+
+A one-off build goes stale, because the producer rotates each asset's snippet every 5 to 30 seconds. &emsp;**Live embedding**, beside the build button, keeps the index following those writes: the backend re-reads the snippets every five seconds and embeds the ones whose text changed.
+
+The loop never sits in a write. &emsp;The sink writes a snippet and waits for nothing; the backend reads it afterwards and writes the vector separately, so the index follows the data rather than standing in front of it. &emsp;Measured on a hundred assets with the local embedder, a pass took 32 to 97 ms and embedded 25 to 64 snippets, and the single-partition read beside it stayed where it was: p50 1.9 ms, p95 3.7 ms over 238 reads with the loop running, against p50 2.6 ms and p95 9.0 ms over 236 reads with it off. &emsp;The two samples differ by less than this stack's own variation between runs, which is the claim: the embedder did not move the request path.
+
+The panel states how far behind the index is, because "on" is not the same as "keeping up". &emsp;A pass embeds at most 64 assets and reports the rest as waiting; at a hundred assets, 21 of the hundred snippets were waiting at the moment of one check, all of them written within the previous five seconds. &emsp;A backend that restarts learns from the table which snippets it has already embedded, so turning the loop back on re-embeds what changed rather than the whole fleet.
+
+The alternative was to embed in the ingest sink, on the write itself. &emsp;It was rejected twice over: it would put an embedding call, and with a key a network round trip, in front of every write; and it would make the data path depend on the dashboard, where today either dashboard service can be stopped without touching ingest.
+
 ### Why embeddings live in their own table
 
 `drone_text_embeddings` is separate from `drone_latest_status` for two reasons:

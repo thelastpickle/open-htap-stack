@@ -79,7 +79,9 @@ started; nothing is seeded or pre-rendered.
    claim is shown rather than asserted. Run the paths one at a time to see what each costs; run them
    all at once to see what they cost each other.
 4. **Explore → Vector search** — semantic search over the assets' text payloads, through Cassandra 5
-   SAI, with each hit's live position fetched by point read.
+   SAI, with each hit's live position fetched by point read. Turn on **Live embedding** and the index
+   follows the snippets as they are rewritten, in a loop behind the writes; the panel says how far
+   behind it is, and the point read on the Health page says what it cost the request path.
 5. **Settings → Trigger breach scenario** — write a real alert and watch the map, the KPIs and the
    alert feed pick it up.
 

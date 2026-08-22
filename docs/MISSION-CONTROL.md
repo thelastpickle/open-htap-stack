@@ -44,6 +44,10 @@ The fifth path is inside the box the dashboard already occupies, which is why it
 | **Health**   | Reachability, latency by access path, and the work in flight                | A connection probe per service, one timed query per path, and each engine's own query list |
 | **Settings** | Fleet size, event rate, outlier share, pause, and the breach scenario      | Held in the backend; the data producer polls and adopts them                      |
 
+The left navigation collapses to its icons, and stays collapsed across a reload; the comparison table is wide, and the nav is worth its width only while you are moving between pages.
+
+Every page carries the trademark attribution for the projects the stack runs, and marks which are Apache Software Foundation projects and which are not. &emsp;Presto is a Linux Foundation mark, and cqlite carries the Apache licence without being an Apache project; neither endorses this demonstration.
+
 ## The comparison that matters
 
 Explore → **Compare engines** runs one statement down the access paths you choose and reports what each took. &emsp;The statement is rewritten per dialect, and the rewrite is shown above each result, so the comparison is inspectable rather than asserted.

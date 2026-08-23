@@ -292,6 +292,23 @@ services:
       # dataset the other four paths are reading; Cassandra mounts the same host
       # directory read-write, and the spark service mounts it too.
       - ./cassandra-data:/var/lib/cassandra:ro
+    # The cqlite path reads SSTable files in this process, so a query's memory is
+    # this container's memory.  Measured here, the kernel killed uvicorn three
+    # times in one afternoon at 11.1 to 11.9 GB anonymous resident, once
+    # mid-query, so that query never answered; the cause was cqlite's seek path
+    # holding every row of the partitions a query named, and it is bounded now
+    # (see cqlite_key_chunk in backend/app/config.py).  The limit stays because a
+    # global out-of-memory event lets the kernel choose its victim, and it may
+    # choose Cassandra, which is the one process every access path reads through.
+    # A limit confines the kill to the container that earned it, and compose
+    # restarts it.  It has done so since: raising CQLITE_KEY_CHUNK to 16 and
+    # counting one window twice crossed 8 GB on the second statement, and the
+    # container came back in seconds.  Mind that the limit also counts the page
+    # cache of the files a read touches, 4.19 GB for a walk of the whole table,
+    # so it cannot be set from the anonymous figure alone; the kernel reclaims
+    # those pages rather than killing for them.
+    mem_limit: "${BACKEND_MEM_LIMIT:-8g}"
+    memswap_limit: "${BACKEND_MEM_LIMIT:-8g}"
     environment:
       CASSANDRA_HOST: "cassandra"
       CASSANDRA_PORT: "9042"
@@ -320,6 +337,11 @@ services:
       # rather than throughput; see backend/app/config.py for the measured
       # figure that keeps it at one.
       CQLITE_SPLITS: "${CQLITE_SPLITS:-1}"
+      # How many of the partitions a query names are read at a time.  Here for
+      # the same reason as the setting above: the memory this bounds is what
+      # killed uvicorn before it existed, so being able to raise it and watch
+      # that happen again, without a rebuild, is the point.
+      CQLITE_KEY_CHUNK: "${CQLITE_KEY_CHUNK:-1}"
       # Shown as the startup defaults on the Settings page, so they must match
       # what data-producer above was started with.
       DEMO_N_ENTITIES: "${DEMO_N_ENTITIES:-100}"

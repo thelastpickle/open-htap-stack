@@ -59,13 +59,22 @@ class Settings(BaseSettings):
     # no token bound, so N slices read the whole ring N times and only the decode
     # divides; the reader applies the bound itself at the partition boundary, which
     # is what stops N slices returning every row N times.  And memory binds before
-    # throughput does: one 15-minute window counted through the seek path peaked at
-    # 6.77 GB of anonymous resident memory on a single slice, and each extra slice
-    # builds another merger over the same files.  Raise this against a measured
-    # bytes-per-slice figure and a container memory limit, not the core count.
+    # throughput does: one 15-minute window counted through the seek path held
+    # 6.83 GB of anonymous memory on a single slice with all 16 of its partitions
+    # in one merger, and each extra slice builds another merger over the same
+    # files.  The container limit that measurement waited on now exists, so raise
+    # this against a measured bytes-per-slice figure, not the core count.
     cqlite_splits: int = 1
     # Rows per Arrow record batch handed to DataFusion.
     cqlite_batch_rows: int = 8192
+    # How many of the partitions a query names are read at a time.  One, because
+    # cqlite's seek merger decodes every row of every partition it is given before
+    # the merge starts: one 15-minute window of 16 partitions and 1.78M rows held
+    # 6.83 GB of anonymous memory read together, and a second such query crossed
+    # the container's 8 GB limit, where the kernel killed this process.  One
+    # partition at a time held 1.41 GB and was faster, 23.7 s against 39.0 s.
+    # Raise it only to measure that again.
+    cqlite_key_chunk: int = 1
 
     # Kafka — used by the platform health probe only
     kafka_host: str = "kafka"

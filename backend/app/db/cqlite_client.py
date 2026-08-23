@@ -216,6 +216,7 @@ class CqliteClient:
                         ddl,
                         splits=settings.cqlite_splits,
                         batch_rows=settings.cqlite_batch_rows,
+                        key_chunk=settings.cqlite_key_chunk,
                     )
                     ctx.register_table(table, provider)
                     providers[table] = provider
@@ -295,6 +296,7 @@ class CqliteClient:
                         ddl,
                         splits=settings.cqlite_splits,
                         batch_rows=settings.cqlite_batch_rows,
+                        key_chunk=settings.cqlite_key_chunk,
                     )
                     # register_table refuses a name the session already holds, so
                     # the name is taken away first.  It should not be held: a

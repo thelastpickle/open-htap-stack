@@ -1054,6 +1054,78 @@ jobs:
           echo "✓ All Mission Control checks passed"
         timeout-minutes: 20
 
+      - name: Test the cqlite token split
+        run: |
+          echo -e "\n=== A split scan reads each partition once ==="
+          # cqlite documents ScanTokenBound as a hint the consumer must enforce, and a
+          # Cassandra 5 generation is BTI, which fails the gate on its Summary-guided
+          # walk and drains through a route that takes no bound.  So the reader tests
+          # each partition's token itself.  Before that test four slices over a
+          # 100-row table returned 400 rows, and nothing in the suite noticed: a
+          # statement naming partitions never splits, and the default is one slice.
+          #
+          # The assertion is count(*) against count(DISTINCT entity_id) on a walk with
+          # four slices.  entity_id is the whole primary key of drone_latest_status, so
+          # the two are equal by definition and a slice that emitted a partition twice
+          # makes count(*) the larger.  Structural, so it holds while rows arrive and
+          # on a table of any size, which a comparison against another path would not:
+          # this reader answers as of the last flush and the others answer as of now.
+          #
+          # The Rust unit test `each_partition_belongs_to_exactly_one_split` proves the
+          # same property, and is not enough on its own: this workflow never runs
+          # `cargo test`, because a debug build of the vendored cqlite-core costs
+          # minutes on a runner with no cargo cache.
+          TMP_DIR="${TMP_DIR:-.ci-tmp}"
+          mkdir -p "$TMP_DIR"
+
+          CQLITE_SPLITS=4 podman compose -f podman-compose.yml up -d --no-deps backend
+          timeout 300 bash -c 'until curl -sf -m 5 http://localhost:8000/api/health > /dev/null; do sleep 5; done'
+          # Registration needs Cassandra once per table and is retried every 30s, so
+          # wait for the reader to hold every table rather than for the port to answer.
+          timeout 300 bash -c 'until curl -s -m 10 http://localhost:8000/api/platform/health | grep -q "3 table(s)"; do echo "Waiting for the cqlite reader to register its tables..."; sleep 5; done'
+
+          cat > "$TMP_DIR/split-count.json" << 'JSON'
+          {"sql": "SELECT count(*) AS rows_read, count(DISTINCT entity_id) AS partitions FROM drone_latest_status", "limit": 10, "engines": ["cqlite"], "mode": "sequential"}
+          JSON
+          curl -s --max-time 300 -X POST http://localhost:8000/api/query/benchmark \
+            -H 'Content-Type: application/json' --data @"$TMP_DIR/split-count.json" \
+            > "$TMP_DIR/split-count-result.json"
+          python3 -m json.tool < "$TMP_DIR/split-count-result.json"
+          # The verdict is taken before the restore rather than after, so a failure
+          # still leaves the shipped default behind it: this step runs under `bash -e`,
+          # and asserting first would abort with the backend on four slices and every
+          # later step measuring something the demo does not ship.
+          SPLIT_VERDICT=0
+          python3 - "$TMP_DIR/split-count-result.json" << 'PY' || SPLIT_VERDICT=$?
+          import json, sys
+          result = json.load(open(sys.argv[1])).get("cqlite") or {}
+          if result.get("error") or not result.get("rows"):
+              print(f"::error::the split scan answered nothing: {result.get('error')}")
+              sys.exit(1)
+          index = {column: i for i, column in enumerate(result["columns"])}
+          row = result["rows"][0]
+          read = row[index["rows_read"]]
+          partitions = row[index["partitions"]]
+          print(f"  four slices read {read} rows over {partitions} partitions")
+          if read != partitions:
+              print(f"::error::four slices read {read} rows for {partitions} partitions,"
+                    f" so a partition was read by more than one slice")
+              sys.exit(1)
+          if not read:
+              print("::error::the split scan read no row, so it proves nothing")
+              sys.exit(1)
+          PY
+
+          # Back to the default, so the steps after this measure what the demo ships.
+          podman compose -f podman-compose.yml up -d --no-deps backend
+          timeout 300 bash -c 'until curl -sf -m 5 http://localhost:8000/api/health > /dev/null; do sleep 5; done'
+          timeout 300 bash -c 'until curl -s -m 10 http://localhost:8000/api/platform/health | grep -q "3 table(s)"; do echo "Waiting for the cqlite reader to register its tables..."; sleep 5; done'
+          echo "✓ Restored the shipped default of one slice"
+
+          [ "$SPLIT_VERDICT" -eq 0 ] || exit "$SPLIT_VERDICT"
+          echo "✓ Four token slices read each partition exactly once"
+        timeout-minutes: 15
+
       - name: Test Parquet Export
         run: |
           echo -e "\n=== Testing Parquet Export ==="

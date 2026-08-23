@@ -54,10 +54,15 @@ class Settings(BaseSettings):
     # It parses the SSTable files under this directory in place, so the path must
     # be the one compose mounts the Cassandra data directory at, read-only.
     cqlite_data_dir: str = "/var/lib/cassandra/data"
-    # How many slices of the token ring a full scan divides into.  One, because
-    # more is measured as a loss on Cassandra 5 files: cqlite 0.16 filters a token
-    # bound after its BTI walk rather than pushing the bound into it, so N slices
-    # read the whole ring N times.  Raise it only to measure that.
+    # How many slices of the token ring a full scan divides into.  One, for two
+    # reasons.  cqlite's BTI route drains the data section sequentially and takes
+    # no token bound, so N slices read the whole ring N times and only the decode
+    # divides; the reader applies the bound itself at the partition boundary, which
+    # is what stops N slices returning every row N times.  And memory binds before
+    # throughput does: one 15-minute window counted through the seek path peaked at
+    # 6.77 GB of anonymous resident memory on a single slice, and each extra slice
+    # builds another merger over the same files.  Raise this against a measured
+    # bytes-per-slice figure and a container memory limit, not the core count.
     cqlite_splits: int = 1
     # Rows per Arrow record batch handed to DataFusion.
     cqlite_batch_rows: int = 8192

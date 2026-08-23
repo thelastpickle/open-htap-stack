@@ -313,6 +313,13 @@ services:
       # mount above are one setting: the two disagreeing gives a path that finds
       # no table directory and reports every query as a decline.
       CQLITE_DATA_DIR: "/var/lib/cassandra/data"
+      # How many token-ring slices a scan with no WHERE divides into.  One, and
+      # reachable from here so the split can be exercised without a rebuild: the
+      # reader applies the token bound itself, because cqlite's BTI route drops
+      # it, and that is worth being able to check.  Raising it multiplies memory
+      # rather than throughput; see backend/app/config.py for the measured
+      # figure that keeps it at one.
+      CQLITE_SPLITS: "${CQLITE_SPLITS:-1}"
       # Shown as the startup defaults on the Settings page, so they must match
       # what data-producer above was started with.
       DEMO_N_ENTITIES: "${DEMO_N_ENTITIES:-100}"

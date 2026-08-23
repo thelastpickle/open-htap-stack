@@ -23,4 +23,9 @@ httpx==0.28.1
 # the reader hands this library a capsule holding a repr(C) struct, and the two
 # sides must agree on its layout.  The cqlite_datafusion wheel beside it is built
 # from cqlite-datafusion/ by the first stage of backend/Dockerfile.
+#
+# This line is the binding side of the three.  The Rust crates are published at
+# 55.0.0, which carries arrow 59; this wheel is published only to 54.0.0.  So 54 is
+# the highest the Rust side may take, and DataFusion 55 waits on PyPI rather than on
+# anything in this repository.  Raise all three together or none of them.
 datafusion==54.0.0

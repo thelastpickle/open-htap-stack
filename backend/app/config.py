@@ -54,16 +54,19 @@ class Settings(BaseSettings):
     # It parses the SSTable files under this directory in place, so the path must
     # be the one compose mounts the Cassandra data directory at, read-only.
     cqlite_data_dir: str = "/var/lib/cassandra/data"
-    # How many slices of the token ring a full scan divides into.  One, for two
-    # reasons.  cqlite's BTI route drains the data section sequentially and takes
-    # no token bound, so N slices read the whole ring N times and only the decode
-    # divides; the reader applies the bound itself at the partition boundary, which
-    # is what stops N slices returning every row N times.  And memory binds before
-    # throughput does: one 15-minute window counted through the seek path held
-    # 6.83 GB of anonymous memory on a single slice with all 16 of its partitions
-    # in one merger, and each extra slice builds another merger over the same
-    # files.  The container limit that measurement waited on now exists, so raise
-    # this against a measured bytes-per-slice figure, not the core count.
+    # How many slices of the token ring a full scan divides into.  One, because
+    # 71% of a slice is work every other slice repeats.  cqlite's BTI route drains
+    # the data section sequentially with no partition-index seek, so each slice
+    # re-reads and re-parses the whole file and only the row decode divides.
+    # Measured on one 203.7 MB generation of 1,102,576 rows, in CPU time because
+    # the host was too loaded for a wall clock: 11.79 s at one slice, 22.05 s at
+    # two, 40.33 s at four and 73.01 s at seven.  Solving N*P + R from the two-
+    # and four-slice points puts 71% of a slice in the repeated part, so the best
+    # a split can do is 1.4x wall clock for N times the CPU, and on seven shared
+    # cores the wall clock in fact rose, 6.0-7.4 s to 11.2-12.4 s.  Memory does
+    # not bind: the walk merger streams, and peak resident stayed at 35 to 39 MB
+    # at every slice count.  Raise this only when the walk seeks to its slice
+    # through Partitions.db rather than draining past it.
     cqlite_splits: int = 1
     # Rows per Arrow record batch handed to DataFusion.
     cqlite_batch_rows: int = 8192

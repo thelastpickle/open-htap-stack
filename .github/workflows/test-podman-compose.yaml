@@ -1072,9 +1072,9 @@ jobs:
           # this reader answers as of the last flush and the others answer as of now.
           #
           # The Rust unit test `each_partition_belongs_to_exactly_one_split` proves the
-          # same property, and is not enough on its own: this workflow never runs
-          # `cargo test`, because a debug build of the vendored cqlite-core costs
-          # minutes on a runner with no cargo cache.
+          # same property, and is not enough on its own: it is in the cqlite fork, not
+          # here, and this repository holds only the built wheel.  So the assertion has
+          # to be made against the running reader.
           TMP_DIR="${TMP_DIR:-.ci-tmp}"
           mkdir -p "$TMP_DIR"
 

@@ -1,4 +1,4 @@
-"""Vector search routes — Cassandra 5 SAI over a float vector column.
+"""Vector search routes — Cassandra Storage-Attached Index (SAI) over a float vector column.
 
 Each asset carries a snippet of prose.  Indexing embeds that snippet into
 ``demo.drone_text_embeddings``; searching embeds the query, asks Cassandra for

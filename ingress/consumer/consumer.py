@@ -230,6 +230,16 @@ def ensure_schema(session, keyspace: str, table: str):
         );
         """
     )
+    # No WITH OPTIONS, so the index takes the server's default similarity
+    # function.  Stated because it means a Cassandra release that changes that
+    # default changes which neighbours this index returns, silently rather than
+    # by failing.  Checked on 6.0-alpha2: system_schema.indexes carries
+    # class_name and target only, and a search answers.  What the check cannot
+    # do is notice a changed default, because without an embedding key the
+    # backend uses a local hashing embedder, whose neighbours are not ordered by
+    # meaning; measured, five hits over one query spanned 0.550 to 0.602 cosine
+    # and the nearest was unrelated prose.  Naming the function here would fix
+    # the demo to one metric, which is a decision worth taking deliberately.
     session.execute(
         f"""
         CREATE CUSTOM INDEX IF NOT EXISTS payload_vector_idx

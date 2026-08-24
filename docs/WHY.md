@@ -90,7 +90,7 @@ This stack runs two of those three SQL interfaces against one data store, and th
 
 - **Partition-based analytical SQL** (Spark / Presto via Cassandra connector): for targeted analytical queries on known partitions
 - **File-direct analytical SQL** (Spark Bulk Reader, and cqlite over the live files): for wide scans and bulk analytics
-- **Application SQL** (Accord SQL, the Postgres adapter): deferred. &emsp;It needs Accord, Accord needs Cassandra 6.0, and 6.0's SSTable format has no reader for either file-direct path, so this stack holds Cassandra at 5.0
+- **Application SQL** (Accord SQL, the Postgres adapter): deferred. &emsp;It needs Accord, and Accord is here: the stack runs Cassandra 6.0-alpha2, which ships it and refuses a transaction only because no table declares `transactional_mode`.&emsp;The adapter itself is what remains
 
 Different SQL interfaces for different access patterns. &emsp;Federation with existing data sources becomes an integration problem rather than an architectural one.
 

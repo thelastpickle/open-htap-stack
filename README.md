@@ -9,7 +9,7 @@ Comes with a [web drone dashboard demo](docs/MISSION-CONTROL.md) of realtime dat
 **Key characteristics**
 
 - **Record of Truth** — one dataset, one store, one governance surface, one schema; no ETL copies, no reconciliation debt
-- **Strict-Serializable ACID transactions** via Accord (CEP-15) — the same isolation class Google Spanner offers.&emsp;Not in this stack: Accord needs Cassandra 6.0, and 6.0's SSTable format has no reader on two of the five access paths below, so this stack holds Cassandra at 5.0
+- **Strict-Serializable ACID transactions** via Accord (CEP-15) — the same isolation class Google Spanner offers.&emsp;Shipped here and not turned on: the stack runs Cassandra 6.0-alpha2, whose `lib/` carries Accord, and a transaction is refused by the node rather than the parser because no table declares `transactional_mode`
 - **OLTP** first capabilities: high concurrency and horizontal scaling; write p99 under 5ms and read p99 under 50ms
 - **Multiple SQL interfaces over the same data**:
   - SparkSQL and Presto for analytics, both running here
@@ -78,7 +78,7 @@ started; nothing is seeded or pre-rendered.
    point-read latency measured while that path was working, so the isolation the two file readers
    claim is shown rather than asserted. Run the paths one at a time to see what each costs; run them
    all at once to see what they cost each other.
-4. **Explore → Vector search** — semantic search over the assets' text payloads, through Cassandra 5
+4. **Explore → Vector search** — semantic search over the assets' text payloads, through Cassandra
    SAI, with each hit's live position fetched by point read. Turn on **Live embedding** and the index
    follows the snippets as they are rewritten, in a loop behind the writes; the panel says how far
    behind it is, and the point read on the Health page says what it cost the request path.
@@ -138,7 +138,7 @@ Queries using the Cassandra Spark Bulk Reader via the Cassandra Sidecar:
 ```shell
 podman exec -it spark \
   spark-sql \
-    --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0
+    --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.5-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.5-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.5-mck0
 ```
 
 ```sql
@@ -182,7 +182,7 @@ This writes the entire `demo.events` table to a single Parquet file in the `cass
 ```shell
 podman exec -it spark \
   spark-shell \
-    --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0 \
+    --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.5-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.5-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.5-mck0 \
     --conf spark.executor.extraJavaOptions=-Dvertx.disableDnsResolver=true
 ```
 
@@ -212,9 +212,17 @@ todo
 
 ### Example Accord transactions
 
-Neither of these runs in this stack, and the `mck/cassandra-6` branch shares no history with trunk, so it cannot be merged into what runs here.
+None runs in this stack yet, and the reason is no longer Cassandra's version.
 
-Accord needs Cassandra 6.0.&emsp;6.0 writes BTI SSTables at version `ea`, which cqlite cannot parse and for which cassandra-analytics has no bridge, so moving to 6.0 takes the `cqlite` and `spark_bulk` paths with it.&emsp;No setting holds BTI at `da`.&emsp;See the comment in `cassandra/entrypoint.sh`.
+The stack runs 6.0-alpha2, and that build carries Accord: `lib/cassandra-accord-6.0-alpha2.jar`.&emsp;cqlsh parses the grammar, and the node refuses the statement for one reason only:
+
+```
+BEGIN TRANSACTION SELECT * FROM demo.drone_latest_status LIMIT 1; COMMIT TRANSACTION;
+InvalidRequest: code=2200 [Invalid query] message="Accord transactions are disabled on
+table (See transactional_mode in table options); SELECT statement at [1:19]"
+```
+
+So what remains is a table option and a demonstration worth measuring, which is a change of its own rather than part of this upgrade.&emsp;See the comment in `cassandra/entrypoint.sh`.
 
 ### Example Application (OLTP) SQL
 
@@ -238,7 +246,7 @@ Kafka (ingest)  →  Cassandra (storage of record)  →  Spark / Presto (analyti
 Three access paths share the same persisted data:
 
 - **OLTP path** — point reads and bounded partition reads through Cassandra's request path. Latency performance: p99 write < 5ms, p99 read < 50ms.
-- **OLAP path** — wide scans and aggregations via the Spark Bulk Reader, reading SSTable files directly from coordinated snapshots. Does not contend with OLTP. Scale-out performance at 1.7Gb/s reads and 7Gb/s writes per node. The dashboard also reads the same files with no snapshot and no JVM, in its own process, through cqlite; that path answers as of the last flush.
+- **OLAP path** — wide scans and aggregations via the Spark Bulk Reader, reading SSTable files directly from coordinated snapshots. Does not contend with OLTP. Measured on this one node, counting the whole table with no predicate: 452,446,775 bytes of snapshot in 13.4 s, so 33.9 MB/s, and the snapshot itself cost 323 ms of that. Read it as a floor rather than a throughput figure, because the measurement is a laptop running eight containers on seven cores; the mechanism is what scales per node, and this demo does not measure that. No write rate is quoted, because the bulk writer does not work here yet — see the note above. The dashboard also reads the same files with no snapshot and no JVM, in its own process, through cqlite: the same count took 32.9 s over 450,318,008 bytes of live files, single-threaded against the bulk reader's four cores, and answers as of the last flush.
 - **CDC path** — change streams to Kafka via the Sidecar, with RF-aware deduplication.
 
 The architectural property that makes this work, that analytical scans do not touch the OLTP hot path — holds **by construction**, not by tuning. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full technical treatment.

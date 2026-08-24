@@ -40,7 +40,7 @@ This document supports the general claim of 80%+ TCO savings over Snowflake or D
 
 The unified architecture eliminates costs through the items below. &emsp;Two of them are design rather than demonstration, and are marked; the repository runs the rest.
 
-- **Accord transactions, Cassandra Enhancement Proposal 15 (CEP-15)**: strict-serializable atomicity, consistency, isolation and durability (ACID) without separate transaction coordinators or external consensus overhead. &emsp;Neither OLTP nor online analytical processing (OLAP) systems achieve strict serializability alone. &emsp;**Not demonstrated here**: Accord needs Cassandra 6.0, and this stack holds Cassandra at 5.0 so that both file-direct access paths keep a reader.
+- **Accord transactions, Cassandra Enhancement Proposal 15 (CEP-15)**: strict-serializable atomicity, consistency, isolation and durability (ACID) without separate transaction coordinators or external consensus overhead. &emsp;Neither OLTP nor online analytical processing (OLAP) systems achieve strict serializability alone. &emsp;**Not demonstrated here**: the stack runs Cassandra 6.0-alpha2, which ships Accord, but no table declares `transactional_mode`, so the node refuses a transaction.&emsp;Turning it on and measuring it is a change of its own.
 - **Spark Bulk Reader/Writer via Sidecar (CEP-28)**: analytics on persisted structures (SSTables) without extract-transform-load (ETL) pipelines.
 - **Multiple SQL interfaces on one data store**:
   - Spark / Presto for OLAP (analytical SQL)
@@ -401,7 +401,7 @@ This works because:
 
 1. OLTP workloads typically under-use CPU relative to I/O, so there is headroom for analytical scans on the same nodes.
 2. Analytical reads go through a different code path (direct SSTable reads via the Sidecar) that doesn't contend with the OLTP request queues, coordinator threads, or read-repair paths.
-3. At roughly 1.7 Gb/s per-node analytical throughput, a 6-node data cluster sustains ~10 Gb/s of scan bandwidth **without separate OLAP compute provisioning**.
+3. At roughly 1.7 Gb/s per-node analytical throughput, a 6-node data cluster sustains ~10 Gb/s of scan bandwidth **without separate OLAP compute provisioning**. &emsp;That per-node rate is an input to this worksheet and not a figure this repository has measured; the demo runs one node in a container beside seven others, where an unbounded bulk count read its snapshot at 33.9 MB/s. &emsp;Treat the sizing as sensitive to it.
 
 **Caveat**: if analytical workloads are sustained at full throughput around the clock (unusual), node sizing should increase. &emsp;The 6-node cluster here assumes bursty analytical load, with heavy daily batch windows and frequent ad-hoc queries rather than continuous saturation. &emsp;For continuous heavy analytics, add 25–50% to the data-node count as a sizing margin.
 

@@ -155,7 +155,7 @@ The architectural reason this works: analytical reads don't go through Cassandra
 
 ### What is provided
 
-**Nothing yet, in this stack.** &emsp;The adapter is called Accord SQL, and `accord-sql/` holds a placeholder that no compose service starts. &emsp;It sits on the transaction layer, and the transaction layer needs Cassandra 6.0, whose SSTable format two of the five access paths cannot read; that is why this stack holds Cassandra at 5.0 and the adapter waits.
+**Nothing yet, in this stack.** &emsp;The adapter is called Accord SQL, and `accord-sql/` holds a placeholder that no compose service starts. &emsp;It sits on the transaction layer, and the transaction layer is now present: the stack runs Cassandra 6.0-alpha2, which ships Accord and refuses a transaction only because no table declares `transactional_mode`. &emsp;What the adapter waits on is therefore work of its own, and no longer a version of Cassandra.
 
 What the design describes is a **Postgres wire-protocol and Postgres-dialect adapter**, a prototype on the transaction layer, using Apache Calcite for query parsing and planning. &emsp;The rest of this section is what to assume about that design, not about anything running here. &emsp;The SQL that does run here is SparkSQL and Presto, over the four analytical access paths.
 

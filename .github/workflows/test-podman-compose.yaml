@@ -278,7 +278,7 @@ jobs:
           echo "Executing bulk SparkSQL queries..."
           set +e
           RESULT=$(podman exec spark spark-sql \
-            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0 \
+            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.5-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.5-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.5-mck0 \
             -f /tmp/spark_bulk_test.sql 2>&1)
           EXIT_CODE=$?
           set -e
@@ -1007,7 +1007,7 @@ jobs:
           print(f"✓ {len(rows)} snapshot(s), each outlasting the {limit_s}s a read may take")
           PY
 
-          echo -e "\n=== Vector search over Cassandra 5 SAI ==="
+          echo -e "\n=== Vector search over Cassandra SAI ==="
           curl -sf -X POST http://localhost:8000/api/vector/index-all \
             || { echo "::error::could not start the vector indexer"; exit 1; }
           # The indexer runs in the background, so poll until a search finds something.
@@ -1058,8 +1058,8 @@ jobs:
         run: |
           echo -e "\n=== A split scan reads each partition once ==="
           # cqlite documents ScanTokenBound as a hint the consumer must enforce, and a
-          # Cassandra 5 generation is BTI, which fails the gate on its Summary-guided
-          # walk and drains through a route that takes no bound.  So the reader tests
+          # generation this stack writes is BTI, which fails the gate on its
+          # Summary-guided walk and drains through a route that takes no bound.  So the reader tests
           # each partition's token itself.  Before that test four slices over a
           # 100-row table returned 400 rows, and nothing in the suite noticed: a
           # statement naming partitions never splits, and the default is one slice.
@@ -1169,7 +1169,7 @@ jobs:
           echo "Executing Parquet export..."
           set +e
           RESULT=$(podman exec spark spark-sql \
-            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0 \
+            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.5-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.5-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.5-mck0 \
             -f /tmp/spark_parquet_export.sql 2>&1)
           EXIT_CODE=$?
           set -e
@@ -1198,10 +1198,22 @@ jobs:
       - name: Test Parquet Import via Spark Shell
         run: |
           echo -e "\n=== Testing Parquet Import via Spark Shell ==="
-          
+
+          # Read one number out of a cqlsh result, and not out of anything else it
+          # prints.  cqlsh writes a version warning first when its own version string
+          # and the server's differ, and 6.0-alpha2's does: "cqlsh was built against
+          # 6.0-alpha2, but this server is 6.0".  Taking the first number in the merged
+          # output then returned 6 for every count on this step, so the truncate check
+          # failed on a table it had just emptied.  A count is the only bare number on
+          # a line of its own, which is what this matches.
+          cql_count() {
+            podman exec cassandra cqlsh cassandra -e "$1" 2>&1 \
+              | grep -oE "^ +[0-9]+ *$" | tr -d " " | head -1
+          }
+
           # First, get the count before truncating
           echo "Getting row count before truncate..."
-          COUNT_BEFORE=$(podman exec cassandra cqlsh cassandra -e "SELECT COUNT(*) FROM demo.events;" 2>&1 | grep -oE "[0-9]+" | head -1)
+          COUNT_BEFORE=$(cql_count "SELECT COUNT(*) FROM demo.events;")
           echo "Rows before truncate: $COUNT_BEFORE"
           
           # Stop ingress and truncate the table
@@ -1211,7 +1223,7 @@ jobs:
           podman exec cassandra cqlsh cassandra -e "TRUNCATE demo.events;"
           
           # Verify table is empty
-          COUNT_AFTER=$(podman exec cassandra cqlsh cassandra -e "SELECT COUNT(*) FROM demo.events;" 2>&1 | grep -oE "[0-9]+" | head -1)
+          COUNT_AFTER=$(cql_count "SELECT COUNT(*) FROM demo.events;")
           echo "Rows after truncate: $COUNT_AFTER"
           [ "$COUNT_AFTER" != "0" ] && { echo "❌ Table not empty after truncate"; exit 1; }
           
@@ -1254,7 +1266,7 @@ jobs:
           # not what this reproduces now; do not quote it as the current error.
           set +e
           RESULT=$(podman exec spark spark-shell \
-            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0 \
+            --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.5-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.5-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.5-mck0 \
             -i /tmp/parquet_import.scala 2>&1)
           EXIT_CODE=$?
           set -e
@@ -1265,7 +1277,7 @@ jobs:
           [ $EXIT_CODE -ne 0 ] && { echo "❌ Parquet import failed with unexpected error (exit code $EXIT_CODE)"; exit 1; }
           # Verify data was imported
           echo "Verifying data was imported..."
-          COUNT_FINAL=$(podman exec cassandra cqlsh cassandra -e "SELECT COUNT(*) FROM demo.events;" 2>&1 | grep -oE "[0-9]+" | head -1)
+          COUNT_FINAL=$(cql_count "SELECT COUNT(*) FROM demo.events;")
           echo "Rows after import: $COUNT_FINAL"
 
           # FIXME: This is currently expected to fail per README FIXME
@@ -1275,7 +1287,11 @@ jobs:
           echo "✓ Parquet import completed successfully - $COUNT_FINAL rows imported"
 
 
-# TODO see mck/cassandra-6 branch
+# Still commented out, and no longer because Cassandra's version is wrong.  The
+# stack runs 6.0-alpha2, which ships Accord, and the node refuses a transaction
+# with "Accord transactions are disabled on table (See transactional_mode in
+# table options)".  Enabling it, and the demo.sessions_open table this reads,
+# are a change of their own; see accord-sql/Dockerfile.
 #      - name: Test Accord Transactions
 #        run: |
 #          echo -e "\n=== Testing Accord Transactions ==="

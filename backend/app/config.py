@@ -55,28 +55,31 @@ class Settings(BaseSettings):
     # be the one compose mounts the Cassandra data directory at, read-only.
     cqlite_data_dir: str = "/var/lib/cassandra/data"
     # How many slices of the token ring a full scan divides into.  One, because
-    # 71% of a slice is work every other slice repeats.  cqlite's BTI route drains
+    # most of a slice is work every other slice repeats.  cqlite's BTI route drains
     # the data section sequentially with no partition-index seek, so each slice
     # re-reads and re-parses the whole file and only the row decode divides.
-    # Measured on one 203.7 MB generation of 1,102,576 rows, in CPU time because
-    # the host was too loaded for a wall clock: 11.79 s at one slice, 22.05 s at
-    # two, 40.33 s at four and 73.01 s at seven.  Solving N*P + R from the two-
-    # and four-slice points puts 71% of a slice in the repeated part, so the best
-    # a split can do is 1.4x wall clock for N times the CPU, and on seven shared
-    # cores the wall clock in fact rose, 6.0-7.4 s to 11.2-12.4 s.  Memory does
-    # not bind: the walk merger streams, and peak resident stayed at 35 to 39 MB
-    # at every slice count.  Raise this only when the walk seeks to its slice
-    # through Partitions.db rather than draining past it.
+    # Swept once per SSTable version, in CPU time because the host was too loaded
+    # for a wall clock: two "ea" generations of 180,672,491 bytes took 9.53 s,
+    # 14.05 s, 23.83 s and 38.68 s at one, two, four and seven slices, and one
+    # 203.7 MB "da" generation of 1,102,576 rows took 11.79 s, 22.05 s, 40.33 s
+    # and 73.01 s.  Solving N*P + R from the two- and four-slice points puts the
+    # repeated part at 53% and 71%, so the best a split can do is under 2x wall
+    # clock for N times the CPU; on seven shared cores the wall clock in fact
+    # rose, 14.05 to 17.34 s on "ea" and 6.0-7.4 to 11.2-12.4 s on "da".  Memory
+    # does not bind: the walk merger streams, and peak resident stayed at 35 to
+    # 39 MB at every "da" slice count.  Raise this only when the walk seeks to
+    # its slice through Partitions.db rather than draining past it.
     cqlite_splits: int = 1
     # Rows per Arrow record batch handed to DataFusion.
     cqlite_batch_rows: int = 8192
     # How many of the partitions a query names are read at a time.  One, because
     # cqlite's seek merger decodes every row of every partition it is given before
-    # the merge starts: one 15-minute window of 16 partitions and 1.78M rows held
-    # 6.83 GB of anonymous memory read together, and a second such query crossed
-    # the container's 8 GB limit, where the kernel killed this process.  One
-    # partition at a time held 1.41 GB and was faster, 23.7 s against 39.0 s.
-    # Raise it only to measure that again.
+    # the merge starts, at about 3.9 GB of anonymous memory per million rows on
+    # either SSTable version: a 16-partition window of 1.78M "da" rows held
+    # 6.83 GB read together, and a second such query crossed the container's 8 GB
+    # limit, where the kernel killed this process; 1.25M "ea" rows held 4.84 GB.
+    # One partition at a time held 1.41 GB and 1.09 GB, and was the faster of the
+    # two in both sweeps.  Raise it only to measure that again.
     cqlite_key_chunk: int = 1
 
     # Kafka — used by the platform health probe only

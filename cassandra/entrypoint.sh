@@ -19,12 +19,11 @@ sed -i \
   -e "s/seeds: \"127.0.0.1:7000\"/seeds: \"${CONTAINER_IP}:7000\"/" \
   "${CONF}"
 
-# Accord needs Cassandra 6.0, and 6.0 costs two of the five access paths, so this stays off.
-# 6.0 writes BTI SSTables at version "ea": cqlite reads na, nb, oa and da only, and
-# cassandra-analytics has bridges for 4.0 and 5.0 only, so spark_bulk has nothing that reads ea.
-# No setting holds BTI at da; BtiFormat's current_version is a constant, and only the big
-# format's version follows storage_compatibility_mode.  Do not uncomment this without a
-# reader for ea, or both the cqlite and spark_bulk paths go dark.
+# Accord needs Cassandra 6.0, which this now runs, so the reader question that used to block
+# it is settled: cqlite accepts BTI "ea" and cassandra-analytics has a 6.0 bridge, and all
+# five access paths answer.  Accord stays off because enabling it is its own change, with its
+# own schema and its own measurements: a table opts in with transactional_mode, so the sink
+# would have to declare it, and accord-sql/ is still a placeholder.
 #echo -e "accord:\n  enabled: true" >> "${CONF}"
 
 sed -i 's|cassandra_storagedir="$CASSANDRA_HOME/data|cassandra_storagedir="/var/lib/cassandra|' "${CASSANDRA_HOME}/bin/cassandra.in.sh"

@@ -90,7 +90,8 @@ services:
   spark:
     # Spark stays on 3.5 because spark-cassandra-connector publishes nothing above 3.5.1,
     # for either Scala version, so Spark 4 would take the spark access path with it.
-    # cassandra-analytics is no longer the blocker: CASSANALYTICS-34 is fixed for 0.5.0.
+    # cassandra-analytics is not the blocker: CASSANALYTICS-34 is fixed for 0.5, and the
+    # 0.5-mck0 build below publishes _spark3_2.12 artifacts as well as _spark4_2.13 ones.
     image: apache/spark:3.5.9-scala2.12-java17-python3-ubuntu
 
     container_name: spark
@@ -107,7 +108,9 @@ services:
       - "10000:10000" # Spark Thrift Server (HiveServer2)
     volumes:
       - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
-      - ./spark/conf/ivysettings.xml:/opt/spark/conf/ivysettings.xml:ro
+      # There is no ivysettings.xml mount: nothing sets spark.jars.ivySettings, so Spark
+      # never read one.  The mount that used to be here named a file that was never
+      # committed, and podman created an empty directory in its place on every run.
       - ./spark/install-cassandra-libraries.sh:/opt/spark/install-cassandra-libraries.sh:ro
       - ./spark/jobs:/opt/spark/jobs:rw
       - ./cassandra-data:/var/lib/cassandra
@@ -117,12 +120,17 @@ services:
       HOME: "/opt/spark/work-dir"
       PATH: "/opt/spark/bin:${PATH}"
       # The CQL connector and the Analytics bulk reader, resolved through the Ivy
-      # cache this repository vendors.  Same coordinates as the CI SparkSQL tests.
+      # repository this repository vendors.  Same coordinates as the CI SparkSQL tests.
+      # 0.5-mck0 is a local build, not a release; scripts/vendor-analytics.sh made it and
+      # spark/ivy/README.md says how.  All three analytics coordinates move together:
+      # CassandraDataSource validates a bridge for every implemented version at load, so a
+      # 0.4.0 jar beside a 0.5-mck0 one throws "Missing Cassandra implementation for
+      # version SIXZERO" rather than degrading.
       CASSANDRA_SPARK_PACKAGES: >-
         com.datastax.spark:spark-cassandra-connector_2.12:3.5.1,
-        org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.4.0,
-        org.apache.cassandra:analytics-sidecar-vertx-client-all:0.4.0,
-        org.apache.cassandra:cassandra-bridge_spark3_2.12:0.4.0
+        org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.5-mck0,
+        org.apache.cassandra:analytics-sidecar-vertx-client-all:0.5-mck0,
+        org.apache.cassandra:cassandra-bridge_spark3_2.12:0.5-mck0
     command: >
       bash -lc '
         set -euo pipefail;
@@ -303,7 +311,10 @@ services:
     # A limit confines the kill to the container that earned it, and compose
     # restarts it.  It has done so since: raising CQLITE_KEY_CHUNK to 16 and
     # counting one window twice crossed 8 GB on the second statement, and the
-    # container came back in seconds.  Mind that the limit also counts the page
+    # container came back in seconds.  That was 1.78M rows on Cassandra 5.0 "da"
+    # files; the same setting over 1.25M rows of 6.0 "ea" files held 4.84 GB and
+    # was not killed, so what reaches the limit is the row count and the repeat
+    # rather than the file version.  Mind that the limit also counts the page
     # cache of the files a read touches, 4.19 GB for a walk of the whole table,
     # so it cannot be set from the anonymous figure alone; the kernel reclaims
     # those pages rather than killing for them.

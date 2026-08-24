@@ -1,13 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ivy-module version="2.0" xmlns:m="http://ant.apache.org/ivy/maven">
 	<info organisation="org.apache.cassandra"
-		module="cassandra-analytics-sidecar-client"
-		revision="0.4.0"
+		module="cassandra-analytics-spark-converter_spark3_2.12"
+		revision="0.5-mck0"
 		status="release"
-		publication="20260507071451"
+		publication="20260823192124"
 	>
-		<license name="The Apache License, Version 2.0" url="https://www.apache.org/licenses/LICENSE-2.0.txt" />
-		<description homepage="https://cassandra.apache.org/" />
+		<description homepage="" />
 	</info>
 	<configurations>
 		<conf name="default" visibility="public" description="runtime dependencies and master artifact can be used with this conf" extends="runtime,master"/>
@@ -22,20 +21,6 @@
 		<conf name="optional" visibility="public" description="contains all optional dependencies"/>
 	</configurations>
 	<publications>
-		<artifact name="cassandra-analytics-sidecar-client" type="jar" ext="jar" conf="master"/>
+		<artifact name="cassandra-analytics-spark-converter_spark3_2.12" type="jar" ext="jar" conf="master"/>
 	</publications>
-	<dependencies>
-		<dependency org="org.apache.cassandra" name="analytics-sidecar-vertx-client-all" rev="0.4.0" force="true" conf="compile->compile(*),master(*);runtime->runtime(*)">
-			<exclude org="org.slf4j" module="slf4j-log4j12" name="*" type="*" ext="*" conf="" matcher="exact"/>
-			<exclude org="log4j" module="log4j" name="*" type="*" ext="*" conf="" matcher="exact"/>
-		</dependency>
-		<dependency org="org.apache.cassandra" name="cassandra-analytics-common" rev="0.4.0" force="true" conf="runtime->compile(*),runtime(*),master(*)">
-			<exclude org="org.slf4j" module="slf4j-log4j12" name="*" type="*" ext="*" conf="" matcher="exact"/>
-			<exclude org="log4j" module="log4j" name="*" type="*" ext="*" conf="" matcher="exact"/>
-		</dependency>
-		<dependency org="org.slf4j" name="slf4j-api" rev="1.7.30" force="true" conf="runtime->compile(*),runtime(*),master(*)">
-			<exclude org="org.slf4j" module="slf4j-log4j12" name="*" type="*" ext="*" conf="" matcher="exact"/>
-			<exclude org="log4j" module="log4j" name="*" type="*" ext="*" conf="" matcher="exact"/>
-		</dependency>
-	</dependencies>
 </ivy-module>

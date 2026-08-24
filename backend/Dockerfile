@@ -1,61 +1,37 @@
-# The build context is the repository root, not backend/, because the image also
-# builds the cqlite reader from cqlite-datafusion/; see the backend service in
-# podman-compose.yml and the ignore rules in .dockerignore.
-
-# ---------------------------------------------------------------- the reader --
-# Built on the same base as the runtime stage below, so the shared library it
-# produces links against the glibc that will load it.  A `rust:*-slim` builder
-# would be one Debian suite away from a different one, and the failure would
-# appear as an import error in the runtime image rather than here.
-FROM python:3.14-slim AS reader
-
-ENV RUSTUP_HOME=/usr/local/rustup \
-    CARGO_HOME=/usr/local/cargo \
-    PATH=/usr/local/cargo/bin:$PATH
-
-# DataFusion 54 needs 1.88 or newer; this is the version the crate is developed
-# against.  maturin is bounded rather than pinned, because the build backend
-# requirement in crates/cqlite-datafusion-py/pyproject.toml already bounds it and
-# two pins that could disagree are worse than one.
-ARG RUST_VERSION=1.98.0
-
-RUN apt-get update \
- && apt-get install -y --no-install-recommends build-essential curl \
- && rm -rf /var/lib/apt/lists/* \
- && curl -sSf https://sh.rustup.rs \
-    | sh -s -- -y --no-modify-path --profile minimal \
-      --default-toolchain "${RUST_VERSION}" \
- && pip install --no-cache-dir "maturin>=1.7,<2.0"
-
-WORKDIR /src
-COPY cqlite-datafusion/ ./cqlite-datafusion/
-
-# --locked, so the build fails rather than resolving a different DataFusion than
-# Cargo.lock records: the capsule the reader hands the datafusion wheel is a
-# repr(C) struct, and both sides must agree on its layout.
-#
-# The cache mounts are what make a rebuild after a Rust change minutes rather
-# than a quarter of an hour; they hold the registry and the target directory
-# between builds and reach no further than this stage.
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/src/cqlite-datafusion/target,sharing=locked \
-    maturin build --release --locked --out /wheels \
-      -m cqlite-datafusion/crates/cqlite-datafusion-py/Cargo.toml
-
-# --------------------------------------------------------------- the backend --
+# Nothing in this image compiles.  The cqlite reader arrives as one prebuilt abi3
+# wheel from dist/, whose VENDOR.md names the fork commit it was built from and the
+# script that rebuilds it.
 FROM python:3.14-slim
 
 WORKDIR /app
 
-COPY backend/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# One abi3 shared library in a wheel.  No Rust toolchain reaches this image, and
-# nothing in it compiles at start-up.
-COPY --from=reader /wheels/*.whl /tmp/wheels/
-RUN pip install --no-cache-dir /tmp/wheels/*.whl && rm -rf /tmp/wheels
+ARG WHEEL_VERSION=0.1.0
+# The checksum is verified even though the file is copied rather than fetched: the wheel
+# is stored in Git LFS, and a checkout whose LFS objects did not arrive leaves a 130-byte
+# pointer file in its place.  Failing here beats an image that starts and then declines
+# every cqlite query with an import error.
+#
+# `uname -m` picks the wheel, so no TARGETARCH mapping is needed: abi3-py310 makes one
+# wheel serve CPython 3.10 and later, but its shared library is still built for one
+# architecture and one glibc.  dist/ holds x86_64 for CI and aarch64 for a development
+# machine, and a platform with neither fails on the missing file.
+COPY dist/ /tmp/wheels/
+RUN cd /tmp/wheels \
+ && WHEEL="cqlite_datafusion-${WHEEL_VERSION}-cp310-abi3-linux_$(uname -m).whl" \
+ && if [ ! -f "${WHEEL}" ]; then \
+      echo "No wheel for $(uname -m).  dist/ holds:" >&2; ls >&2; \
+      echo "Build one: scripts/build-cqlite-wheel.sh <fork-commit> <amd64|arm64>" >&2; \
+      echo "If the file is there but small, its Git LFS object did not arrive." >&2; \
+      exit 1; \
+    fi \
+ && sha256sum -c "${WHEEL}.sha256" \
+ && pip install --no-cache-dir "${WHEEL}" \
+ && cd / && rm -rf /tmp/wheels
 
-COPY backend/app/ ./app/
+COPY app/ ./app/
 
 EXPOSE 8000
 

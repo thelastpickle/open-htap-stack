@@ -282,11 +282,7 @@ services:
 
   backend:
     build:
-      # The root, not ./backend, because the image also builds the cqlite reader
-      # from cqlite-datafusion/ into a wheel.  .dockerignore excludes everything
-      # except those two directories, so the context stays small.
-      context: .
-      dockerfile: backend/Dockerfile
+      context: ./backend
     container_name: backend
     networks: [htap-net]
     depends_on:

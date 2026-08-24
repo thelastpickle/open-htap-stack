@@ -25,7 +25,7 @@
 #
 #   * The Analytics bulk reader ships one implementation per Cassandra version as a
 #     nested jar under bridges/, chosen by cassandra.releaseVersion, and reports
-#     "Missing Cassandra implementation for version FIVEZERO" when it cannot find
+#     "Missing Cassandra implementation for version SIXZERO" when it cannot find
 #     it.
 #
 # Copying the jars into /opt/spark/jars, which is on the system classpath of the

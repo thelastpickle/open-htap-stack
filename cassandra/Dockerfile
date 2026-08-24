@@ -1,18 +1,19 @@
-# base image: Cassandra 5.0 supports Java 11 and 17 only, so temurin 17 stays
+# base image: Cassandra 6.0 ships jvm11-, jvm17- and jvm21-server.options, so temurin 17 stays
+# a supported runtime and the Sidecar's own --add-opens set is still the Java 17 one.
 FROM eclipse-temurin:17-jdk
 
-# Both tarballs come from archive.apache.org, not dlcdn: dlcdn drops a release as soon as
+# Cassandra comes from archive.apache.org, not dlcdn: dlcdn drops a release as soon as
 # the next one lands, and a scheduled CI build must still fetch the pinned version months on.
-ENV CASSANDRA_VERSION=5.0.9
+ENV CASSANDRA_VERSION=6.0-alpha2
 ENV CASSANDRA_TGZ_URL="https://archive.apache.org/dist/cassandra/${CASSANDRA_VERSION}/apache-cassandra-${CASSANDRA_VERSION}-bin.tar.gz"
-ENV CASSANDRA_TGZ_SHA256=eee1460b47ebe188a29521207230617f22aad7f9e1674f5ea454f10c8f344d61
+ENV CASSANDRA_TGZ_SHA256=cc83cf03aee056646f76bd9d346e616fd3c2543f4a74e84b1431290b934c02d1
 ENV CASSANDRA_HOME=/opt/cassandra
 
-# Sidecar was a digest of the ghcr `latest` tag, which that repository never version-tags,
-# so the image could not be named or reproduced.  0.4.0 is a release with checksums beside it.
-ENV SIDECAR_VERSION=0.4.0
-ENV SIDECAR_TGZ_URL="https://archive.apache.org/dist/cassandra/cassandra-sidecar/${SIDECAR_VERSION}/apache-cassandra-sidecar-${SIDECAR_VERSION}.tar.gz"
-ENV SIDECAR_TGZ_SHA256=feeeebecc21becd38c20ba6095030691654e2fe94e3fc8f13181d5a71c99a6bd
+# The Sidecar is built here and committed, because 6.0 support is not in any release.
+# 0.4.0 has no 6.0 adapter, and the Sidecar refuses a node whose version no
+# @MinimumVersion factory claims; upstream declares 0.5-SNAPSHOT, so this local build is
+# 0.5-mck0.  dist/VENDOR.md records the fork, the commit and the build command.
+ENV SIDECAR_VERSION=0.5-mck0
 ENV SIDECAR_HOME=/opt/cassandra-sidecar
 
 ENV PATH="${CASSANDRA_HOME}/bin:${SIDECAR_HOME}/bin:${PATH}"
@@ -37,11 +38,15 @@ RUN mkdir -p /opt \
     && rm /tmp/cassandra.tgz \
     && mv "/opt/apache-cassandra-${CASSANDRA_VERSION}" "${CASSANDRA_HOME}"
 
-RUN echo "Downloading: ${SIDECAR_TGZ_URL}" \
-    && curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors "${SIDECAR_TGZ_URL}" -o /tmp/sidecar.tgz \
-    && echo "${SIDECAR_TGZ_SHA256}  /tmp/sidecar.tgz" | sha256sum -c - \
+# The checksum is verified even though the file is copied rather than fetched: it is stored
+# in Git LFS, and a checkout whose LFS objects did not arrive leaves a 130-byte pointer file
+# in its place.  Checking here fails the build, instead of leaving a container that starts
+# and then cannot find its launcher.
+COPY dist/apache-cassandra-sidecar-${SIDECAR_VERSION}.tar.gz /tmp/sidecar.tgz
+COPY dist/apache-cassandra-sidecar-${SIDECAR_VERSION}.tar.gz.sha256 /tmp/sidecar.tgz.sha256
+RUN awk '{print $1"  /tmp/sidecar.tgz"}' /tmp/sidecar.tgz.sha256 | sha256sum -c - \
     && tar -xzf /tmp/sidecar.tgz -C /opt \
-    && rm /tmp/sidecar.tgz \
+    && rm /tmp/sidecar.tgz /tmp/sidecar.tgz.sha256 \
     && mv "/opt/apache-cassandra-sidecar-${SIDECAR_VERSION}" "${SIDECAR_HOME}"
 
 RUN useradd -m -u 999 cassandra \

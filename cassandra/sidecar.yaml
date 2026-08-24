@@ -1,5 +1,6 @@
 #
-# Cassandra Sidecar 0.4.0 configuration file
+# Cassandra Sidecar 0.5-mck0 configuration file.  A trimmed copy of the template the
+# distribution ships; see dist/VENDOR.md for which keys were checked against 0.5.
 #
 cassandra_instances:
     - id: 1
@@ -257,8 +258,10 @@ access_control:
 driver_parameters:
   contact_points:
     - "cassandra:9042"
-  # cassandra_latest.yaml turns PasswordAuthenticator on, so the Sidecar's own driver needs
-  # credentials.  0.4.0 deprecates the flat username and password keys in favour of this block.
+  # Credentials for the Sidecar's own driver, in the block form 0.4.0 introduced in place of
+  # the deprecated flat username and password keys.  6.0-alpha2's cassandra_latest.yaml sets
+  # AllowAllAuthenticator, so the node ignores these; they stay so that turning the
+  # authenticator on does not also require finding this file.
   auth_provider:
     class_name: org.apache.cassandra.sidecar.cluster.auth.ConfigProvider
     parameters:

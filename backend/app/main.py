@@ -19,7 +19,7 @@ from app.db.cqlite_client import cqlite_client
 from app.db.presto_client import presto_client
 from app.db.spark_client import spark_bulk_client, spark_client
 from app.routes import alerts, demo, health, map, overview, query, settings as settings_routes
-from app.routes import vector, zones
+from app.routes import transactions, vector, zones
 
 ROUTERS = (
     overview.router,
@@ -31,6 +31,7 @@ ROUTERS = (
     vector.router,
     settings_routes.router,
     demo.router,
+    transactions.router,
 )
 
 

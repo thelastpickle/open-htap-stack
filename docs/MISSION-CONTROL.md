@@ -41,6 +41,7 @@ The fifth path is inside the box the dashboard already occupies, which is why it
 | **Map**      | Live positions, restricted airspace, and an asset's recorded flight path    | `drone_latest_status` for positions; `drone_events_by_entity` for the path         |
 | **Alerts**   | Zone-proximity and breach alerts, newest first                             | `alerts_by_bucket`, read one hourly partition at a time                           |
 | **Explore**  | SQL console, vector search, and the five-path comparison                    | Whichever path you pick; all five read the same Cassandra data                    |
+| **Transactions** | Conditional writes whose conditions live in other partitions, and their cost | Six `demo` tables at `transactional_mode='full'`, through Accord at QUORUM |
 | **Health**   | Reachability, latency by access path, and the work in flight                | A connection probe per service, one timed query per path, and each engine's own query list |
 | **Settings** | Fleet size, event rate, outlier share, pause, and the breach scenario      | Held in the backend; the data producer polls and adopts them                      |
 

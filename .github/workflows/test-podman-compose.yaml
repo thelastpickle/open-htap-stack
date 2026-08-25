@@ -1054,6 +1054,229 @@ jobs:
           echo "✓ All Mission Control checks passed"
         timeout-minutes: 20
 
+      - name: Test Accord transactions
+        run: |
+          echo -e "\n=== A multi-partition conditional write, and the two attempts it refuses ==="
+          # The five read paths all read.  This asserts the one write the stack can
+          # make that none of them can express: a conditional write whose condition
+          # reads three tables with three different partition keys.  A batch is atomic
+          # but not conditional, and a lightweight transaction conditions on a single
+          # partition, so nothing else here can refuse a replay.
+          #
+          # Structural, and it has to be: the demo opens a session of its own with a
+          # random user_id, so its timeline is exactly the rows it wrote and nothing
+          # the sink or a previous run put there.  That is what makes the row counts
+          # assertable on a stack that is minutes old with events still arriving.
+          #
+          # The assertion is the shape of the sequence, not a latency.  An Accord
+          # transaction returns no [applied] column, only the row its own SELECT
+          # projects, so the backend derives `applied` from the guard values; asserting
+          # the timeline count after each step checks the derivation against what the
+          # table actually holds rather than trusting the field.
+          TMP_DIR="${TMP_DIR:-.ci-tmp}"
+          mkdir -p "$TMP_DIR"
+
+          # Accord is off unless the node was started with it on, and then the tables
+          # cannot be transactional either.  Assert it first, because every failure
+          # below would otherwise be the same failure reported six times.  The probe is
+          # behavioural: transactional_mode is not readable from system_schema.tables,
+          # so the backend runs a read-only transaction per table and reports the
+          # node's own answer.
+          curl -s http://localhost:8000/api/transactions/session/schema > "$TMP_DIR/txn-schema.json"
+          python3 -m json.tool < "$TMP_DIR/txn-schema.json"
+          python3 - "$TMP_DIR/txn-schema.json" << 'PY'
+          import json, sys
+          schema = json.load(open(sys.argv[1]))
+          if not schema.get("ready"):
+              print(f"::error::the session tables do not accept transactions: {schema.get('note')}")
+              sys.exit(1)
+          print(f"  {len(schema['tables'])} tables in {schema['keyspace']} accept transactions")
+          PY
+
+          # repeats=0, so this step times nothing and asserts only the sequence.  The
+          # p50 is a measurement for the docs and belongs on an unloaded machine, not
+          # on a runner that is also ingesting 2,000 events/s.
+          curl -s --max-time 120 -X POST \
+            'http://localhost:8000/api/transactions/session/demo?repeats=0&probe=false' \
+            > "$TMP_DIR/txn-demo.json"
+          python3 -m json.tool < "$TMP_DIR/txn-demo.json"
+          python3 - "$TMP_DIR/txn-demo.json" << 'PY'
+          import json, sys
+          # (action fragment, did it apply, rows in the timeline after it).  The two
+          # refusals are the point of the test: each must leave the count where the
+          # step before it left it.
+          EXPECTED = [
+              ("open the session", True, 0),
+              ("apply seq=0", True, 1),
+              ("replay seq=0", False, 1),
+              ("attempt seq=2 out of order", False, 1),
+              ("apply seq=1", True, 2),
+              ("apply seq=2", True, 3),
+          ]
+          result = json.load(open(sys.argv[1]))
+          steps = result.get("steps") or []
+          problems = []
+          if len(steps) != len(EXPECTED):
+              problems.append(f"expected {len(EXPECTED)} steps, got {len(steps)}")
+          for step, (action, applied, rows) in zip(steps, EXPECTED):
+              label = step.get("action", "?")
+              if step.get("error"):
+                  problems.append(f"{label}: {step['error']}")
+                  continue
+              if action not in label:
+                  problems.append(f"expected a step for {action!r}, got {label!r}")
+              if step.get("applied") is not applied:
+                  problems.append(f"{label}: applied={step.get('applied')}, expected {applied}")
+              if step.get("timeline_rows") != rows:
+                  problems.append(f"{label}: timeline holds {step.get('timeline_rows')} rows, expected {rows}")
+              if not applied and not step.get("reason"):
+                  problems.append(f"{label}: was refused but gave no reason")
+              print(f"  {label}: applied={step.get('applied')}, timeline={step.get('timeline_rows')} rows"
+                    f"{', ' + step['reason'] if step.get('reason') else ''}")
+          # The projection itself, not only the counts: three rows with consecutive
+          # sequence numbers and nothing from either refused attempt.
+          timeline = [row["seq"] for row in result.get("timeline") or []]
+          print(f"  session {result.get('user_id')} timeline: {timeline}")
+          if timeline != [0, 1, 2]:
+              problems.append(f"the timeline is {timeline}, expected [0, 1, 2]")
+          for problem in problems:
+              print(f"::error::{problem}")
+          sys.exit(1 if problems else 0)
+          PY
+          echo "✓ The transaction applied three sequence numbers in order, and refused a replay and a gap"
+
+          echo -e "\n=== The same transaction shape as admission control: a semaphore across partitions ==="
+          # The sequence above is one story a cross-partition transaction can tell.
+          # This is the other, and it is the one the fleet has: a restricted zone
+          # admits drones up to a capacity, a grant writes the zone's row and the
+          # drone's at once, and a slot returns only by a release.
+          #
+          # Reset first, because an interrupted run leaves a zone short and the first
+          # grant would then be refused for a reason that has nothing to do with what
+          # the step asserts.  The reset releases every clearance through the same
+          # transaction a caller would use.
+          #
+          # repeats=0 for the same reason as above: this step asserts a sequence and
+          # measures nothing.
+          curl -s --max-time 120 -X POST \
+            http://localhost:8000/api/transactions/clearance/reset > "$TMP_DIR/clearance-reset.json"
+          curl -s --max-time 180 -X POST \
+            'http://localhost:8000/api/transactions/clearance/demo?repeats=0' \
+            > "$TMP_DIR/clearance-demo.json"
+          python3 -m json.tool < "$TMP_DIR/clearance-demo.json"
+          python3 - "$TMP_DIR/clearance-demo.json" << 'PY'
+          import json, sys
+
+          # (action fragment, did it apply).  Seven steps, of which three may change
+          # anything.  The fifth is left out of this list because its outcome depends
+          # on the capacity the sink seeded rather than on the transaction: it is
+          # asserted below, against the capacity the response itself reports.
+          EXPECTED = [
+              ("grant", True),
+              ("replay the grant", False),
+              ("a second clearance", False),
+              ("the last slot", True),
+              ("a full zone", None),
+              ("release", True),
+              ("again", False),
+          ]
+          result = json.load(open(sys.argv[1]))
+          steps = result.get("steps") or []
+          state = result.get("state") or {}
+          zone_id = result.get("zone_id")
+          zone = next((z for z in state.get("zones") or [] if z["zone_id"] == zone_id), None)
+          problems = []
+
+          if len(steps) != len(EXPECTED):
+              problems.append(f"expected {len(EXPECTED)} steps, got {len(steps)}")
+          if zone is None:
+              problems.append(f"the response reports no ledger for {zone_id}")
+
+          for step, (action, applied) in zip(steps, EXPECTED):
+              label = step.get("action", "?")
+              held = step.get("state") or {}
+              if step.get("error"):
+                  problems.append(f"{label}: {step['error']}")
+                  continue
+              if action not in label:
+                  problems.append(f"expected a step for {action!r}, got {label!r}")
+              if applied is not None and step.get("applied") is not applied:
+                  problems.append(f"{label}: applied={step.get('applied')}, expected {applied}")
+              if step.get("applied") is False and not step.get("reason"):
+                  problems.append(f"{label}: was refused but gave no reason")
+              # The invariant the whole schema exists to keep, asserted after every
+              # step rather than only at the end: a step that broke it and a later one
+              # that repaired it would both pass a final-state check.
+              if held and not held.get("consistent"):
+                  problems.append(
+                      f"{label}: {held.get('capacity')} slots, {held.get('remaining')} left and "
+                      f"{len(held.get('holders') or [])} held do not add up"
+                  )
+              print(f"  {label}: applied={step.get('applied')}, "
+                    f"{held.get('remaining')} of {held.get('capacity')} slots left"
+                    f"{', ' + step['reason'] if step.get('reason') else ''}")
+
+          # The fifth step asks for a zone the fourth filled, and the fifth is only a
+          # refusal if the fourth took the final slot.  The sink owns the capacity, so
+          # the assertion reads it rather than naming 2, and says so when it differs.
+          if zone is not None and len(steps) >= 5:
+              full = zone["capacity"] == 2
+              if full and steps[4].get("applied") is not False:
+                  problems.append("a third drone was admitted to a zone of capacity 2")
+              elif not full:
+                  print(f"  note: {zone_id} has capacity {zone['capacity']}, so the fifth step "
+                        "asks for a zone that is not yet full and may apply")
+
+          # One holder left at the end: two were granted and one released.
+          if zone is not None:
+              print(f"  final: {zone['remaining']} of {zone['capacity']} slots left, "
+                    f"holders {zone['holders']}")
+              if len(zone["holders"]) != 1:
+                  problems.append(f"{zone_id} ends with {len(zone['holders'])} holders, expected 1")
+          # The cross-partition half of the invariant: a holder whose own row names a
+          # different zone, or none, means the two writes did not land together.
+          if state.get("mismatched"):
+              problems.append(f"these holders' own rows disagree: {state['mismatched']}")
+
+          for problem in problems:
+              print(f"::error::{problem}")
+          sys.exit(1 if problems else 0)
+          PY
+
+          # The claim the seven steps cannot make on their own: they run one after
+          # another, so nothing in them rules out a counter read and written back
+          # outside consensus.  Eight askers rather than more, because the assertion is
+          # the same at any number above the capacity and a runner has fewer cores than
+          # a laptop.
+          curl -s --max-time 180 -X POST \
+            'http://localhost:8000/api/transactions/clearance/contend?askers=8' \
+            > "$TMP_DIR/clearance-contend.json"
+          python3 -m json.tool < "$TMP_DIR/clearance-contend.json"
+          python3 - "$TMP_DIR/clearance-contend.json" << 'PY'
+          import json, sys
+          result = json.load(open(sys.argv[1]))
+          problems = []
+          granted, capacity = result.get("granted"), result.get("capacity")
+          print(f"  {result.get('askers')} asked at once for {result.get('zone_id')}: "
+                f"{granted} granted, {result.get('refused')} refused, "
+                f"{len(result.get('errors') or [])} errors in {result.get('duration_ms')} ms")
+          print(f"  winners: {result.get('winners')}")
+          # Exactly the capacity, however many asked.  This is the assertion; the
+          # refusals are the expected outcome for the losers and an error is not.
+          if granted != capacity:
+              problems.append(f"{granted} were granted against a capacity of {capacity}")
+          for message in result.get("errors") or []:
+              problems.append(f"an ask raised rather than being refused: {message}")
+          zone = result.get("zone") or {}
+          if not zone.get("consistent"):
+              problems.append(f"the ledger does not add up afterwards: {zone}")
+          for problem in problems:
+              print(f"::error::{problem}")
+          sys.exit(1 if problems else 0)
+          PY
+          echo "✓ Concurrent askers were admitted up to the capacity exactly, and the ledger still adds up"
+        timeout-minutes: 15
+
       - name: Test the cqlite token split
         run: |
           echo -e "\n=== A split scan reads each partition once ==="

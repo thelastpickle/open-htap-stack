@@ -75,6 +75,12 @@ services:
     environment:
       CASSANDRA_CLUSTER_NAME: "${CASSANDRA_CLUSTER_NAME:-htap-demo}"
       CASSANDRA_NUM_TOKENS: "${CASSANDRA_NUM_TOKENS:-16}"
+      # Whether Accord is on.  Declared here rather than fixed in
+      # cassandra/entrypoint.sh because it had to be measured before it was adopted,
+      # and a rebuild between runs would have put a second change into the
+      # comparison.  Changing it needs ./stop-and-clean-data-and-schema.sh first: a
+      # table opts in at CREATE TABLE and cannot be altered into the option later.
+      CASSANDRA_ACCORD_ENABLED: "${CASSANDRA_ACCORD_ENABLED:-true}"
       # JVM heap settings to prevent OOM kills
       MAX_HEAP_SIZE: "${CASSANDRA_MAX_HEAP_SIZE:-4G}"
     # Container memory limits (should be higher than MAX_HEAP_SIZE to account for off-heap memory)
@@ -269,6 +275,12 @@ services:
       # two reading different values would produce queries that match nothing.
       EVENT_BUCKET_MINUTES: "${DEMO_EVENT_BUCKET_MINUTES:-15}"
       EVENT_SHARDS: "${DEMO_EVENT_SHARDS:-16}"
+      # The sink owns the schema, so it is the sink that opts the three session
+      # tables into Accord.  Read from the same declaration the cassandra service
+      # reads above, because the node refuses transactional_mode='full' at CREATE
+      # TABLE when the subsystem is off, and the two disagreeing would stop the
+      # sink at its schema step.  See ensure_schema in consumer.py.
+      CASSANDRA_ACCORD_ENABLED: "${CASSANDRA_ACCORD_ENABLED:-true}"
     restart: unless-stopped
 
 

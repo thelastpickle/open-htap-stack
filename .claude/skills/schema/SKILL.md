@@ -1,6 +1,6 @@
 ---
 name: schema
-description: Change or verify the demo Cassandra schema, which is owned by the sink rather than by a migration. Use when altering a table's key or columns, when a query returns nothing after a change, when checking the partitioning of demo.events, or when snapshots have accumulated.
+description: Change or verify the demo Cassandra schema, which is owned by the sink rather than by a migration. Use when altering a table's key or columns, when a query returns nothing after a change, when checking the partitioning of demo.events, when a transaction is refused on a session table, or when snapshots have accumulated.
 user-invocable: true
 allowed-tools:
   - Bash
@@ -12,7 +12,7 @@ allowed-tools:
 
 There is no migration tool.  `ingress/consumer/consumer.py:ensure_schema()` creates the keyspace and every table with `CREATE TABLE IF NOT EXISTS`, and runs on each sink start.  Two consequences decide everything below: the schema lives in the sink's image, and `IF NOT EXISTS` will not alter a table that already exists.  Rebuilding the sink after editing a key changes nothing, silently.
 
-The keyspace is `demo`; the tables are `events`, `drone_latest_status`, `drone_text_embeddings`, `drone_events_by_entity`, `restricted_zones`, `alerts_by_bucket`, `ingestion_counts`, `sessions_open`, `session_seq_applied`, `session_timeline`.
+The keyspace is `demo`; the tables are `events`, `drone_latest_status`, `drone_text_embeddings`, `drone_events_by_entity`, `restricted_zones`, `alerts_by_bucket`, `ingestion_counts`, `sessions_open`, `session_seq_applied`, `session_timeline`, `session_timeline_plain`.
 
 ## Applying a change to an existing table
 
@@ -28,6 +28,28 @@ podman exec cassandra nodetool clearsnapshot --all                          # th
 Stop the sink first, or it recreates the table from the old image while you are dropping it.  Confirm with `DESCRIBE`; a wrong key looks exactly like a working stack until a query returns nothing.  `DROP TABLE` leaves an auto-snapshot holding the old SSTables' disk, which `clearsnapshot --all` releases (`Requested clearing snapshot(s) for [all keyspaces] with [all snapshots]`).
 
 For a wider change, `./stop-and-clean-data-and-schema.sh` is cleaner than dropping tables one at a time.
+
+## `transactional_mode` is the one option a drop cannot be avoided for
+
+Six tables are created `WITH transactional_mode='full'` — the three session tables and the three clearance ones — and the option can only be set at `CREATE TABLE`.  `ALTER TABLE ... WITH transactional_mode='full'` looks as though it works: it succeeds, and it leaves the table refusing every transaction with "Transaction Statement is unsupported when migrating away from Accord or before migration to Accord is complete for a range", because the `ALTER` sets `transactional_migration_from = 'off'` and starts a migration.
+
+Neither way of finishing that migration exists on this stack.  `nodetool repair` declines, correctly: `Replication factor is 1. No repair is needed for keyspace 'demo'`.  `nodetool consensus_admin finish-migration` fails inside its own first round of repairs with `java.io.NotSerializableException: java.util.ArrayList$SubList`, which is a bug in the JMX call rather than anything about the schema.  So drop the table and let the sink recreate it, and check `nodetool consensus_admin list` shows `tableStates: []` afterwards.
+
+Two further traps around that option:
+
+- **The node refuses the `CREATE TABLE` when Accord is off**: `Cannot create table demo.x with transactional mode full with accord.enabled set to false`.  That would stop the sink at its schema step and with it the whole demo, which is why `consumer.py` writes the option only when `CASSANDRA_ACCORD_ENABLED` is true, and why the sink and the cassandra service read that same one declaration in `podman-compose.yml`.
+- **`DESCRIBE TABLE` reports `transactional_mode`; `system_schema.tables` does not.**  An earlier version of this note said neither did, and that was wrong: `DESCRIBE TABLE demo.session_timeline` prints `AND transactional_mode = 'full'` beside `AND transactional_migration_from = 'none'`, and `session_timeline_plain` prints `'off'` in the same place.  What is missing is the column: `SELECT transactional_mode FROM system_schema.tables` is refused with "Undefined column name transactional_mode", so a script has to read the `create_statement` or ask behaviourally.
+
+```bash
+# or behaviourally, which is the node refusing rather than the node describing
+curl -s http://localhost:8000/api/transactions/session/schema     # a read-only transaction per table
+podman exec cassandra cqlsh 172.20.0.10 -e \
+  "BEGIN TRANSACTION SELECT seq FROM demo.session_timeline LIMIT 1; COMMIT TRANSACTION;"
+```
+
+A table that has not opted in answers `Accord transactions are disabled on table (See transactional_mode in table options)`.  Note the address: `cqlsh` with no host reaches `127.0.0.1`, which this node does not listen on.
+
+`full` also routes **ordinary** reads and writes to the table through Accord, so every statement against those six must be at QUORUM; the driver's default profile is LOCAL_ONE and is refused with `ConsistencyLevel LOCAL_ONE is unsupported with Accord`.  That is the reason `events` is not opted in.
 
 ## The two constants both sides must agree on
 

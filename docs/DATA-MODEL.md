@@ -11,7 +11,9 @@ The schema is defined in one place, `ensure_schema()` in [ingress/consumer/consu
 | `alerts_by_bucket`        | Alerts, partitioned by hour                              | The dashboard's alert feed                   |
 | `ingestion_counts`        | Counter per 30-minute bucket                             | The ingestion volume chart                   |
 | `restricted_zones`        | Zone polygons as Well-Known Text; reference data          | The map, and the sink's proximity checks     |
-| `sessions_open`, `session_seq_applied`, `session_timeline` | Supporting tables for the Accord transaction demo | See the `mck/cassandra-6` branch |
+| `sessions_open`, `session_seq_applied`, `session_timeline` | The Accord sequence demo's three tables, each `transactional_mode='full'` | The Accord subtab of the Transactions page, and `/api/transactions` |
+| `zone_occupancy`, `zone_clearance`, `drone_clearance` | The Accord clearance demo's three tables, each `transactional_mode='full'`: a count-down semaphore per zone, its holders, and one clearance per asset | The same subtab, and `/api/transactions/clearance` |
+| `session_timeline_plain` | The same columns and key as `session_timeline`, with no transactional mode | The reference the transaction is timed against |
 
 ## Why `events` is partitioned by time
 
@@ -66,3 +68,21 @@ The bucket is `text`, not `timestamp`, because it is written by hand into querie
 `drone_latest_status` holds one row per asset, so a full scan of it is bounded by fleet size rather than by how long the demo has been running. &emsp;That is what lets the dashboard scan it for indicators several times a minute without pretending Cassandra enjoys table scans.
 
 Embeddings live in their own table deliberately: PrestoDB's bundled Cassandra driver cannot parse the CQL `vector` type and drops the metadata for any table carrying one, so a vector column on `drone_latest_status` would hide that table from Presto entirely. &emsp;Keeping 1536 floats out of the row the map reads every few seconds also keeps that read small.
+
+## Why only six tables are transactional
+
+The three session tables and the three clearance tables declare `transactional_mode='full'`, and `events` does not. &emsp;`full` puts Accord in front of every statement against the table, not only in front of a `BEGIN TRANSACTION`, so opting `events` in would put consensus ahead of 2,000 writes a second and ahead of every dashboard read of them. &emsp;Each demo's transaction needs three partitions in three tables and none of them is `events`, so nothing is lost by leaving it out.
+
+That reach is easy to underestimate, and it was underestimated here. &emsp;A plain `INSERT` into `sessions_open` is refused with "ConsistencyLevel LOCAL_ONE is unsupported with Accord for write/commit, supported are [ANY, ONE, QUORUM, ALL, SERIAL]", and an ordinary `SELECT` from `session_timeline` is refused the same way for a read. &emsp;Every statement the backend sends to these three tables is therefore at QUORUM; the driver's default profile is LOCAL_ONE and would fail against all of them.
+
+**A table has to be born transactional.** &emsp;`CREATE TABLE IF NOT EXISTS` will not add the option to a table that already exists, and `ALTER TABLE ... WITH transactional_mode='full'` does not stand in for it: the `ALTER` succeeds, sets `transactional_migration_from = 'off'`, and every transaction is then refused with "Transaction Statement is unsupported when migrating away from Accord or before migration to Accord is complete for a range". &emsp;Finishing that migration is what a single-node cluster cannot do. &emsp;`nodetool repair` declines, correctly, with "Replication factor is 1. No repair is needed for keyspace 'demo'", and `nodetool consensus_admin finish-migration` fails inside its first round of repairs with `java.io.NotSerializableException: java.util.ArrayList$SubList`. &emsp;So a stack that predates the option needs `./stop-and-clean-data-and-schema.sh`, and the `schema` skill says so.
+
+The option is written only when `CASSANDRA_ACCORD_ENABLED` is true, and both the sink and the node read that one declaration in `podman-compose.yml`. &emsp;With Accord off the node rejects the `CREATE TABLE` outright — "Cannot create table demo.accord_probe with transactional mode full with accord.enabled set to false" — which would stop the sink at its schema step and with it the whole demo.
+
+**`transactional_mode` cannot be read back from `system_schema.tables`.** &emsp;None of that table's 27 columns carries it, and `flags`, `extensions` and `fast_path` are identical between `session_timeline` and its plain twin.
+
+**It can be read from `DESCRIBE`, and that works through the driver.** &emsp;`DESCRIBE KEYSPACE demo` is served node-side in one round trip and returns 16 rows — the keyspace, its 14 tables and its one index — each with a `create_statement` whose text carries the option; six tables read `full` and eight read `off`. &emsp;An earlier edition of this file implied a script had no structural source at all, which was too strong.
+
+`/api/transactions/session/schema` still asks behaviourally, and keeps doing so on purpose: it runs a read-only transaction against each table and reports the node's own answer, which for a table that has not opted in is "Accord transactions are disabled on table (See transactional_mode in table options)". &emsp;That answer is the node refusing, where a `create_statement` is the node describing, and for a page about what a transaction will do the refusal is the better evidence.
+
+`session_timeline_plain` exists to be the reference. &emsp;It has the same columns, the same key and no transactional mode, so timing a plain `INSERT` and an `IF NOT EXISTS` lightweight transaction against it compares write paths rather than two table definitions.

@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from cassandra.cluster import Cluster, ConsistencyLevel
+from cassandra.query import SimpleStatement
 from cassandra.util import datetime_from_uuid1
 from kafka import KafkaConsumer
 
@@ -54,6 +55,30 @@ def env_float(name: str, default: float) -> float:
 # every shard in a query stays readable.
 EVENT_BUCKET_MINUTES = env_int("EVENT_BUCKET_MINUTES", 15)
 EVENT_SHARDS = env_int("EVENT_SHARDS", 16)
+
+# Whether Accord is enabled on the node, read from the same declaration in
+# podman-compose.yml that the node itself reads.  It is here because a table opts
+# into Accord at CREATE TABLE, and the node refuses the option outright when the
+# subsystem is off: "Cannot create table demo.x with transactional mode full with
+# accord.enabled set to false".  So the sink cannot carry the option
+# unconditionally; with Accord off the schema step would fail and the sink would
+# never start.  Only the three session tables below use this.
+ACCORD_ENABLED = os.getenv("CASSANDRA_ACCORD_ENABLED", "true").lower() == "true"
+
+# What the three session tables are created WITH.  Measured on 6.0-alpha2: a table
+# must be *born* transactional, because neither route into an existing one works on
+# a single node.  ALTER TABLE ... WITH transactional_mode='full' is accepted, but it
+# only starts a migration: the table then reports transactional_migration_from='off'
+# with its whole range in repairPendingRanges, and every transaction against it is
+# refused with "Transaction Statement is unsupported when ... before migration to
+# Accord is complete for a range".  Finishing that migration needs a repair, and at
+# replication factor 1 nodetool repair declines with "No repair is needed", while
+# nodetool consensus_admin finish-migration fails in its own JMX return path with
+# NotSerializableException: java.util.ArrayList$SubList.  CREATE TABLE with the
+# option needs no migration at all and works at once.  The consequence for anyone
+# changing this: a data directory whose session tables already exist without the
+# option cannot be fixed in place, and needs ./stop-and-clean-data-and-schema.sh.
+TRANSACTIONAL = " WITH transactional_mode='full'" if ACCORD_ENABLED else ""
 
 
 def event_bucket(event_time: datetime) -> str:
@@ -111,24 +136,34 @@ EMBEDDING_DIMS = 1536
 
 # Restricted airspace around Oslo, matching the producer's default fleet area.
 # Reference data, so it is seeded with IF NOT EXISTS and never truncated.
+#
+# The last element is how many drones the zone will clear at once, and it is here
+# rather than in the clearance tables so that a zone's definition and its limit
+# cannot disagree.  The numbers are small on purpose: the transaction demo has to
+# be able to exhaust a zone within a handful of steps, and a capacity of 200 would
+# make the interesting refusal unreachable.  A tighter limit on the two critical
+# zones than on the warning one is the only realism claimed.
 DEMO_ZONES = (
     (
         "zone-oslo-airport",
         "Oslo Lufthavn Gardermoen",
         "POLYGON((11.05 60.18, 11.15 60.18, 11.15 60.22, 11.05 60.22, 11.05 60.18))",
         "critical",
+        2,
     ),
     (
         "zone-royal-palace",
         "Det Kongelige Slott",
         "POLYGON((10.72 59.91, 10.74 59.91, 10.74 59.92, 10.72 59.92, 10.72 59.91))",
         "critical",
+        3,
     ),
     (
         "zone-fornebu",
         "Fornebu Tech Park",
         "POLYGON((10.62 59.88, 10.66 59.88, 10.66 59.90, 10.62 59.90, 10.62 59.88))",
         "warning",
+        5,
     ),
 )
 
@@ -240,6 +275,15 @@ def ensure_schema(session, keyspace: str, table: str):
     # meaning; measured, five hits over one query spanned 0.550 to 0.602 cosine
     # and the nearest was unrelated prose.  Naming the function here would fix
     # the demo to one metric, which is a decision worth taking deliberately.
+    # Murmur3 only, and the stack has no way to relax that.  Every non-Murmur3
+    # partitioner is refused here by name — "Storage-attached index does not support
+    # the following IPartitioner implementations: [OrderPreservingPartitioner,
+    # LocalPartitioner, ByteOrderedPartitioner, RandomPartitioner]" — and since this
+    # is the schema step, the refusal stops the sink and with it every table after
+    # it.  Measured: on ByteOrderedPartitioner the sink looped here forever having
+    # created three of the eleven tables.  SAI is also the only vector index
+    # Cassandra has, so there is no weaker index to fall back to; a partitioner
+    # change means losing the vector search page outright.
     session.execute(
         f"""
         CREATE CUSTOM INDEX IF NOT EXISTS payload_vector_idx
@@ -316,15 +360,26 @@ def ensure_schema(session, keyspace: str, table: str):
         """
     )
 
-    # Supporting tables for the Accord transaction demo, "exactly-once in-order
-    # session timeline projections".
+    # The three tables behind the Accord transaction demo, "exactly-once in-order
+    # session timeline projections".  Together they let one transaction decide
+    # whether an event may join a session's timeline: sessions_open says the session
+    # exists, session_seq_applied is the record of which sequence numbers have been
+    # applied, and session_timeline is the projection itself.  A single transaction
+    # reads all three and writes two, which is what no batch or lightweight
+    # transaction can do: a batch is not conditional across partitions, and a
+    # lightweight transaction conditions on one partition only.  Here the three
+    # tables have three different partition keys.
+    #
+    # These are the only tables that opt into Accord.  demo.events deliberately does
+    # not: it takes 2,000 events/s and putting a consensus protocol in front of that
+    # write path is the opposite of what this stack is for.
     session.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {keyspace}.sessions_open (
           user_id text,
           session_id uuid,
           PRIMARY KEY ((user_id), session_id)
-        );
+        ){TRANSACTIONAL};
         """
     )
     session.execute(
@@ -334,7 +389,7 @@ def ensure_schema(session, keyspace: str, table: str):
           session_id uuid,
           seq bigint,
           PRIMARY KEY ((user_id, session_id), seq)
-        );
+        ){TRANSACTIONAL};
         """
     )
     session.execute(
@@ -348,17 +403,90 @@ def ensure_schema(session, keyspace: str, table: str):
           event_type text,
           payload text,
           PRIMARY KEY ((user_id, session_id), seq)
+        ){TRANSACTIONAL};
+        """
+    )
+    # The reference table for the transaction measurement: the same columns and the
+    # same key as session_timeline, and deliberately not transactional.  A figure for
+    # an Accord transaction means nothing on its own, so the demo writes the same row
+    # three ways on the same node in the same run: through the transaction above,
+    # through a plain INSERT here, and through an IF NOT EXISTS lightweight
+    # transaction here.  Same table for the latter two so the comparison is not also
+    # a comparison of two table definitions.
+    session.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {keyspace}.session_timeline_plain (
+          user_id text,
+          session_id uuid,
+          seq bigint,
+          event_id timeuuid,
+          event_time timestamp,
+          event_type text,
+          payload text,
+          PRIMARY KEY ((user_id, session_id), seq)
         );
         """
     )
+    # The three tables behind the airspace-clearance transaction, which is the
+    # second Accord demonstration and shows a different thing from the first.  The
+    # session timeline above shows exactly-once and in-order; this shows mutual
+    # exclusion and a bounded resource, which is the shape of every reservation
+    # problem: a drone may hold one clearance and a zone will clear only so many at
+    # once.
+    #
+    # What makes it need Accord is that the two facts live in different partitions.
+    # A lightweight transaction conditions on one partition, so it can enforce
+    # "this drone holds nothing" or "this zone has room" but never both together;
+    # two of them in sequence can interleave, and the zone ends up over capacity.
+    #
+    # The counter is `remaining` and not `granted`, and that is forced rather than
+    # chosen.  Accord's CQL will compare a LET reference to a literal but not to
+    # another LET reference: `IF occ.granted < occ.capacity` is refused outright
+    # with "IllegalArgumentException null", where `IF occ.remaining > 0` is
+    # accepted.  Counting down against zero therefore keeps the whole test inside
+    # the transaction; counting up would mean the caller reading the capacity first
+    # and binding it, and a concurrent change of capacity would not be serialised
+    # against the grant.  `capacity` is kept only so a reader can see the limit.
+    session.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {keyspace}.zone_occupancy (
+          zone_id text PRIMARY KEY,
+          zone_name text,
+          severity text,
+          capacity bigint,
+          remaining bigint
+        ){TRANSACTIONAL};
+        """
+    )
+    session.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {keyspace}.zone_clearance (
+          zone_id text,
+          entity_id text,
+          granted_at timestamp,
+          PRIMARY KEY ((zone_id), entity_id)
+        ){TRANSACTIONAL};
+        """
+    )
+    session.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {keyspace}.drone_clearance (
+          entity_id text PRIMARY KEY,
+          zone_id text,
+          granted_at timestamp
+        ){TRANSACTIONAL};
+        """
+    )
+    print(f"[sink] session tables transactional_mode: {'full' if ACCORD_ENABLED else 'off'}")
 
     seed_zones(session, keyspace)
+    seed_zone_occupancy(session, keyspace)
     print("[sink] schema ensured")
 
 
 def seed_zones(session, keyspace: str) -> None:
     """Insert the demo zones if they are absent, leaving any edits in place."""
-    for zone_id, name, polygon_wkt, severity in DEMO_ZONES:
+    for zone_id, name, polygon_wkt, severity, _capacity in DEMO_ZONES:
         try:
             session.execute(
                 f"INSERT INTO {keyspace}.restricted_zones "
@@ -368,6 +496,49 @@ def seed_zones(session, keyspace: str) -> None:
             )
         except Exception as e:
             print(f"[sink] could not seed zone {zone_id}: {e}")
+
+
+def seed_zone_occupancy(session, keyspace: str) -> None:
+    """Give each zone its clearance limit, without disturbing one already in use.
+
+    Three things here are not the obvious spelling, and each is forced by the table
+    being transactional.
+
+    QUORUM, because transactional_mode='full' routes even a plain INSERT through
+    Accord, and Accord refuses the driver's default: "ConsistencyLevel LOCAL_ONE is
+    unsupported with Accord for write/commit".
+
+    A read before the write rather than IF NOT EXISTS, because a lightweight
+    transaction and Accord are two different consensus paths over the same row and
+    there is no reason to ask a table in Accord's care to run one.  Only this sink
+    seeds, so the read and the write need not be one operation.
+
+    And `remaining` is left alone once the row exists.  Restarting the sink must not
+    hand back clearances the zone has granted, which resetting the count would do
+    while leaving every zone_clearance row in place.
+    """
+    for zone_id, name, _polygon_wkt, severity, capacity in DEMO_ZONES:
+        try:
+            existing = session.execute(
+                SimpleStatement(
+                    f"SELECT zone_id FROM {keyspace}.zone_occupancy WHERE zone_id = %s",
+                    consistency_level=ConsistencyLevel.QUORUM,
+                ),
+                (zone_id,),
+            ).one()
+            if existing:
+                continue
+            session.execute(
+                SimpleStatement(
+                    f"INSERT INTO {keyspace}.zone_occupancy "
+                    "(zone_id, zone_name, severity, capacity, remaining) "
+                    "VALUES (%s, %s, %s, %s, %s)",
+                    consistency_level=ConsistencyLevel.QUORUM,
+                ),
+                (zone_id, name, severity, capacity, capacity),
+            )
+        except Exception as e:
+            print(f"[sink] could not seed zone capacity {zone_id}: {e}")
 
 
 def _thirty_min_bucket(dt: datetime) -> str:

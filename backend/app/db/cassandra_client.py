@@ -8,8 +8,10 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from cassandra import ConsistencyLevel
 from cassandra.cluster import EXEC_PROFILE_DEFAULT, Cluster, ExecutionProfile, Session
 from cassandra.policies import AddressTranslator
+from cassandra.query import SimpleStatement
 
 from app.config import settings
 
@@ -61,6 +63,13 @@ class CassandraClient:
         self._rate_lock = threading.Lock()
         self._rate_sample: Optional[Tuple[float, int]] = None  # (monotonic, total_events)
         self._last_rate = 0.0
+        # Prepared statements, held by statement text, for execute_transaction.  Its
+        # own lock rather than _lock above, which connect() holds while it builds a
+        # session: a thread preparing a statement has no business waiting on that.
+        # Emptied on every connect, because a prepared statement belongs to the
+        # session that prepared it and a reconnect leaves the old ones invalid.
+        self._prepare_lock = threading.Lock()
+        self._prepared: Dict[str, Any] = {}
 
     def connect(self, force: bool = False) -> None:
         """Connect if not already connected.
@@ -92,6 +101,8 @@ class CassandraClient:
                     execution_profiles={EXEC_PROFILE_DEFAULT: profile},
                 )
                 self._session = self._cluster.connect(settings.cassandra_keyspace)
+                with self._prepare_lock:
+                    self._prepared.clear()
                 self.connected = True
                 print(f"[db] Cassandra connected: {settings.cassandra_host}:{settings.cassandra_port}")
             except Exception as e:
@@ -109,8 +120,12 @@ class CassandraClient:
             raise RuntimeError("Cassandra not connected")
         return self._session
 
-    def execute_query(self, cql: str, params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
-        """Run CQL and return rows as dicts, with timestamps as ISO-8601 strings."""
+    def execute_query(self, cql: Any, params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
+        """Run CQL and return rows as dicts, with timestamps as ISO-8601 strings.
+
+        Takes a string or any statement object the driver accepts, so a caller that
+        needs its own consistency level can pass a SimpleStatement.
+        """
         rows = self.session.execute(cql, params)
         columns = rows.column_names
         result = []
@@ -121,6 +136,77 @@ class CassandraClient:
                 record[name] = value.isoformat() if hasattr(value, "isoformat") else value
             result.append(record)
         return result
+
+    def execute_write(self, cql: str, params: Sequence[Any] = ()) -> List[Dict[str, Any]]:
+        """Run a statement that writes, at QUORUM, and return whatever rows it reports.
+
+        Named apart from execute_query because this file's promise is that every
+        read through it is a point read or a bounded scan, and a method that writes
+        should not hide behind a name that says query.  Used only by the transaction
+        demo, whose whole subject is writes; nothing on the dashboard's read paths
+        calls it.  A lightweight transaction returns an [applied] row, so the return
+        type matches execute_query rather than being None.
+
+        QUORUM, not the profile's default, and the reason is Accord rather than
+        durability.  transactional_mode='full' routes *every* write to the table
+        through Accord, not only a BEGIN TRANSACTION, so a plain INSERT into one of
+        the session tables is refused at LOCAL_ONE exactly as a transaction is:
+        "ConsistencyLevel LOCAL_ONE is unsupported with Accord for write/commit".
+        Setting it here also keeps the demo's two reference writes at the same
+        consistency as the transaction they are compared against, which is the only
+        way that comparison means anything.
+        """
+        statement = SimpleStatement(cql, consistency_level=ConsistencyLevel.QUORUM)
+        return self.execute_query(statement, params)
+
+    def execute_transaction(self, cql: str, params: Sequence[Any] = ()) -> Dict[str, Any]:
+        """Run one Accord transaction and return its SELECT projection as a dict.
+
+        The statement is prepared, and prepared for two reasons rather than one.
+        A transaction is written with ? placeholders, which the driver binds only on
+        a prepared statement; a simple statement takes %s and would have the driver
+        substitute the values into the text instead.  And the statements this demo
+        runs are a handful of fixed texts run many times, so preparing each once is
+        what the driver is for.  The prepared statements are held per statement text
+        under the same lock the connection uses, since a demo run and a dashboard
+        poll can arrive together.
+
+        An Accord transaction reports differently from a lightweight transaction: it
+        returns no [applied] column, only the row its own SELECT projects, and an
+        empty result when it projects nothing.  So a caller cannot ask the server
+        whether the IF fired; it has to read the guard values back out of the
+        projection and decide.  Returning the single projected row, rather than a
+        list, is what makes that legible at the call site.
+
+        The statement must be deterministic.  now() and toTimestamp(now()) inside a
+        transaction would each be evaluated per replica, so every timeuuid and
+        timestamp this demo writes is bound from the caller instead.
+        """
+        session = self.session
+        with self._prepare_lock:
+            prepared = self._prepared.get(cql)
+            if prepared is None:
+                prepared = session.prepare(cql)
+                # The driver's default is LOCAL_ONE, which Accord refuses outright:
+                # "ConsistencyLevel LOCAL_ONE is unsupported with Accord for
+                # write/commit, supported are [ANY, ONE, QUORUM, ALL, SERIAL]".
+                # QUORUM of the five, because it is what the sink already writes at,
+                # so a transaction here is not quietly held to a weaker standard than
+                # an ordinary write in this stack.
+                prepared.consistency_level = ConsistencyLevel.QUORUM
+                self._prepared[cql] = prepared
+        rows = session.execute(prepared, params)
+        columns = rows.column_names
+        # zip rather than getattr, which execute_query above uses: a transaction
+        # projects columns named session_ok.session_id, and a dot cannot be a
+        # namedtuple field, so the driver's row object does not carry that name.
+        # The values are in projection order either way.
+        for row in rows:
+            return {
+                name: (value.isoformat() if hasattr(value, "isoformat") else value)
+                for name, value in zip(columns, row)
+            }
+        return {}
 
     # ──────────────────────── Overview / KPI queries ────────────────────────
 

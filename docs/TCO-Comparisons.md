@@ -40,7 +40,7 @@ This document supports the general claim of 80%+ TCO savings over Snowflake or D
 
 The unified architecture eliminates costs through the items below. &emsp;Two of them are design rather than demonstration, and are marked; the repository runs the rest.
 
-- **Accord transactions, Cassandra Enhancement Proposal 15 (CEP-15)**: strict-serializable atomicity, consistency, isolation and durability (ACID) without separate transaction coordinators or external consensus overhead. &emsp;Neither OLTP nor online analytical processing (OLAP) systems achieve strict serializability alone. &emsp;**Not demonstrated here**: the stack runs Cassandra 6.0-alpha2, which ships Accord, but no table declares `transactional_mode`, so the node refuses a transaction.&emsp;Turning it on and measuring it is a change of its own.
+- **Accord transactions, Cassandra Enhancement Proposal 15 (CEP-15)**: strict-serializable atomicity, consistency, isolation and durability (ACID) without separate transaction coordinators or external consensus overhead. &emsp;Neither OLTP nor online analytical processing (OLAP) systems achieve strict serializability alone. &emsp;**Demonstrated here** on three tables, as a conditional write across three partitions that a batch and a lightweight transaction both cannot express; see the README.&emsp;What is not demonstrated is the cost at scale: one node at `replication_factor: 1` pays no wide-area round trip, which is the expense Accord exists to reduce.
 - **Spark Bulk Reader/Writer via Sidecar (CEP-28)**: analytics on persisted structures (SSTables) without extract-transform-load (ETL) pipelines.
 - **Multiple SQL interfaces on one data store**:
   - Spark / Presto for OLAP (analytical SQL)

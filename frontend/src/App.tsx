@@ -8,12 +8,16 @@ import HealthPage from './pages/Health'
 import MapPage from './pages/Map'
 import OverviewPage from './pages/Overview'
 import SettingsPage from './pages/Settings'
+import TransactionsPage from './pages/Transactions'
 
 const NAV_ITEMS = [
   { path: '/', label: 'Overview', icon: 'dashboard' },
   { path: '/map', label: 'Map', icon: 'map' },
   { path: '/alerts', label: 'Alerts', icon: 'warning' },
   { path: '/explore', label: 'Explore', icon: 'search' },
+  // Beside Explore, because the two are a pair: Explore reads the same rows five
+  // ways, and this one writes them the ways none of those five can.
+  { path: '/transactions', label: 'Transactions', icon: 'account_tree' },
   { path: '/health', label: 'Health', icon: 'monitor_heart' },
   { path: '/settings', label: 'Settings', icon: 'settings' },
 ]
@@ -295,6 +299,7 @@ export default function App() {
               <Route path="/map" element={<MapPage />} />
               <Route path="/alerts" element={<AlertsPage />} />
               <Route path="/explore" element={<ExplorePage />} />
+              <Route path="/transactions" element={<TransactionsPage />} />
               <Route path="/health" element={<HealthPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>

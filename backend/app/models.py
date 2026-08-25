@@ -422,3 +422,137 @@ class OperationResult(BaseModel):
     # One line per thing done, so a control that does several things says so
     # instead of reporting a bare success.
     actions: List[str] = []
+
+
+# ──────────────────────── Accord transactions ────────────────────────
+
+
+class TransactionStep(BaseModel):
+    """One step of the session-timeline demo, and what the server made of it."""
+
+    # What the step was asked to do, e.g. "apply seq=1" or "replay seq=0".
+    action: str
+    # The statement that ran, so the page shows the reader the real CQL rather
+    # than a description of it.
+    cql: str = ""
+    # Whether the transaction's IF fired.  Derived from the projection, not read
+    # from an [applied] column: an Accord transaction has none.
+    applied: bool = False
+    # Why it did not fire, in the words of the guard that stopped it, or "" when
+    # it did fire.  This is the field the demo exists to show.
+    reason: str = ""
+    # The guard values the transaction projected, verbatim.
+    projection: Dict[str, Any] = {}
+    # Server-side latency of the one statement, timed at the backend.
+    duration_ms: float = 0.0
+    # Rows in session_timeline for this session after the step, so a refused step
+    # is visibly a step that changed nothing.
+    timeline_rows: int = 0
+    # The same idea for a demo whose "changed nothing" is not a row count: the
+    # clearance demo puts the zone's remaining slots and its holders here.  A step
+    # is only convincing if the reader can see the state it did or did not move.
+    state: Dict[str, Any] = {}
+    error: Optional[str] = None
+
+
+class TransactionTimelineRow(BaseModel):
+    seq: int
+    event_id: str
+    event_time: str
+    event_type: str
+    payload: str
+
+
+class TransactionDemoResult(BaseModel):
+    """The whole scripted sequence, and the projection it left behind."""
+
+    user_id: str
+    session_id: str
+    steps: List[TransactionStep] = []
+    timeline: List[TransactionTimelineRow] = []
+    # The two references, on the same row shape in a non-transactional twin table:
+    # a plain INSERT and an IF NOT EXISTS lightweight transaction.  A transaction
+    # latency means nothing without them.
+    reference_ms: Dict[str, float] = {}
+    # p50 and max of an applied transaction over repeats, when asked for.
+    repeats: int = 0
+    applied_p50_ms: Optional[float] = None
+    applied_max_ms: Optional[float] = None
+    # What the OLTP point read was doing while the transactions ran, and over an
+    # idle window just before, so the claim that Accord stayed off the request path
+    # is a difference the reader can see rather than one asserted.
+    oltp_probe: Dict[str, Any] = {}
+    oltp_baseline: Dict[str, Any] = {}
+
+
+# ──────────────────────── Accord airspace clearance ────────────────────────
+
+
+class ClearanceZone(BaseModel):
+    """One restricted zone's clearance ledger, read from both sides."""
+
+    zone_id: str
+    zone_name: str = ""
+    severity: str = ""
+    capacity: int = 0
+    # Slots left.  Held as a count-down rather than a count of grants because that is
+    # what Accord can decrement in one statement: SET remaining -= 1 needs no
+    # capacity to compare against, where a count-up would need the transaction to
+    # compare two LET references, which Accord refuses.
+    remaining: int = 0
+    # Drones cleared into the zone, from the zone's own clearance partition.
+    holders: List[str] = []
+    # capacity == remaining + len(holders): the semaphore's whole invariant, and the
+    # thing the demo exists to keep true.  Reported rather than asserted, because a
+    # broken one is the interesting result and hiding it would defeat the point.
+    consistent: bool = True
+
+
+class ClearanceState(BaseModel):
+    zones: List[ClearanceZone] = []
+    # Holders whose own drone_clearance row names a different zone, or none at all.
+    # The two tables are written by one transaction, so this must stay empty; it is
+    # the cross-partition half of the invariant above.
+    mismatched: List[str] = []
+
+
+class ClearanceContentionResult(BaseModel):
+    """What happened when many drones asked for the same zone at once.
+
+    This is the claim the whole schema exists to make, so it is measured rather than
+    described: ``granted`` must equal the zone's capacity however many asked, and the
+    ledger must still add up afterwards.  A count-and-write done outside consensus
+    would oversubscribe here, and the number would say so.
+    """
+
+    zone_id: str
+    capacity: int = 0
+    askers: int = 0
+    granted: int = 0
+    refused: int = 0
+    # Who won, which differs between runs: that is what shows the asks genuinely
+    # contended rather than being serialised by the client.
+    winners: List[str] = []
+    # Transactions that raised rather than being refused.  A refusal is the expected
+    # outcome for a loser; an error is not, and the two must not be conflated.
+    errors: List[str] = []
+    # Wall clock for the whole overlapping set, not per ask.
+    duration_ms: float = 0.0
+    zone: Optional[ClearanceZone] = None
+
+
+class ClearanceDemoResult(BaseModel):
+    """The scripted clearance sequence, and the ledger it left behind."""
+
+    zone_id: str
+    entity_ids: List[str] = []
+    steps: List[TransactionStep] = []
+    state: ClearanceState
+    # A grant and a release timed over repeats.  Two figures rather than one, because
+    # they are two different transactions: a grant reads two partitions and writes
+    # three, a release reads one and writes three.
+    repeats: int = 0
+    grant_p50_ms: Optional[float] = None
+    grant_max_ms: Optional[float] = None
+    release_p50_ms: Optional[float] = None
+    release_max_ms: Optional[float] = None

@@ -57,6 +57,32 @@ curl -s localhost:8000/api/platform/health | jq '.services[] | {name, status, de
 
 `target` may be one of the client names instead of `"all"`.  Restarting `spark` restarts the master, worker and Thrift Server together, and clears a wedged HiveServer2 session.
 
+## An unclean stop stops Accord, and Accord stops the node
+
+Accord writes a `started` marker into `cassandra-data/accord_journal/` and a `stopped` marker when it shuts down cleanly.  A `started` with no `stopped` means the node was killed, and `AccordService.localStartup()` treats that as fatal:
+
+```
+Stop marker is older than start marker (-1<1787604329607), so cannot assume we have a
+complete log of our votes in any consensus groups. Exiting.
+```
+
+Every table's data is intact; the node just will not open.  `podman machine stop`, a sleeping laptop or an out-of-memory kill each cause it, and this stack has taken all three.
+
+`cassandra/entrypoint.sh` sets `accord.journal.stop_marker_failure_policy: ALLOW_UNSAFE_STARTUP`, so the condition now warns and startup continues.  What that gives up is the guarantee that this node knows every vote it cast; at RF=1 there is no peer to hold a conflicting one, so it gives up nothing here.  **A multi-node cluster must not carry that setting.**  The recovery without it is `rm -rf cassandra-data/accord_journal/`, which discards the vote log and keeps the tables.
+
+Three things made this hard to see, and two of them are fixed:
+
+- The container reported `Up (starting)` with nothing listening, because the entrypoint's `until cqlsh …` loop kept polling a daemon that had died.  It now tests `kill -0` on the backgrounded pid and exits, so `podman ps` says `Exited (1)` and `podman logs cassandra` ends at the cause.
+- **`spark` never started at all**, and looked like a second, unrelated failure.  Its `depends_on` is `condition: service_healthy` on cassandra, so compose created the container and never ran it: `podman inspect` showed `State=initialized` and `StartedAt=0001-01-01`, and `podman logs spark` was empty.  An empty log and that date mean *not started*, not *crashed*.  Start it with `podman compose -f podman-compose.yml up -d spark` once cassandra is healthy.
+- **The sink does not recover.**  Ten hours after Cassandra died it was still printing `batch write failed, will retry from the last commit: ('Unable to complete the operation against any hosts', {})`, with an empty error map, meaning the driver had no host left to try.  `podman restart data-cassandra-sink` fixes it, and the sink then drains the Kafka backlog at about twice the producer's rate.  The backend needs the same treatment; `/api/platform/reconnect` above is the lighter form of it.
+
+A drained backlog writes into **past** buckets, because `event_bucket` comes from the event's own time.  So the current window can be empty while old windows are still growing, and no window is safely closed until the lag reaches zero.  Check it before quoting any figure:
+
+```bash
+podman exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:19092 \
+  --describe --group demo-cassandra-sink | awk 'NR>1 && NF>5 {n++; t+=$6} END {print n" partitions, total lag "t}'
+```
+
 ## Wiping
 
 ```bash
@@ -72,3 +98,4 @@ The first is what you want between measurements.  The second changes the schema 
 - **`Cassandra not connected` in the backend log** — expected while Cassandra is still starting.  The endpoints degrade rather than fail; `/api/query/window` reports `closed: false` instead of erroring.
 - **A Spark query hangs, then times out** — usually the connector's schema refresh.  Restart `spark`, then reconnect.  `podman logs --tail 100 spark` shows the Thrift Server's own complaint.
 - **The sink's progress line** is the quickest sign of life: `podman logs --tail 2 data-cassandra-sink` prints `total_inserted=… (~1990/s)`.
+- **Cassandra is `Up (starting)` and nothing answers on 9042, or `spark` has an empty log** — read "An unclean stop stops Accord" above.  Both are the same cause.

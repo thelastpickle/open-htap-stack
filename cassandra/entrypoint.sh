@@ -34,9 +34,19 @@ echo "Starting Cassandra..."
 cassandra -f &
 CASSANDRA_PID=$!
 
-# Wait for Cassandra to be ready
+# Wait for Cassandra to be ready.  The liveness test on CASSANDRA_PID is what stops a daemon
+# that died during startup from leaving this loop spinning forever: podman then reports the
+# container "Up (starting)" with nothing listening on 9042, which reads as a slow start rather
+# than as a failure and hides the reason in a log nobody thinks to open.  Exiting here instead
+# makes the container exit, so `podman ps` says so and `podman logs cassandra` ends at the cause.
 echo "Waiting for Cassandra to start..."
-until cqlsh -e "DESCRIBE KEYSPACES" ${CONTAINER_IP} 9042 >/dev/null 2>&1; do sleep 2 ;done
+until cqlsh -e "DESCRIBE KEYSPACES" ${CONTAINER_IP} 9042 >/dev/null 2>&1; do
+  if ! kill -0 "${CASSANDRA_PID}" 2>/dev/null; then
+    echo "Cassandra exited during startup; the reason is above.  Not waiting for a node that is gone."
+    exit 1
+  fi
+  sleep 2
+done
 echo "Cassandra is ready!"
 
 # Start cassandra-sidecar

@@ -51,6 +51,12 @@ A table that has not opted in answers `Accord transactions are disabled on table
 
 `full` also routes **ordinary** reads and writes to the table through Accord, so every statement against those six must be at QUORUM; the driver's default profile is LOCAL_ONE and is refused with `ConsistencyLevel LOCAL_ONE is unsupported with Accord`.  That is the reason `events` is not opted in.
 
+## A keyspace holding an Accord table cannot be dropped
+
+`DROP KEYSPACE cassandra_sql` is refused with `Cannot drop keyspace 'cassandra_sql' as it contains accord tables. (cassandra_sql.kv_store, ...)`, naming each.  Drop the thirteen tables first, then the keyspace.  This bites on cassandra-sql's three keyspaces, `cassandra_sql`, `cassandra_sql_internal` and `pg_catalog`, whose tables it creates itself with `transactional_mode = 'full'`; the same rule applies to `demo` once the three session tables exist.
+
+`./stop-and-clean-data-and-schema.sh` sidesteps the refusal entirely, because it deletes the data directory rather than issuing CQL, and cassandra-sql recreates its keyspaces on its next start.  Prefer it.  Cassandra also leaves the directory of a dropped keyspace behind under `cassandra-data/data/`, so an empty directory there is not evidence that the keyspace still exists; ask `DESCRIBE KEYSPACE`.
+
 ## The two constants both sides must agree on
 
 `demo.events` is `PRIMARY KEY ((event_bucket, shard), event_id)`, where `event_bucket` is a 15-minute UTC window as text and `shard` is `crc32(event_id) % 16`.  Bucket width and shard count are declared once in `podman-compose.yml` and passed to **both** the sink and the backend as `EVENT_BUCKET_MINUTES` and `EVENT_SHARDS`.  Recreate both services after changing either; a backend querying 16 shards against a sink writing 8 matches nothing, and returns no error either.

@@ -223,6 +223,68 @@ services:
       # Placeholder for your custom Sidecar/SSTable connector plugin JAR(s)
       #- ./presto/plugin/sstable:/opt/presto-server/plugin/sstable:rw
 
+  # GEICO's cassandra-sql: Postgres-dialect SQL with serializable transactions,
+  # over Cassandra used as an ordered key-value store.  It is not a sixth access
+  # path to demo.events: it holds its own encoding in its own keyspaces and cannot
+  # read a table the sink wrote, so it is absent from the five-path comparison and
+  # has its own page.
+  #
+  # Its README asks for ByteOrderedPartitioner, and this stack runs Murmur3.  That
+  # is deliberate and it was checked rather than assumed.  No file under the
+  # project's src/main/ reads the partitioner; the only mention is a comment above
+  # its one range scan, "SELECT ... FROM kv_store WHERE key >= ? AND key <= ?
+  # ALLOW FILTERING".  Measured against this node on a table with that key, and
+  # again on one declared transactional_mode='full': the statement is legal, and
+  # it returns the right rows.  What differs is their order, token order rather
+  # than key order, and cassandra-sql does not use it -- KvStore.scan returns a
+  # HashMap's values, and KvQueryExecutor sorts ORDER BY in Java, widening its
+  # scan limit when one is present for that very reason.  The cost of Murmur3 is
+  # that the scan filters over the whole kv_store table rather than seeking a
+  # contiguous range; how much BOP would save there is unmeasured, and Phase 0
+  # established that BOP costs this stack two access paths and the vector index.
+  accord-sql:
+    build:
+      context: ./accord-sql
+    container_name: accord-sql
+    networks: [htap-net]
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    ports:
+      # 5432 only.  The project also serves /api/sql/health on 8080, which the
+      # backend reaches inside the network, but 8080 on the host is the Spark
+      # master UI.
+      - "5432:5432"
+    environment:
+      CASSANDRA_CONTACT_POINTS: "cassandra"
+      CASSANDRA_PORT: "9042"
+      CASSANDRA_LOCAL_DATACENTER: "datacenter1"
+      # Three keyspaces, not one: this names the default, and KeyspaceConfig
+      # hard-codes cassandra_sql_internal and pg_catalog beside it.  All three are
+      # created by cassandra-sql itself, so they are the only part of the schema
+      # the sink does not own.
+      CASSANDRA_KEYSPACE: "cassandra_sql"
+      # kv is the project's own recommendation and the only mode with transactions.
+      # The alternative, schema mode, reads native Cassandra tables but has, in the
+      # project's words, "No transactions", "No JOINs or subqueries" and "Eventual
+      # consistency only", which is weaker than the Presto path already here.  Set
+      # here rather than left alone: CassandraSqlConfig.java:13 initialises the
+      # field to SCHEMA, and only the bundled application.yml overrides it, so an
+      # explicit value is what makes the mode a decision rather than a default.
+      CASSANDRA_SQL_STORAGE_MODE: "kv"
+      # Spring Boot's own name for the logger, not the project's.  Its
+      # application.yml offers CASSANDRA_SQL_LOG_LEVEL, but no file under src/main/
+      # calls System.getenv, so that variable is read by nothing.
+      LOGGING_LEVEL_COM_GEICO_POC_CASSANDRASQL: "${ACCORD_SQL_LOG_LEVEL:-INFO}"
+    # Well above the JVM's -Xmx1g, for the Netty direct buffers behind the
+    # Postgres listener and for Calcite's planner.
+    mem_limit: "${ACCORD_SQL_MEM_LIMIT:-2g}"
+    # This policy only reaches a failed start because the image's entrypoint makes
+    # the container exit when nothing opens 5432; a failed Spring context does not
+    # stop the JVM by itself, and podman then sees a running container with
+    # Restarts=0.  ACCORD_SQL_STARTUP_TIMEOUT_S sets that window, default 300.
+    restart: unless-stopped
+
 
 ###############################################################################
 ## Demo Application Services

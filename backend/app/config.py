@@ -82,6 +82,18 @@ class Settings(BaseSettings):
     # two in both sweeps.  Raise it only to measure that again.
     cqlite_key_chunk: int = 1
 
+    # cassandra-sql, which speaks the Postgres wire protocol.  5432 is not a
+    # setting on either side: it is a private static final in the service's
+    # PostgresProtocolServer, so it is named here only to be addressed.  The
+    # database and user names go unchecked by the service, and psycopg insists on
+    # sending both.  A short connect timeout because this is a demo panel and the
+    # service is either up or it is not.
+    accord_sql_host: str = "accord-sql"
+    accord_sql_port: int = 5432
+    accord_sql_database: str = "cassandra_sql"
+    accord_sql_user: str = "htap-mission-control"
+    accord_sql_connect_timeout_s: float = 5.0
+
     # Kafka — used by the platform health probe only
     kafka_host: str = "kafka"
     kafka_port: int = 19092

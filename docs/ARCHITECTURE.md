@@ -155,19 +155,29 @@ The architectural reason this works: analytical reads don't go through Cassandra
 
 ### What is provided
 
-**Nothing yet, in this stack.** &emsp;The adapter is called Accord SQL, and `accord-sql/` holds a placeholder that no compose service starts. &emsp;It sits on the transaction layer, and the transaction layer is now present: the stack runs Cassandra 6.0-alpha2, which ships Accord and refuses a transaction only because no table declares `transactional_mode`. &emsp;What the adapter waits on is therefore work of its own, and no longer a version of Cassandra.
+The adapter is GEICO's [cassandra-sql](https://github.com/geico/cassandra-sql), and it runs in this stack as the `accord-sql` service, built from a pinned revision plus one patch whose whole diff is in this repository. &emsp;It is a **Postgres wire-protocol and Postgres-dialect adapter** on the transaction layer, planning with Apache Calcite. &emsp;`psql`, or any Postgres driver, connects to port 5432 and gets joins, subqueries, aggregates over non-key columns and multi-statement `BEGIN`/`COMMIT` transactions; the **SQL** subtab of the dashboard's Transactions page drives it. &emsp;It sits on Accord: its own tables carry `transactional_mode = 'full'`.
 
-What the design describes is a **Postgres wire-protocol and Postgres-dialect adapter**, a prototype on the transaction layer, using Apache Calcite for query parsing and planning. &emsp;The rest of this section is what to assume about that design, not about anything running here. &emsp;The SQL that does run here is SparkSQL and Presto, over the four analytical access paths.
+**It is a sixth interface and not a sixth access path.** &emsp;In its `kv` storage mode, the mode its own documentation recommends, it stores SQL rows in three keyspaces of its own under an ordered key-value encoding of its own, so it cannot read `demo.events` and it appears in no comparison with the five paths. &emsp;Its `schema` mode does read native Cassandra tables, and was rejected: that mode's own documentation says "No transactions", "No JOINs or subqueries" and "Eventual consistency only", which leaves it weaker than the Presto path already here.
 
 ### What you should assume
 
-- This is **not** a claim of full Postgres feature parity.
-- The prototype's GitHub page documents exactly what is implemented and what is not.
-- Treat it as a pragmatic interoperability layer:
-  - useful for onboarding, tooling compatibility, and incremental migration from Postgres
-  - **not** a substitute for validating the SQL semantics your application actually depends on
+- This is **not** a claim of full Postgres feature parity. &emsp;The project states "~40% (core features only)" and calls itself not production-ready.
+- The declared constraints are mostly not enforced. &emsp;A duplicate primary key overwrites, and `FOREIGN KEY`, `NOT NULL` and `ENUM` are each accepted and ignored; `UNIQUE` is the one that is held. &emsp;An application that relies on the database to refuse bad data must check that assumption statement by statement.
+- Numbers are not exact. &emsp;`DECIMAL` is held as a double, so money arithmetic carries binary floating-point error, and an `UPDATE` that does arithmetic on an integer column stores a double in it.
+- A bound parameter of an integer type silently matches nothing. &emsp;This is the defect most likely to reach production quietly, because every Postgres driver binds by default.
+- **A join answers wrongly in four distinct ways, and none of them raises.** &emsp;A column name held by two joined tables resolves to one table for the whole statement whatever the qualifier says; `ORDER BY` is ignored on a grouped result; arithmetic across two joined tables returns one operand and discards the operator; and arithmetic against a literal inside a join projection drops the column, so a client reading by position gets a different one. &emsp;Single-table arithmetic and single-table `ORDER BY` are both exact, which is what places all four in the join. &emsp;A join is the reason to reach for this adapter at all, so read this as the section's main caveat.
 
-**If your application relies on Postgres-specific features** (advanced window functions, recursive CTEs, specific transaction isolation semantics, extensions), verify against the prototype's documented coverage before committing to a migration.
+The README's *Example Application (OLTP) SQL* section carries each of those with the statement that produced it, and timings from a real run. &emsp;Treat the adapter as a pragmatic interoperability layer, useful for onboarding and for tooling compatibility, and not as a substitute for validating the SQL semantics your application depends on.
+
+**If your application relies on Postgres-specific features** (advanced window functions, recursive CTEs, specific transaction isolation semantics, extensions), verify against the project's documented coverage before committing to a migration.
+
+### The partitioner question
+
+cassandra-sql's own prerequisites require `ByteOrderedPartitioner`. &emsp;**This stack runs Murmur3 with 16 tokens and the partitioner needed no patch**, which was checked rather than assumed: no code under `src/main/` reads the partitioner, the one range scan is legal under Murmur3, and row order is discarded anyway. &emsp;`CassandraConfigTest` does assert that `system_views.settings` reports the byte-ordered partitioner, and so fails here; the build therefore runs `-x test`, and the integration tests need a Cassandra on `localhost:9042` that a build stage has not got in any case.
+
+The service does carry one patch, in `accord-sql/patches/`, and it is unrelated to the partitioner: `CassandraExecutor` hard-codes `localhost:9042` in a second Cassandra session, and its unconditional `@PostConstruct` fails that bean, and with it the application, whenever Cassandra is in another container. &emsp;The patch gives that session the four properties `CassandraConfig` already reads.
+
+Byte-ordered partitioning was measured here and rejected for the cluster, because it is cluster-wide and cannot be changed on an existing data directory. &emsp;Three of the demo's features refuse it, two of them inside libraries this repository does not own: storage-attached indexes ("Storage-attached index does not support the following IPartitioner implementations"), which is the only vector index Cassandra has and therefore the whole vector search page; the spark-cassandra-connector ("Unsupported partitioner"); and the CEP-28 bulk reader, whose `Partitioner` is an enum of Murmur3 and Random. &emsp;So the project's own warning that "Byte Order Partitioner + Accord is poorly tested, journals are not compacting, gets slower over time" does not apply to this deployment.
 
 ---
 
@@ -348,7 +358,7 @@ See the [TCO worksheet](TCO-Comparisons.md) for specific workload/cluster-size e
 - Accord / CEP-15: transactions, strict serializability, failure tolerance goals. &emsp;The goals list, the survey of prior work and the prototype's status are quoted from <https://cwiki.apache.org/confluence/display/CASSANDRA/CEP-15%3A+General+Purpose+Transactions>
 - CEP-28: Spark bulk reader/writer via Sidecar to persisted storage
 - Cassandra Analytics: bulk reader/writer examples
-- SQL prototype repo: Postgres wire protocol and Calcite-based dialect coverage
+- cassandra-sql: Postgres wire protocol and a Calcite-planned dialect over Cassandra, <https://github.com/geico/cassandra-sql>. &emsp;The compliance figure, the storage-mode limitations and the partitioner warning quoted in section E are from that repository's own README
 
 Sources for section B's comparison, each quoted from the system's own documentation or paper:
 

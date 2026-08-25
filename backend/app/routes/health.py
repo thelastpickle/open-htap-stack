@@ -48,6 +48,11 @@ def _service_targets() -> List[tuple]:
         ("Kafka", settings.kafka_host, settings.kafka_port),
         ("Presto", settings.presto_host, settings.presto_port),
         ("Spark", settings.spark_ui_host, settings.spark_ui_port),
+        # cassandra-sql's Postgres listener.  A reachability row and nothing more:
+        # it is not one of the five paths, and it needs no reconnect target because
+        # its client drops its connection on any error and re-opens it on the next
+        # call, which every route there does before running a statement.
+        ("cassandra-sql", settings.accord_sql_host, settings.accord_sql_port),
     ]
 
 

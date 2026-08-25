@@ -556,3 +556,62 @@ class ClearanceDemoResult(BaseModel):
     grant_max_ms: Optional[float] = None
     release_p50_ms: Optional[float] = None
     release_max_ms: Optional[float] = None
+
+
+# ──────────────────────── cassandra-sql console ────────────────────────
+
+
+class SqlPreset(BaseModel):
+    """One statement the cassandra-sql page offers, with what it demonstrates."""
+
+    id: str
+    title: str
+    description: str
+    sql: str
+
+
+class SqlStatementResult(BaseModel):
+    """One statement's outcome.  A statement is a whole SQL string, which may hold
+    several statements separated by semicolons: that is how a BEGIN/COMMIT
+    transaction is sent, and cassandra-sql executes the string as one unit."""
+
+    sql: str
+    # Column names as the server named them.  Empty for a statement that returns
+    # no result set, which includes every DDL statement and every transaction.
+    columns: List[str] = []
+    # Rows as they arrived.  Every value is a string, because the server sends no
+    # usable type OIDs; converting here would invent a type it did not send.
+    rows: List[List[Any]] = []
+    row_count: int = 0
+    duration_ms: float = 0.0
+    error: Optional[str] = None
+
+
+class SqlConsoleResult(BaseModel):
+    engine: str = "cassandra-sql"
+    statements: List[SqlStatementResult] = []
+    duration_ms: float = 0.0
+    # Statements that raised.  Reported as a count as well as per statement, so a
+    # seed run that is mostly "already exists" reads at a glance.
+    error_count: int = 0
+
+
+class SqlQuirk(BaseModel):
+    """One measured cassandra-sql defect, with the control that isolates it.
+
+    A defect is only a defect if something nearby works, so each carries both: the
+    probe over a join, and the same expression over one table, which is exact.  The
+    two are separate statements because a multi-statement string returns only its
+    last result set here, so a paired demonstration cannot be one string.
+
+    ``expected`` is what a correct engine would answer, written out rather than
+    computed.  Without it a viewer sees two numbers and no reason to prefer either.
+    """
+
+    id: str
+    title: str
+    # What goes wrong, in one sentence.
+    summary: str
+    expected: str
+    probe: SqlStatementResult
+    control: SqlStatementResult

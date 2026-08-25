@@ -15,6 +15,16 @@ presto-python-client==0.8.4
 pyhive==0.7.0
 thrift==0.24.0
 
+# The Postgres wire protocol, for cassandra-sql.  The binary extra because every
+# psycopg implementation needs libpq, including the pure-Python one, which reaches
+# it through ctypes; the binary wheel carries its own, so the backend image needs
+# no apt package added for it.
+#
+# 3.2.13 rather than 3.2.9, which is what the behaviour above was measured against:
+# this image is Python 3.14, and psycopg-binary publishes no cp314 wheel before
+# 3.2.10.  Nothing measured here is a property of the driver.
+psycopg[binary]==3.2.13
+
 # Outbound HTTP for the optional embedding and NL-to-SQL endpoints
 httpx==0.28.1
 

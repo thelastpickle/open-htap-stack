@@ -16,10 +16,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.db.cassandra_client import cassandra_client
 from app.db.cqlite_client import cqlite_client
+from app.db.accord_sql_client import accord_sql_client
 from app.db.presto_client import presto_client
 from app.db.spark_client import spark_bulk_client, spark_client
 from app.routes import alerts, demo, health, map, overview, query, settings as settings_routes
-from app.routes import transactions, vector, zones
+from app.routes import sql_console, transactions, vector, zones
 
 ROUTERS = (
     overview.router,
@@ -32,6 +33,7 @@ ROUTERS = (
     settings_routes.router,
     demo.router,
     transactions.router,
+    sql_console.router,
 )
 
 
@@ -54,6 +56,12 @@ async def lifespan(app: FastAPI):
         ("Spark Thrift Server", spark_client),
         ("Spark bulk reader", spark_bulk_client),
         ("cqlite reader", cqlite_client),
+        # cassandra-sql last, and it is expected to fail here on a cold stack: it
+        # creates three keyspaces and thirteen tables before it answers, 36.3 s on
+        # the first start after its image was built and 3.7 to 3.8 s on a restart.
+        # Its routes prove the connection before every statement and open one if
+        # there is none, so a failure here costs nothing.
+        ("cassandra-sql", accord_sql_client),
     ):
         try:
             client.connect()

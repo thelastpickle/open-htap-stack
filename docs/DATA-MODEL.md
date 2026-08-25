@@ -15,6 +15,10 @@ The schema is defined in one place, `ensure_schema()` in [ingress/consumer/consu
 | `zone_occupancy`, `zone_clearance`, `drone_clearance` | The Accord clearance demo's three tables, each `transactional_mode='full'`: a count-down semaphore per zone, its holders, and one clearance per asset | The same subtab, and `/api/transactions/clearance` |
 | `session_timeline_plain` | The same columns and key as `session_timeline`, with no transactional mode | The reference the transaction is timed against |
 
+**One part of the schema the sink does not own**: the three keyspaces `cassandra_sql`, `cassandra_sql_internal` and `pg_catalog`, holding thirteen tables between them. &emsp;cassandra-sql creates them itself on its first start, and their shape is an ordered key-value encoding of its own rather than a demo table: `cassandra_sql.kv_store` is `PRIMARY KEY (key, ts)` with `CLUSTERING ORDER BY (ts DESC)` and `transactional_mode = 'full'`. &emsp;Nothing in `demo` reads them and they read nothing in `demo`, which is why the SQL subtab stands apart from the five access paths. &emsp;Its five tables carry fleet names — `operators`, `drones`, `zones`, `flights`, `flight_legs` — and that is naming rather than replication: no process copies a `demo` row into them, and the schema subtab beside them shows the two models side by side so a reader can see they share none.
+
+Those keyspaces need a word in any teardown script, because **a keyspace holding an Accord table cannot be dropped**: `DROP KEYSPACE cassandra_sql` is refused with "Cannot drop keyspace 'cassandra_sql' as it contains accord tables", naming each. &emsp;Drop the tables first, then the keyspace.
+
 ## Why `events` is partitioned by time
 
 ```

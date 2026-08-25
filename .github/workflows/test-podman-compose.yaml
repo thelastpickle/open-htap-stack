@@ -119,7 +119,12 @@ jobs:
           # kafka are ready by now, so spark, then presto, then the ingress services.
           # The dashboard's backend and frontend go up here too; the Mission Control
           # step below waits on them, since they are the last thing to become ready.
-          podman start spark presto data-producer data-cassandra-sink backend frontend
+          # accord-sql goes up here rather than in its own step, because it creates
+          # three keyspaces and thirteen tables before it answers: 36.3s measured on
+          # a first start after its image was built, which is the case a runner is
+          # always in.  Starting it now spends that time in parallel with the waits
+          # that follow.
+          podman start spark presto data-producer data-cassandra-sink backend frontend accord-sql
 
           echo -e "\n=== Waiting for Spark to be ready ==="
           timeout 120 bash -c 'until curl -sf http://localhost:8080 >/dev/null 2>&1; do echo "Waiting for Spark..."; sleep 5; done'
@@ -128,6 +133,18 @@ jobs:
           echo -e "\n=== Waiting for Presto to be ready ==="
           timeout 120 bash -c 'until curl -sf http://localhost:8088/v1/info >/dev/null 2>&1; do echo "Waiting for Presto..."; sleep 5; done'
           echo "✓ Presto is ready"
+
+          echo -e "\n=== Waiting for cassandra-sql to answer SQL ==="
+          # Waited on here, and not only in its own step, because the dashboard step
+          # asserts that the backend can reach every service and this is one of them.
+          #
+          # Asked through the backend rather than by opening 5432, and that was
+          # measured: podman's port proxy accepts a connection on the published port
+          # about a second after the container starts, whatever the JVM is doing, so a
+          # /dev/tcp check on localhost:5432 reports ready before the service exists.
+          # This endpoint opens a real Postgres connection and runs SELECT 1 over it.
+          timeout 300 bash -c 'until curl -s -m 5 http://localhost:8000/api/sql-console/status | grep -q "\"connected\":true"; do echo "Waiting for cassandra-sql..."; sleep 5; done'
+          echo "✓ cassandra-sql answers SQL"
 
           echo -e "\n=== All services are healthy ==="
           podman ps
@@ -1276,6 +1293,251 @@ jobs:
           PY
           echo "✓ Concurrent askers were admitted up to the capacity exactly, and the ledger still adds up"
         timeout-minutes: 15
+
+      - name: Test cassandra-sql
+        run: |
+          echo -e "\n=== SQL over Cassandra: a schema, a transaction, a rollback and a join ==="
+          # A step of its own, so that a cassandra-sql failure does not mask a
+          # five-path failure and is not masked by one.  This engine is not one of
+          # the five: it keeps SQL rows in its own keyspaces under its own encoding
+          # and cannot read demo.events, so nothing here touches the demo's data.
+          #
+          # Its five tables are the fleet's own — operators, drones, zones, flights and
+          # the legs a flight flies through restricted airspace — and no other writer
+          # touches them, so the row counts are what this step wrote.  Nothing here
+          # depends on how long the stack has been ingesting.
+          TMP_DIR="${TMP_DIR:-.ci-tmp}"
+          mkdir -p "$TMP_DIR"
+
+          post() { curl -s -X POST -H 'Content-Type: application/json' -d "$2" "$1"; }
+          run_sql() {
+            python3 -c 'import json,sys; print(json.dumps({"sql": sys.stdin.read()}))' \
+              | curl -s -X POST -H 'Content-Type: application/json' -d @- \
+                  http://localhost:8000/api/sql-console/execute
+          }
+          preset() {
+            curl -s http://localhost:8000/api/sql-console/presets \
+              | python3 -c 'import json,sys; print([p["sql"] for p in json.load(sys.stdin) if p["id"] == sys.argv[1]][0])' "$1"
+          }
+
+          echo -e "\n--- Drop, create and seed"
+          # /reset rather than /schema, and the difference matters for a re-run: UNIQUE
+          # is the one declared constraint this engine holds, so a second seed is
+          # refused with "UNIQUE constraint violation: operators_licence_unique".  The
+          # reset drops the five tables first, which also drops their indexes, DROP
+          # INDEX being unimplemented in either form.
+          post http://localhost:8000/api/sql-console/reset '{}' > "$TMP_DIR/sqlc-reset.json"
+          python3 - "$TMP_DIR/sqlc-reset.json" << 'PY'
+          import json, sys
+          result = json.load(open(sys.argv[1]))
+          # A failing DROP is not a failing reset, and asserting error_count == 0 here
+          # would have failed this step on every fresh stack.  DROP TYPE ignores its IF
+          # EXISTS, so on a stack whose ENUMs do not exist the two DROP TYPE statements
+          # raise "ENUM type does not exist" and the other 23 succeed.  Two states
+          # produce that: a first-ever reset, and a restarted accord-sql, which keeps its
+          # tables in Cassandra and loses its ENUM registry.  So the verdict is over the
+          # statements that build the schema, and a DROP is allowed to say the object was
+          # not there.
+          is_drop = lambda s: s["sql"].upper().startswith("DROP")
+          built = [s for s in result["statements"] if not is_drop(s)]
+          failed = [s for s in built if s["error"]]
+          dropped = [s for s in result["statements"] if s["error"] and is_drop(s)]
+          for statement in result["statements"]:
+              head = statement["sql"].split("\n")[0][:70]
+              print(f"  {'ok  ' if not statement['error'] else 'FAIL'} {head}")
+              if statement["error"]:
+                  print(f"       {statement['error']}")
+          print(f"  {len(result['statements'])} statements, {result['error_count']} errors "
+                f"({len(dropped)} of them a DROP of a missing object), "
+                f"{len(built)} build the schema, {result['duration_ms']} ms")
+          if failed:
+              print("::error::the reset failed to build the schema, so nothing below is "
+                    "reading a known one")
+              sys.exit(1)
+          PY
+
+          echo -e "\n--- Row counts, one statement each"
+          # One statement each, and the reason is the next paragraph rather than
+          # UNION ALL: four counts in one UNION ALL statement do answer correctly.
+          #
+          # flights and flight_legs report null at this point, and that is the engine
+          # rather than this step: COUNT(*) over an empty table raises here with
+          # "Aggregation failed: Index 0 out of bounds for length 0", and inside a
+          # UNION ALL that failure takes the whole statement with it.  One statement
+          # per table is what keeps an empty table's failure attributed to that table.
+          # Only the three seeded tables are asserted here; the two the transaction
+          # writes are counted again after it.
+          curl -s http://localhost:8000/api/sql-console/tables > "$TMP_DIR/sqlc-counts.json"
+
+          echo -e "\n--- One transaction: a flight, its two legs, the drone's cycles and the operator's hours"
+          # Read the two counters first, so the assertion below is the +1 the
+          # transaction adds rather than an absolute figure a re-run would break.  A
+          # repeated primary key upserts here, so the flight does not duplicate on a
+          # second run, but each UPDATE applies again.
+          printf 'SELECT flight_hours FROM operators WHERE operator_id = 1001;' \
+            | run_sql > "$TMP_DIR/sqlc-hours-before.json"
+          printf 'SELECT battery_cycles FROM drones WHERE drone_id = 2003;' \
+            | run_sql > "$TMP_DIR/sqlc-cycles-before.json"
+          preset transaction | run_sql > "$TMP_DIR/sqlc-tx.json"
+
+          echo -e "\n--- One transaction rolled back"
+          preset rollback | run_sql > "$TMP_DIR/sqlc-rollback.json"
+
+          echo -e "\n--- A four-way join over the rows the transaction wrote"
+          preset join | run_sql > "$TMP_DIR/sqlc-join.json"
+
+          echo -e "\n--- The state the transaction left"
+          printf 'SELECT COUNT(*) AS n FROM flights;' | run_sql > "$TMP_DIR/sqlc-flights.json"
+          printf 'SELECT COUNT(*) AS n FROM flight_legs;' | run_sql > "$TMP_DIR/sqlc-legs.json"
+          printf 'SELECT flight_hours FROM operators WHERE operator_id = 1001;' \
+            | run_sql > "$TMP_DIR/sqlc-hours.json"
+          printf 'SELECT battery_cycles FROM drones WHERE drone_id = 2003;' \
+            | run_sql > "$TMP_DIR/sqlc-cycles.json"
+
+          python3 - "$TMP_DIR" << 'PY'
+          import json, sys
+          from pathlib import Path
+
+          tmp = Path(sys.argv[1])
+          problems = []
+
+          def one(name):
+              """The single statement of a one-statement response."""
+              result = json.loads((tmp / name).read_text())
+              return result["statements"][0]
+
+          def rows_of(name, label):
+              statement = one(name)
+              if statement["error"]:
+                  problems.append(f"{label} raised: {statement['error']}")
+                  return []
+              return statement["rows"]
+
+          # Every value arrives as text, and an UPDATE that does arithmetic rewrites an
+          # integer column as a double: 2003's battery cycles read "74" as seeded and
+          # "75.0" after the transaction added one.  So compare through float() rather
+          # than against a string, which would encode that defect into the assertion
+          # and break on the release that fixes it.
+          def number(value):
+              return None if value is None else float(value)
+
+          counts = json.loads((tmp / "sqlc-counts.json").read_text())
+          seeded = {}
+          for statement in counts["statements"]:
+              table = statement["sql"].split(" FROM ")[1].rstrip(";")
+              seeded[table] = None if statement["error"] else number(statement["rows"][0][0])
+              print(f"  {table}: {seeded[table]}")
+          # The seed's own rows, so exact: five Norwegian operators, eight drones, and
+          # the three Oslo zones the map draws.
+          for table, expected in (("operators", 5.0), ("drones", 8.0), ("zones", 3.0)):
+              if seeded.get(table) != expected:
+                  problems.append(f"{table} holds {seeded.get(table)} rows, expected {expected}")
+
+          tx = one("sqlc-tx.json")
+          if tx["error"]:
+              problems.append(f"the transaction raised: {tx['error']}")
+          # A committed transaction returns no result set, which is not an empty one:
+          # columns and rows are both absent.
+          elif tx["columns"]:
+              problems.append(f"the transaction returned columns {tx['columns']}, expected none")
+          print(f"  transaction: {tx['duration_ms']} ms, {len(tx['columns'])} columns")
+
+          # The rollback is the page's central claim, so it is asserted rather than
+          # printed: the SELECT after the ROLLBACK must return no row for the flight the
+          # same string inserted.
+          rollback = one("sqlc-rollback.json")
+          if rollback["error"]:
+              problems.append(f"the rollback raised: {rollback['error']}")
+          elif rollback["rows"]:
+              problems.append(f"the rolled-back flight is still there: {rollback['rows']}")
+          print(f"  rollback: {len(rollback['rows'])} rows after ROLLBACK, expected 0")
+
+          # Two legs, so two joined rows, and the join must have resolved the operator:
+          # a null name would mean the join matched nothing and the rows came from one
+          # table.  The projection is operator, serial, airframe, zone_name, leg_no,
+          # dwell_min, status, and every name in it is unique across the four tables on
+          # purpose: a column name that appears in two joined tables resolves to one of
+          # them for the whole statement here, and the qualifier is ignored.
+          join = rows_of("sqlc-join.json", "the join")
+          print(f"  join: {len(join)} rows")
+          for row in join:
+              print(f"    {row}")
+          if len(join) != 2:
+              problems.append(f"the join returned {len(join)} rows, expected 2")
+          if any(row[0] != "Oslo Survey AS" for row in join):
+              problems.append(f"the join did not resolve the operator: {join}")
+          # Both legs' zones, which is the four-table part: the zone name comes from a
+          # table the flight does not reference, reached through the leg.
+          zones = sorted(row[3] for row in join)
+          if zones != ["Fornebu Tech Park", "Oslo Lufthavn Gardermoen"]:
+              problems.append(f"the join resolved the zones as {zones}")
+
+          flights = rows_of("sqlc-flights.json", "the flight count")
+          if flights and number(flights[0][0]) != 1.0:
+              problems.append(f"flights holds {flights[0][0]} rows, expected 1")
+          legs = rows_of("sqlc-legs.json", "the leg count")
+          if legs and number(legs[0][0]) != 2.0:
+              problems.append(f"flight_legs holds {legs[0][0]} rows, expected 2")
+
+          # The +1 each of the transaction's last two statements adds.  This is the
+          # assertion that they committed with the two INSERTs rather than the INSERTs
+          # alone landing, and it is a difference so that the step holds on a stack it
+          # has already run against.  On a freshly reset schema the figures are 1450 to
+          # 1451 and 74 to 75.
+          for before_file, after_file, label in (
+              ("sqlc-hours-before.json", "sqlc-hours.json", "operator 1001's flight hours"),
+              ("sqlc-cycles-before.json", "sqlc-cycles.json", "drone 2003's battery cycles"),
+          ):
+              before = rows_of(before_file, f"{label} before")
+              after = rows_of(after_file, label)
+              print(f"  {label}: {before} -> {after}")
+              if before and after:
+                  gained = number(after[0][0]) - number(before[0][0])
+                  if gained != 1.0:
+                      problems.append(f"{label} gained {gained}, expected 1")
+
+          for problem in problems:
+              print(f"::error::{problem}")
+          sys.exit(1 if problems else 0)
+          PY
+          echo "✓ cassandra-sql created a schema, committed a transaction, rolled one back and joined four tables"
+
+          echo -e "\n--- The four join defects, printed and not asserted"
+          # Printed, because encoding a defect into an assertion makes this step fail on
+          # the release that fixes it, which is the opposite of what the step is for.
+          # The controls are asserted, and that is a different thing: each runs the same
+          # expression over one table, and a control that raised would mean the probe
+          # beside it evidences nothing.
+          curl -s --max-time 120 http://localhost:8000/api/sql-console/quirks > "$TMP_DIR/sqlc-quirks.json"
+          python3 - "$TMP_DIR/sqlc-quirks.json" << 'PY'
+          import json, sys
+          quirks = json.load(open(sys.argv[1]))
+          problems = []
+          print(f"  {len(quirks)} defects reproduced against the live service")
+          for quirk in quirks:
+              print(f"\n  {quirk['id']}: {quirk['title']}")
+              print(f"    a correct engine answers {quirk['expected']}")
+              for label in ("probe", "control"):
+                  statement = quirk[label]
+                  if statement["error"]:
+                      print(f"    {label:8} raised: {statement['error']}")
+                  else:
+                      print(f"    {label:8} {statement['columns']} -> {statement['rows']}")
+              if quirk["control"]["error"]:
+                  problems.append(
+                      f"{quirk['id']}: the control raised, so its probe evidences nothing: "
+                      f"{quirk['control']['error']}"
+                  )
+              elif not quirk["control"]["rows"]:
+                  problems.append(f"{quirk['id']}: the control returned no rows")
+          if len(quirks) != 4:
+              problems.append(f"the route reported {len(quirks)} defects, expected 4")
+          for problem in problems:
+              print(f"::error::{problem}")
+          sys.exit(1 if problems else 0)
+          PY
+          echo "✓ Four join defects reproduced, each beside a single-table control that is exact"
+        timeout-minutes: 10
 
       - name: Test the cqlite token split
         run: |

@@ -1,0 +1,83 @@
+diff --git a/src/main/java/com/geico/poc/cassandrasql/CassandraExecutor.java b/src/main/java/com/geico/poc/cassandrasql/CassandraExecutor.java
+index a3618c0..9db0054 100644
+--- a/src/main/java/com/geico/poc/cassandrasql/CassandraExecutor.java
++++ b/src/main/java/com/geico/poc/cassandrasql/CassandraExecutor.java
+@@ -9,6 +9,7 @@ import com.geico.poc.cassandrasql.validation.EnhancedSchemaValidator;
+ import com.geico.poc.cassandrasql.validation.EnhancedValidationResult;
+ import com.geico.poc.cassandrasql.validation.EnhancedValidationResult.ValidationIssue;
+ import org.springframework.beans.factory.annotation.Autowired;
++import org.springframework.beans.factory.annotation.Value;
+ import org.springframework.stereotype.Component;
+ 
+ import jakarta.annotation.PostConstruct;
+@@ -20,8 +21,25 @@ import java.util.*;
+ public class CassandraExecutor {
+ 
+     private CqlSession session;
+-    private static final String KEYSPACE = "cassandra_sql";
+-    
++
++    // The same four properties CassandraConfig reads, with the same defaults, so
++    // that one Cassandra is named once.  This class used to hard-code
++    // localhost:9042 and datacenter1, which made it unreachable whenever
++    // cassandra-sql and Cassandra ran in separate containers: the configurable
++    // session in CassandraConfig connected and this one refused to start, failing
++    // the cassandraExecutor bean and with it the application.
++    @Value("${cassandra.contact-points:localhost}")
++    private String contactPoints;
++
++    @Value("${cassandra.port:9042}")
++    private int port;
++
++    @Value("${cassandra.local-datacenter:datacenter1}")
++    private String localDatacenter;
++
++    @Value("${cassandra.keyspace:cassandra_sql}")
++    private String keyspace;
++
+     /**
+      * Get the Cassandra session for schema validation
+      */
+@@ -32,31 +50,32 @@ public class CassandraExecutor {
+     @PostConstruct
+     public void init() {
+         try {
+-            System.out.println("Connecting to Cassandra at localhost:9042...");
+-            
++            System.out.println("Connecting to Cassandra at " + contactPoints + ":" + port + "...");
++
+             // Connect to Cassandra
+             session = CqlSession.builder()
+-                .addContactPoint(new InetSocketAddress("localhost", 9042))
+-                .withLocalDatacenter("datacenter1")
++                .addContactPoint(new InetSocketAddress(contactPoints, port))
++                .withLocalDatacenter(localDatacenter)
+                 .build();
+ 
+             System.out.println("Connected to Cassandra successfully!");
+ 
+             // Create keyspace if not exists
+-            System.out.println("Creating keyspace: " + KEYSPACE);
++            System.out.println("Creating keyspace: " + keyspace);
+             session.execute(
+-                "CREATE KEYSPACE IF NOT EXISTS " + KEYSPACE + 
++                "CREATE KEYSPACE IF NOT EXISTS " + keyspace +
+                 " WITH replication = {'class': 'SimpleStrategy', 'replication_factor': 1}"
+             );
+ 
+             // Use keyspace
+-            session.execute("USE " + KEYSPACE);
+-            System.out.println("Using keyspace: " + KEYSPACE);
+-            
++            session.execute("USE " + keyspace);
++            System.out.println("Using keyspace: " + keyspace);
++
+         } catch (Exception e) {
+             System.err.println("Failed to connect to Cassandra: " + e.getMessage());
+             e.printStackTrace();
+-            throw new RuntimeException("Cannot connect to Cassandra. Make sure it's running on localhost:9042", e);
++            throw new RuntimeException(
++                "Cannot connect to Cassandra. Make sure it's running on " + contactPoints + ":" + port, e);
+         }
+     }
+ 

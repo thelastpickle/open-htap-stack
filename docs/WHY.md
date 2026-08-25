@@ -86,11 +86,11 @@ SQL, particularly the Postgres dialect, is the lingua franca of developers and d
 
 SQL, however, is an **interface layer**. &emsp;It does not dictate storage. &emsp;SQL can be implemented on top of many storage engines given transactions and a key-value store, and the same mechanism extends to document, graph, and other modalities. &emsp;The design puts application SQL on the transaction layer as a Postgres wire-protocol and dialect adapter, using Apache Calcite, beside the analytical SQL that Spark and Presto give.
 
-This stack runs two of those three SQL interfaces against one data store, and the third is designed but not built:
+This stack runs all three of those SQL interfaces against one data store:
 
 - **Partition-based analytical SQL** (Spark / Presto via Cassandra connector): for targeted analytical queries on known partitions
 - **File-direct analytical SQL** (Spark Bulk Reader, and cqlite over the live files): for wide scans and bulk analytics
-- **Application SQL** (Accord SQL, the Postgres adapter): deferred. &emsp;It needs Accord, and Accord is here: the stack runs Cassandra 6.0-alpha2, which ships it and refuses a transaction only because no table declares `transactional_mode`.&emsp;The adapter itself is what remains
+- **Application SQL** (GEICO's cassandra-sql, the Postgres adapter): joins, subqueries and `BEGIN`/`COMMIT` over Accord, on keyspaces of its own. &emsp;A proof of concept by its own account, at "~40% (core features only)" compliance, and the README reports which of its declared constraints it holds
 
 Different SQL interfaces for different access patterns. &emsp;Federation with existing data sources becomes an integration problem rather than an architectural one.
 

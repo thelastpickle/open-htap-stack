@@ -16,7 +16,10 @@ const NAV_ITEMS = [
   { path: '/alerts', label: 'Alerts', icon: 'warning' },
   { path: '/explore', label: 'Explore', icon: 'search' },
   // Beside Explore, because the two are a pair: Explore reads the same rows five
-  // ways, and this one writes them the ways none of those five can.
+  // ways, and this one writes them the ways none of those five can.  One entry for
+  // three subtabs — Accord, SQL and Schema — because a SQL console over
+  // cassandra-sql's own keyspaces is an interface that writes, like Accord, and not
+  // a sixth path on Explore.
   { path: '/transactions', label: 'Transactions', icon: 'account_tree' },
   { path: '/health', label: 'Health', icon: 'monitor_heart' },
   { path: '/settings', label: 'Settings', icon: 'settings' },

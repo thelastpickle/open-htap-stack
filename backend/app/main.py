@@ -20,7 +20,7 @@ from app.db.accord_sql_client import accord_sql_client
 from app.db.presto_client import presto_client
 from app.db.spark_client import spark_bulk_client, spark_client
 from app.routes import alerts, demo, health, map, overview, query, settings as settings_routes
-from app.routes import sql_console, transactions, vector, zones
+from app.routes import schema_explorer, sql_console, transactions, vector, zones
 
 ROUTERS = (
     overview.router,
@@ -34,6 +34,7 @@ ROUTERS = (
     demo.router,
     transactions.router,
     sql_console.router,
+    schema_explorer.router,
 )
 
 

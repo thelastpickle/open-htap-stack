@@ -1539,6 +1539,96 @@ jobs:
           echo "✓ Four join defects reproduced, each beside a single-table control that is exact"
         timeout-minutes: 10
 
+      - name: Test the schema explorer
+        run: |
+          TMP_DIR="${TMP_DIR:-.ci-tmp}"
+          mkdir -p "$TMP_DIR"
+
+          echo -e "\n=== The schema explorer reads both data models from the engines that own them ==="
+          # This step must stay after "Test cassandra-sql", and the reason is not tidiness.
+          # cassandra-sql creates pg_attribute on first use, so a service that has only
+          # started refuses every read of it while pg_class still answers; the /reset in
+          # that step is the CREATE TABLE that registers the view.  Run this step against a
+          # freshly restarted accord-sql and all five tables report no columns.
+          #
+          # Two routes rather than one, because the two engines fail apart, so both are
+          # asserted here rather than one standing in for the other.
+          #
+          # Named tables rather than a count, so adding a table to the demo keyspace
+          # does not fail this step.  What is asserted is the distinction the page
+          # exists to show: which tables Accord fronts and which it does not.  events
+          # is the important half of that: opting it in would put consensus in front of
+          # 2,000 writes a second and refuse every dashboard read of it at LOCAL_ONE.
+          curl -s http://localhost:8000/api/schema/cql > "$TMP_DIR/schema-cql.json"
+          curl -s http://localhost:8000/api/schema/sql > "$TMP_DIR/schema-sql.json"
+          python3 - "$TMP_DIR" << 'PY'
+          import json, sys
+          from pathlib import Path
+
+          tmp = Path(sys.argv[1])
+          problems = []
+
+          ACCORD = (
+              "sessions_open", "session_seq_applied", "session_timeline",
+              "zone_occupancy", "zone_clearance", "drone_clearance",
+          )
+          PLAIN = ("events", "drone_latest_status", "session_timeline_plain")
+          SQL_TABLES = ("operators", "drones", "zones", "flights", "flight_legs")
+
+          cql = json.loads((tmp / "schema-cql.json").read_text())
+          if cql.get("error"):
+              problems.append(f"the CQL schema could not be read: {cql['error']}")
+          modes = {table["name"]: table["transactional_mode"] for table in cql.get("tables") or []}
+          keys = {
+              table["name"]: [c["name"] for c in table["columns"] if c["kind"] == "partition_key"]
+              for table in cql.get("tables") or []
+          }
+          print(f"  {cql.get('keyspace')}: {len(modes)} tables")
+          for name in ACCORD:
+              print(f"    {name}: accord {modes.get(name)}, partition {keys.get(name)}")
+              if modes.get(name) != "full":
+                  problems.append(f"{name} reports transactional_mode {modes.get(name)!r}, expected 'full'")
+          for name in PLAIN:
+              print(f"    {name}: accord {modes.get(name)}, partition {keys.get(name)}")
+              if modes.get(name) != "off":
+                  problems.append(f"{name} reports transactional_mode {modes.get(name)!r}, expected 'off'")
+          # Every table must report a partition key, since a table that reported none
+          # would mean system_schema.columns was read but its kind column was not.
+          for name, partition in keys.items():
+              if not partition:
+                  problems.append(f"{name} reports no partition key")
+          # The one index, and it is the storage-attached one over the vector column.
+          indexes = {index["name"]: index for index in cql.get("indexes") or []}
+          print(f"    indexes: {sorted(indexes)}")
+          if "payload_vector_idx" not in indexes:
+              problems.append(f"payload_vector_idx is absent; the indexes are {sorted(indexes)}")
+
+          sql = json.loads((tmp / "schema-sql.json").read_text())
+          if sql.get("error"):
+              problems.append(f"the SQL schema could not be read: {sql['error']}")
+          named = {table["name"]: table for table in sql.get("tables") or []}
+          print(f"  cassandra-sql: {sorted(named)} in {sql.get('storage_keyspaces')}")
+          for name in SQL_TABLES:
+              table = named.get(name)
+              if table is None:
+                  problems.append(f"the SQL schema does not name {name}")
+                  continue
+              print(f"    {name}: {len(table['columns'])} columns, {table['row_count']} rows")
+              if not table["columns"]:
+                  problems.append(f"{name} reports no columns, so pg_attribute answered nothing")
+          # The three keyspaces the rows are encoded into, which is what shows this is
+          # SQL over Cassandra rather than a second database.
+          for keyspace in ("cassandra_sql", "cassandra_sql_internal", "pg_catalog"):
+              if keyspace not in (sql.get("storage_keyspaces") or []):
+                  problems.append(f"{keyspace} is not named as a storage keyspace")
+
+          for problem in problems:
+              print(f"::error::{problem}")
+          sys.exit(1 if problems else 0)
+          PY
+          echo "✓ Both schemas were read from their own engines, and six of the demo's tables report Accord"
+        timeout-minutes: 10
+
       - name: Test the cqlite token split
         run: |
           echo -e "\n=== A split scan reads each partition once ==="

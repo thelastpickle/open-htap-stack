@@ -357,6 +357,16 @@ Three notes for anyone reproducing this.&emsp;The Postgres port is `private stat
 
 **The partitioner needed no patch**, which is the one thing about the requirement worth stating.&emsp;The project's prerequisites demand `ByteOrderedPartitioner` and this stack runs Murmur3: no code under `src/main/` reads the partitioner, the one range scan is legal under Murmur3, and row order is discarded anyway.&emsp;`CassandraConfigTest` does assert that `system_views.settings` reports the byte-ordered partitioner, and that test therefore fails here, which is why the build runs `-x test`.&emsp;Byte-ordered partitioning was measured here and rejected for the rest of the stack: it costs the `spark` and `spark_bulk` paths, both of which refuse it in libraries this repository does not own, and the vector search page, because storage-attached indexes refuse it too.
 
+### The schema explorer
+
+The third subtab reads both data models from the engines that own them, at `/api/schema/cql` and `/api/schema/sql`.&emsp;Two routes rather than one, so that a stopped `accord-sql` blanks half the page instead of all of it.
+
+**`DESCRIBE KEYSPACE demo` works through the Python driver, server-side, in one round trip**, which is what makes the CQL side cheap: 16 rows, each with a `create_statement`, covering the keyspace, its 14 tables and its one index.&emsp;`transactional_mode` is in that text although `system_schema.tables` has no such column, so the route reads the mode from the statement and the key structure from `system_schema.columns`, whose `kind`, `position` and `clustering_order` are what a `PRIMARY KEY` line needs.&emsp;It currently reports six tables as `full` and eight as `off`, with `payload_vector_idx` a `StorageAttachedIndex` on `drone_text_embeddings.payload_vector`.&emsp;A previous edition of this repository's notes said a script must parse `DESCRIBE` output or ask behaviourally without establishing that the first works; it does.
+
+**On the cassandra-sql side the catalog is partly stale, and the route says which parts.**&emsp;It reads `pg_class WHERE relkind = 'r'` and one `pg_attribute` per `oid`, which are accurate: exactly the five live tables and their 40 columns, in `attnum` order.&emsp;It does not read `pg_tables`, which still lists `customers`, `orders`, `order_items` and `products` long after they were dropped, and it reports that staleness as a warning rather than hiding it.&emsp;Three more gaps come back the same way: there is no `information_schema`, `pg_constraint` is empty, so `UNIQUE` is the one constraint this engine enforces and the one its catalog does not report, and `pg_enum` and `pg_sequence` do not exist although the schema declares two ENUMs and a sequence.&emsp;The route also names the three keyspaces those rows encode into, so a reader can see this is SQL over Cassandra rather than a second database.&emsp;**`pg_attribute` is created on first use**, so a service that has restarted refuses every read of it while `pg_class` still answers, and the route then reports five tables with no columns and a note each; pressing Reset is the `CREATE TABLE` that registers it.
+
+**The route joins in Python**, and the reason is the section above: this engine's joins are four of the defects the page reproduces.
+
 ---
 
 ## Architecture at a glance

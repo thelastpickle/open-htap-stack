@@ -85,7 +85,7 @@ The option is written only when `CASSANDRA_ACCORD_ENABLED` is true, and both the
 
 **`transactional_mode` cannot be read back from `system_schema.tables`.** &emsp;None of that table's 27 columns carries it, and `flags`, `extensions` and `fast_path` are identical between `session_timeline` and its plain twin.
 
-**It can be read from `DESCRIBE`, and that works through the driver.** &emsp;`DESCRIBE KEYSPACE demo` is served node-side in one round trip and returns 16 rows — the keyspace, its 14 tables and its one index — each with a `create_statement` whose text carries the option; six tables read `full` and eight read `off`. &emsp;An earlier edition of this file implied a script had no structural source at all, which was too strong.
+**It can be read from `DESCRIBE`, and that works through the driver.** &emsp;`DESCRIBE KEYSPACE demo` is served node-side in one round trip and returns 16 rows — the keyspace, its 14 tables and its one index — each with a `create_statement` whose text carries the option; six tables read `full` and eight read `off`. &emsp;`/api/schema/cql` reads it that way, and takes the key structure from `system_schema.columns` beside it. &emsp;An earlier edition of this file implied a script had no structural source at all, which was too strong.
 
 `/api/transactions/session/schema` still asks behaviourally, and keeps doing so on purpose: it runs a read-only transaction against each table and reports the node's own answer, which for a table that has not opted in is "Accord transactions are disabled on table (See transactional_mode in table options)". &emsp;That answer is the node refusing, where a `create_statement` is the node describing, and for a page about what a transaction will do the refusal is the better evidence.
 

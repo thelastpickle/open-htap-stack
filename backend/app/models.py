@@ -615,3 +615,68 @@ class SqlQuirk(BaseModel):
     expected: str
     probe: SqlStatementResult
     control: SqlStatementResult
+
+
+# ──────────────────────── Schema explorer ────────────────────────
+#
+# Two schemas that share no row: Cassandra's demo keyspace, and the SQL tables
+# cassandra-sql keeps under an encoding of its own.  One model serves both, because
+# what a reader wants of each is the same: what the columns are, what identifies a
+# row, and what the engine will and will not promise about it.
+
+
+class SchemaColumn(BaseModel):
+    """One column, as the engine that owns it describes it."""
+
+    name: str
+    type: str
+    # partition_key / clustering / regular / static on the CQL side.  On the SQL side
+    # only "primary key" and "column" are distinguishable, because pg_attribute reports
+    # attnotnull true for the primary key alone: `zone_code TEXT UNIQUE NOT NULL` reads
+    # false, which agrees with NOT NULL going unenforced.
+    kind: str = "regular"
+    # Position within the partition key or the clustering key, -1 for neither.
+    position: int = -1
+    # asc / desc for a clustering column, none otherwise.
+    clustering_order: str = "none"
+
+
+class SchemaIndex(BaseModel):
+    name: str
+    table: str
+    # The index class on the CQL side; the CREATE statement on the SQL side.
+    detail: str
+    target: str = ""
+
+
+class SchemaTable(BaseModel):
+    name: str
+    columns: List[SchemaColumn] = []
+    # off / mixed_reads / full on the CQL side, parsed out of the DESCRIBE statement
+    # because system_schema.tables carries no such column.  Empty on the SQL side,
+    # where the question does not arise: cassandra-sql's own tables are all Accord
+    # tables and it is the engine, not the table, that decides.
+    transactional_mode: str = ""
+    # Rows, where the engine will answer cheaply.  Absent rather than zero when it
+    # will not: COUNT(*) over an empty table raises on the SQL side.
+    row_count: Optional[int] = None
+    # The whole CREATE statement, for a reader who wants the options as well.
+    create_statement: str = ""
+    note: str = ""
+
+
+class SchemaView(BaseModel):
+    """One engine's whole schema, and what it could not answer."""
+
+    engine: str
+    keyspace: str
+    tables: List[SchemaTable] = []
+    indexes: List[SchemaIndex] = []
+    # Keyspaces the rows are physically encoded into.  On the SQL side these are the
+    # three cassandra-sql owns, which is how the page shows that this is SQL over
+    # Cassandra rather than a second database.
+    storage_keyspaces: List[str] = []
+    # Read fresh on every request and never held, because a catalog here can go stale:
+    # pg_tables still lists tables that were dropped.
+    warnings: List[str] = []
+    error: Optional[str] = None

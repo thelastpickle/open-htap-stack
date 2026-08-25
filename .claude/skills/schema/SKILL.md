@@ -40,7 +40,15 @@ Two further traps around that option:
 - **The node refuses the `CREATE TABLE` when Accord is off**: `Cannot create table demo.x with transactional mode full with accord.enabled set to false`.  That would stop the sink at its schema step and with it the whole demo, which is why `consumer.py` writes the option only when `CASSANDRA_ACCORD_ENABLED` is true, and why the sink and the cassandra service read that same one declaration in `podman-compose.yml`.
 - **`DESCRIBE TABLE` reports `transactional_mode`; `system_schema.tables` does not.**  An earlier version of this note said neither did, and that was wrong: `DESCRIBE TABLE demo.session_timeline` prints `AND transactional_mode = 'full'` beside `AND transactional_migration_from = 'none'`, and `session_timeline_plain` prints `'off'` in the same place.  What is missing is the column: `SELECT transactional_mode FROM system_schema.tables` is refused with "Undefined column name transactional_mode", so a script has to read the `create_statement` or ask behaviourally.
 
+  **Reading it is one statement, and it works through the driver.**  `DESCRIBE KEYSPACE demo` is served node-side and returns 16 rows for the whole keyspace — the keyspace itself, its 14 tables and its one index — each with a `create_statement` carrying the option; **six read `full` and eight read `off`**.  That is one round trip for every table, where `DESCRIBE TABLE` is one per table.  `/api/schema/cql` does exactly this and takes the key structure from `system_schema.columns` beside it.
+
 ```bash
+# every table's mode, from one statement
+curl -s http://localhost:8000/api/schema/cql | python3 -c '
+import json, sys
+for t in json.load(sys.stdin)["tables"]:
+    print("%-24s %s" % (t["name"], t["transactional_mode"]))'
+
 # or behaviourally, which is the node refusing rather than the node describing
 curl -s http://localhost:8000/api/transactions/session/schema     # a read-only transaction per table
 podman exec cassandra cqlsh 172.20.0.10 -e \
@@ -50,6 +58,21 @@ podman exec cassandra cqlsh 172.20.0.10 -e \
 A table that has not opted in answers `Accord transactions are disabled on table (See transactional_mode in table options)`.  Note the address: `cqlsh` with no host reaches `127.0.0.1`, which this node does not listen on.
 
 `full` also routes **ordinary** reads and writes to the table through Accord, so every statement against those six must be at QUORUM; the driver's default profile is LOCAL_ONE and is refused with `ConsistencyLevel LOCAL_ONE is unsupported with Accord`.  That is the reason `events` is not opted in.
+
+## The SQL schema needs a CREATE TABLE before it can be read
+
+`/api/schema/sql` reads `pg_class` for the tables and `pg_attribute` for their columns, and cassandra-sql creates the second **on first use**.  So a restarted `accord-sql` reports all five tables with no columns and a note per table, while `pg_class` answers normally.
+
+```bash
+curl -s http://localhost:8000/api/schema/sql | python3 -c '
+import json, sys
+for t in json.load(sys.stdin)["tables"]:
+    print("%-14s %2d columns  %s" % (t["name"], len(t["columns"]), t.get("note") or ""))'
+
+curl -s -X POST http://localhost:8000/api/sql-console/reset   # the CREATE that registers pg_attribute
+```
+
+Judge that reset by its `CREATE` and `INSERT` statements rather than by `error_count`: two `DROP TYPE` statements report the type missing on a restarted service, which is expected.
 
 ## A keyspace holding an Accord table cannot be dropped
 

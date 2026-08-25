@@ -18,6 +18,53 @@ export async function postJson<T>(path: string, body?: unknown): Promise<T> {
   })
 }
 
+/**
+ * POST a JSON body and read a newline-delimited JSON reply, calling `onLine` for
+ * each object as it arrives.
+ *
+ * Used by the five-path comparison, whose slowest path takes minutes: the whole
+ * body would arrive at the end, where each line arrives as its path answers.  A
+ * failure before the stream opens carries the backend's own message, as a plain
+ * POST does; a failure part-way through cannot, because the status line has
+ * already been sent, so the last line the backend emits is what says whether the
+ * run finished.
+ */
+export async function postNdjson(
+  path: string,
+  body: unknown,
+  onLine: (line: Record<string, unknown>) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  })
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new Error(detailOf(payload) ?? `${response.status} ${response.statusText}`)
+  }
+  if (!response.body) throw new Error('The browser gave no response body to read')
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let held = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    // A chunk can split a line anywhere, so anything after the last newline is
+    // held over rather than parsed.
+    held += decoder.decode(value ?? new Uint8Array(), { stream: !done })
+    const lines = held.split('\n')
+    held = lines.pop() ?? ''
+    for (const line of lines) {
+      if (line.trim()) onLine(JSON.parse(line) as Record<string, unknown>)
+    }
+    if (done) break
+  }
+  if (held.trim()) onLine(JSON.parse(held) as Record<string, unknown>)
+}
+
 async function request<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   const payload = await response.json().catch(() => null)

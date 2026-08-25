@@ -1,13 +1,15 @@
 """Query routes — ad-hoc SQL, the five-path comparison, and NL → SQL."""
 import asyncio
+import json
 import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.config import settings
 from app.db import spark_ui
@@ -314,27 +316,38 @@ def _probe_subject() -> Optional[str]:
     return drones[0]["entity_id"] if drones else None
 
 
-def _requested_engines(names: Optional[List[str]]) -> List[str]:
+def _requested_engines(names: Optional[List[str]], keep_order: bool = False) -> List[str]:
     """The paths to compare, in the dashboard's order, or raise 400.
 
     Ordering comes from ENGINES rather than from the request, so the columns do
-    not move about depending on the order they were named in.
+    not move about depending on the order they were named in.  ``keep_order``
+    takes the caller's order instead, which the streaming route wants: there the
+    order is the order paths answer in, and the dashboard sends its quickest path
+    first so that a viewer has something to read while the slow ones work.
     """
     if names is None:
         return list(ENGINES)
     unknown = [name for name in names if name not in ENGINES]
     if unknown:
         raise HTTPException(status_code=400, detail=f"Unknown engine(s): {', '.join(unknown)}")
-    chosen = [name for name in ENGINES if name in set(names)]
+    if keep_order:
+        # Dropping duplicates, because the same path twice would be timed twice and
+        # reported once.
+        seen: Dict[str, None] = {}
+        for name in names:
+            seen.setdefault(name, None)
+        chosen = list(seen)
+    else:
+        chosen = [name for name in ENGINES if name in set(names)]
     if not chosen:
         raise HTTPException(status_code=400, detail="Choose at least one engine to compare")
     return chosen
 
 
-def _run_sequentially(
+def _run_sequence(
     engines: List[str], statement: str, limit: int, subject: Optional[str],
     results: Dict[str, EngineResult], reuse_snapshot: bool = False,
-) -> None:
+) -> Iterator[Tuple[str, EngineResult]]:
     """One path at a time, each probed on its own, filling ``results`` as it goes.
 
     This is the mode whose timings mean what they look like: nothing else the
@@ -344,16 +357,30 @@ def _run_sequentially(
     Results are filled in rather than returned so that a run in flight can be
     watched: what is in the dict is what has answered.  A cancelled run stops
     before its next path, and the paths it never reached stay absent.
+
+    A generator, so that a caller who can report a path as it answers does not
+    have to wait for the slow ones; ``_run_sequentially`` is the caller that
+    cannot, and drains it.
     """
     for engine in engines:
         if _cancel_requested.is_set():
             return
         if not subject:
             results[engine] = _run(engine, statement, limit, reuse_snapshot)
-            continue
-        with _OltpProbe(subject) as probe:
-            results[engine] = _run(engine, statement, limit, reuse_snapshot)
-        results[engine].oltp = probe.impact()
+        else:
+            with _OltpProbe(subject) as probe:
+                results[engine] = _run(engine, statement, limit, reuse_snapshot)
+            results[engine].oltp = probe.impact()
+        yield engine, results[engine]
+
+
+def _run_sequentially(
+    engines: List[str], statement: str, limit: int, subject: Optional[str],
+    results: Dict[str, EngineResult], reuse_snapshot: bool = False,
+) -> None:
+    """``_run_sequence`` for a caller that answers only when every path has."""
+    for _ in _run_sequence(engines, statement, limit, subject, results, reuse_snapshot):
+        pass
 
 
 def _run_together(
@@ -405,38 +432,9 @@ def run_benchmark(req: BenchmarkRequest) -> BenchmarkResponse:
     comparison still renders when a path cannot answer — which for CQL and an
     aggregate is the point of showing it.
     """
-    global _in_flight
     statement = _validate(req.sql)
     engines = _requested_engines(req.engines)
-
-    if not _comparison_lock.acquire(blocking=False):
-        running = running_comparison()
-        age = int(running.running_for_s) if running else 0
-        raise HTTPException(
-            status_code=409,
-            detail=f"A comparison has been running for {age}s.  They run one at a time, "
-            "because two at once would each be timed while the other ran; a run whose "
-            "browser gave up carries on here until it finishes.  The Health page shows "
-            "it, and can stop it.",
-        )
-
-    results: Dict[str, EngineResult] = {}
-    _cancel_requested.clear()
-    _in_flight = {
-        "started": time.monotonic(),
-        "mode": req.mode,
-        "engines": engines,
-        "sql": statement,
-        "results": results,
-        # What each Spark path will submit, worked out here because a cancel has to
-        # recognise those jobs among everything else the shared Thrift Server may be
-        # running.  The dialects are pure rewrites, so this is what the legs issue.
-        "spark_statements": [
-            ENGINES[name][1](statement, req.limit)
-            for name in engines
-            if name in ("spark", "spark_bulk")
-        ],
-    }
+    results = _begin_run(statement, engines, req.mode, req.limit)
     try:
         subject = _probe_subject()
         baseline = None
@@ -464,9 +462,119 @@ def run_benchmark(req: BenchmarkRequest) -> BenchmarkResponse:
             **results,
         )
     finally:
-        _in_flight = None
-        _cancel_requested.clear()
-        _comparison_lock.release()
+        _end_run()
+
+
+def _begin_run(statement: str, engines: List[str], mode: str, limit: int) -> Dict[str, EngineResult]:
+    """Take the one-at-a-time lock, record what is running, and return its results dict.
+
+    Raises 409 rather than queueing: a caller waiting its turn would be timed
+    while the run ahead of it finished.  Every caller must pair this with
+    ``_end_run`` in a ``finally``.
+    """
+    global _in_flight
+    if not _comparison_lock.acquire(blocking=False):
+        running = running_comparison()
+        age = int(running.running_for_s) if running else 0
+        raise HTTPException(
+            status_code=409,
+            detail=f"A comparison has been running for {age}s.  They run one at a time, "
+            "because two at once would each be timed while the other ran; a run whose "
+            "browser gave up carries on here until it finishes.  The Health page shows "
+            "it, and can stop it.",
+        )
+    results: Dict[str, EngineResult] = {}
+    _cancel_requested.clear()
+    _in_flight = {
+        "started": time.monotonic(),
+        "mode": mode,
+        "engines": engines,
+        "sql": statement,
+        "results": results,
+        # What each Spark path will submit, worked out here because a cancel has to
+        # recognise those jobs among everything else the shared Thrift Server may be
+        # running.  The dialects are pure rewrites, so this is what the legs issue.
+        "spark_statements": [
+            ENGINES[name][1](statement, limit)
+            for name in engines
+            if name in ("spark", "spark_bulk")
+        ],
+    }
+    return results
+
+
+def _end_run() -> None:
+    """Release the lock and forget what was running."""
+    global _in_flight
+    _in_flight = None
+    _cancel_requested.clear()
+    _comparison_lock.release()
+
+
+@router.post("/benchmark/stream")
+def stream_benchmark(req: BenchmarkRequest) -> StreamingResponse:
+    """The same comparison, one path at a time, reported as each path answers.
+
+    The whole-body route above cannot answer until the slowest path has, which on
+    the larger questions is minutes of a blank page.  This one emits newline-
+    delimited JSON: a `start` object, a `baseline` object once the reference read
+    has been sampled, one `engine` object per path as it lands, and a `done`
+    object at the end.  The dashboard renders each path on arrival.
+
+    **The caller's order is the run order here**, where the whole-body route sorts
+    the paths into the display order.  The dashboard sends its quickest path first
+    for the question being asked, so the first answer arrives in milliseconds and
+    the minutes-long ones fill in behind it.
+
+    Sequential only, and the response says so rather than reading `mode`: paths
+    that overlap have no individual timing to report as they finish, which is why
+    the parallel mode reports one probe for the whole window and keeps the
+    whole-body route.
+    """
+    statement = _validate(req.sql)
+    engines = _requested_engines(req.engines, keep_order=True)
+    # Acquired here rather than inside the generator, so that a second run is
+    # refused with a 409 status.  Once the generator has started, the status line
+    # has already gone out and a failure could only be reported in the body.
+    results = _begin_run(statement, engines, "sequential", req.limit)
+
+    def lines() -> Iterator[bytes]:
+        try:
+            yield _ndjson({"event": "start", "engines": engines, "sql": statement})
+            subject = _probe_subject()
+            baseline = None
+            if subject:
+                with _OltpProbe(subject) as probe:
+                    time.sleep(BASELINE_WINDOW_S)
+                baseline = probe.impact()
+            yield _ndjson({
+                "event": "baseline",
+                "oltp_baseline": baseline.model_dump() if baseline else None,
+            })
+            for engine, result in _run_sequence(
+                engines, statement, req.limit, subject, results, req.reuse_snapshot
+            ):
+                yield _ndjson({"event": "engine", "engine": engine, "result": result.model_dump()})
+            yield _ndjson({"event": "done", "cancelled": _cancel_requested.is_set()})
+        finally:
+            # Reached on a client that has gone away too: closing a generator
+            # raises GeneratorExit inside it, so the lock is released rather than
+            # held until the process restarts.
+            _end_run()
+
+    return StreamingResponse(
+        lines(),
+        media_type="application/x-ndjson",
+        # nginx buffers a proxied response by default, which would hold every line
+        # until the run finished and defeat the point of streaming.  This header is
+        # what turns that off for one response, so the dashboard's own nginx needs
+        # no rule of its own.
+        headers={"X-Accel-Buffering": "no", "Cache-Control": "no-store"},
+    )
+
+
+def _ndjson(payload: Dict[str, Any]) -> bytes:
+    return (json.dumps(payload, default=str) + "\n").encode()
 
 
 def running_comparison() -> Optional[ComparisonRun]:

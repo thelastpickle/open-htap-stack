@@ -842,6 +842,179 @@ jobs:
             < "$TMP_DIR/concurrent-$WINNER.json"
           echo "✓ The overlapping comparison was refused, and the other still completed"
 
+          echo -e "\n=== Each path is reported as it answers ==="
+          # The comparison view renders a path as soon as that path answers, so this
+          # route emits newline-delimited JSON instead of one document at the end.
+          # Two claims are worth a test.  The lines must arrive as the run proceeds
+          # rather than together at the end, which is what nginx's default proxy
+          # buffering would give.  And the run order must be the caller's, where the
+          # whole-body route sorts the paths into display order: the view sends its
+          # quickest path first so that the first box fills in milliseconds.
+          #
+          # The order asked for here is deliberately not one a sort could produce.
+          # cqlite is first and cassandra second, where the display order has
+          # cassandra first and cqlite last.  `mode` is not sent: this route is
+          # sequential only, because paths that overlap have no individual timing to
+          # report as they finish.
+          cat > "$TMP_DIR/read-stream.py" << 'PY'
+          # read-stream.py <request body> <output prefix>
+          #
+          # POST the streaming comparison and record when each line arrived, then
+          # write out the arrival log beside a document in the shape the whole-body
+          # route returns, so check-benchmark.py can hold a streamed run to the same
+          # standard as a buffered one.
+          import json, sys, time, urllib.error, urllib.request
+          body, prefix = json.load(open(sys.argv[1])), sys.argv[2]
+          request = urllib.request.Request(
+              "http://localhost:8000/api/query/benchmark/stream",
+              data=json.dumps(body).encode(),
+              headers={"Content-Type": "application/json"},
+          )
+          started = time.monotonic()
+          try:
+              response = urllib.request.urlopen(request, timeout=900)
+          except urllib.error.HTTPError as refusal:
+              # A failure before the stream opens still carries the backend's own
+              # reason, which is why the lock is taken outside the generator: once a
+              # status line has gone out, a refusal could only be a line in the body.
+              open(f"{prefix}.code", "w").write(str(refusal.code))
+              open(f"{prefix}.detail", "w").write(refusal.read().decode())
+              sys.exit(0)
+          open(f"{prefix}.code", "w").write(str(response.status))
+          open(f"{prefix}.type", "w").write(response.headers.get("content-type", ""))
+          open(f"{prefix}.accel", "w").write(response.headers.get("x-accel-buffering", ""))
+          lines, document = [], {}
+          for raw in response:  # one iteration per line, as the line arrives
+              if not raw.strip():
+                  continue
+              line = json.loads(raw)
+              line["arrived_s"] = round(time.monotonic() - started, 3)
+              lines.append(line)
+              if line["event"] == "baseline":
+                  document["oltp_baseline"] = line["oltp_baseline"]
+              elif line["event"] == "engine":
+                  document[line["engine"]] = line["result"]
+          document["mode"] = "sequential"
+          json.dump(lines, open(f"{prefix}.lines.json", "w"))
+          json.dump(document, open(f"{prefix}.result.json", "w"))
+          PY
+          python3 - "$TMP_DIR/benchmark-fleet-group.json" \
+            > "$TMP_DIR/benchmark-stream.json" << 'PY'
+          import json, sys
+          body = json.load(open(sys.argv[1]))
+          body["engines"] = ["cqlite", "cassandra", "spark_bulk", "presto"]
+          print(json.dumps(body))
+          PY
+          # Two at once, as the section above does, since this route takes the same
+          # lock: which one wins is a race and does not matter, only that the loser is
+          # refused with a status the browser can read rather than an empty stream.
+          for attempt in a b; do
+            python3 "$TMP_DIR/read-stream.py" "$TMP_DIR/benchmark-stream.json" \
+              "$TMP_DIR/stream-$attempt" &
+          done
+          wait
+          CODE_A=$(cat "$TMP_DIR/stream-a.code")
+          CODE_B=$(cat "$TMP_DIR/stream-b.code")
+          echo "the two overlapping streams returned $CODE_A and $CODE_B"
+          STREAM_WINNER=""
+          STREAM_LOSER=""
+          for attempt in a b; do
+            case "$(cat "$TMP_DIR/stream-$attempt.code")" in
+              200) STREAM_WINNER="$attempt" ;;
+              409) STREAM_LOSER="$attempt"; cat "$TMP_DIR/stream-$attempt.detail"; echo ;;
+              *) echo "::error::unexpected status $(cat "$TMP_DIR/stream-$attempt.code")"; exit 1 ;;
+            esac
+          done
+          [ -n "$STREAM_WINNER" ] && [ -n "$STREAM_LOSER" ] \
+            || { echo "::error::expected one 200 and one 409, got $CODE_A and $CODE_B"; exit 1; }
+          python3 "$TMP_DIR/jq-path.py" detail < "$TMP_DIR/stream-$STREAM_LOSER.detail" \
+            | grep -qv '^0$' \
+            || { echo "::error::the refused stream carried no reason for the client to show"; exit 1; }
+          echo "content-type $(cat "$TMP_DIR/stream-$STREAM_WINNER.type"), x-accel-buffering $(cat "$TMP_DIR/stream-$STREAM_WINNER.accel")"
+          grep -q 'application/x-ndjson' "$TMP_DIR/stream-$STREAM_WINNER.type" \
+            || { echo "::error::the stream is not labelled application/x-ndjson"; exit 1; }
+          grep -qx 'no' "$TMP_DIR/stream-$STREAM_WINNER.accel" \
+            || { echo "::error::the response does not turn off nginx proxy buffering"; exit 1; }
+          python3 - "$TMP_DIR/stream-$STREAM_WINNER" << 'PY'
+          import json, sys
+          prefix = sys.argv[1]
+          lines = json.load(open(f"{prefix}.lines.json"))
+          asked = ["cqlite", "cassandra", "spark_bulk", "presto"]
+          problems = []
+          kinds = [line["event"] for line in lines]
+          if kinds[:2] != ["start", "baseline"]:
+              problems.append(f"expected a start then a baseline, got {kinds[:2]}")
+          if kinds[-1:] != ["done"]:
+              problems.append(f"expected the run to end with a done line, got {kinds[-1:]}")
+          if lines and lines[0].get("engines") != asked:
+              problems.append(f"the start line names {lines[0].get('engines')}, not the order asked for")
+          answered = [line["engine"] for line in lines if line["event"] == "engine"]
+          if answered != asked:
+              problems.append(f"the paths answered as {answered}, not in the order asked for")
+          if lines and lines[-1].get("cancelled"):
+              problems.append("the run reported itself cancelled")
+          # Two timing checks, both against figures the run itself reports rather
+          # than against a clock, because whether a body was buffered can only be
+          # read from when its lines arrived.
+          #
+          # The first is fixed work the backend always does: the baseline line cannot
+          # be written until the reference point read has been sampled, and that
+          # window is three seconds.  Buffered, it would arrive with the start line.
+          # One second is the floor, so a loaded runner cannot fail it.
+          if len(lines) > 1:
+              gap = lines[1]["arrived_s"] - lines[0]["arrived_s"]
+              if gap < 1.0:
+                  problems.append(f"start and baseline arrived {gap:.3f}s apart, so the body was buffered")
+          # The second is per path.  A path's line cannot arrive until that path has
+          # run, and the line before it went out before that path started, so the gap
+          # between two lines is at least the later path's own reported work.  Checked
+          # only where that work is over half a second; below that the arrival stamps
+          # are noise, and a stack whose every path answers that fast leaves the check
+          # unexercised rather than failing it.
+          engine_lines = [line for line in lines if line["event"] == "engine"]
+          checked = 0
+          if len(lines) > 1 and engine_lines:
+              for previous, line in zip([lines[1]] + engine_lines, engine_lines):
+                  result = line["result"]
+                  # query_time_ms alone, because it already contains the snapshot: the
+                  # bulk reader prepares one inside the call being timed, and reports
+                  # snapshot_ms as a share of that rather than beside it.  Adding the
+                  # two failed this check on a run whose gap was honest, 2427ms
+                  # against a claimed 2830ms of work.
+                  work = result.get("query_time_ms") or 0
+                  if work < 500:
+                      continue
+                  checked += 1
+                  gap = (line["arrived_s"] - previous["arrived_s"]) * 1000
+                  if gap + 250 < work:
+                      problems.append(
+                          f"{line['engine']} reported {work:.0f}ms of work but its line arrived"
+                          f" {gap:.0f}ms after the one before it"
+                      )
+          if problems:
+              print("::error::streamed comparison: " + "; ".join(problems))
+              sys.exit(1)
+          for line in lines:
+              detail = ""
+              if line["event"] == "engine":
+                  result = line["result"]
+                  detail = (
+                      f" {line['engine']}: {result['row_count']} rows in"
+                      f" {result.get('query_time_ms') or 0:.0f}ms"
+                      + (f" — declined: {result['error'][:60]}" if result["error"] else "")
+                  )
+              print(f"  {line['arrived_s']:8.2f}s {line['event']}{detail}")
+          print(
+              f"  {len(engine_lines)} paths answered in the order asked for,"
+              f" and {checked} of those arrivals were held against the path's own timing"
+          )
+          if not checked:
+              print("note: every path answered inside half a second, so only the baseline gap showed streaming")
+          PY
+          python3 "$TMP_DIR/check-benchmark.py" presto spark_bulk cqlite \
+            < "$TMP_DIR/stream-$STREAM_WINNER.result.json"
+          echo "✓ Each path is streamed as it answers, in the order the caller asked for"
+
           echo -e "\n=== Running work is visible, and can be stopped ==="
           # The Health page's operator half.  Start a comparison over the whole
           # history, which is the longest thing the dashboard does, then watch it

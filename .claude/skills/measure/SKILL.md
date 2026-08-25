@@ -25,7 +25,7 @@ curl -s -m 600 -X POST localhost:8000/api/query/benchmark \
 
 `mode` is `sequential` or `parallel`.  Sequential times each path alone, which is the only way a timing means what it appears to mean.  Parallel shows what contention costs.  They answer different questions; **never quote one beside the other** as though they were the same measurement.
 
-Per engine the response carries `query_time_ms`, `row_count`, `rows`, `available`, `error`, the sampled `oltp`, and for the bulk reader `snapshot_bytes`, `snapshot_ms`, `snapshot_reused`, `snapshot_age_s`.  The cqlite path takes no snapshot and reports four fields of its own instead: `sstable_files` and `sstable_bytes` for the live files it merged, `reader_open_ms` for what listing and opening them cost, and `data_age_s` for how long ago the newest of them was written.  The top level adds `mode`, `oltp_baseline`, `oltp_combined` and `cancelled`.  Read the field names from `backend/app/models.py` rather than guessing them; `duration_ms` and `oltp_impact` are plausible and wrong.
+Per engine the response carries `query_time_ms`, `row_count`, `rows`, `available`, `error`, the sampled `oltp`, and for the bulk reader `snapshot_bytes`, `snapshot_ms`, `snapshot_reused`, `snapshot_age_s`.  **`query_time_ms` already contains `snapshot_ms`**, because `spark_client.execute_query` prepares the snapshot inside the call being timed; adding the two overstates the read, and doing so failed a CI assertion by claiming 2830 ms of work for a path whose 2427 ms was honest.  The cqlite path takes no snapshot and reports four fields of its own instead: `sstable_files` and `sstable_bytes` for the live files it merged, `reader_open_ms` for what listing and opening them cost, and `data_age_s` for how long ago the newest of them was written.  The top level adds `mode`, `oltp_baseline`, `oltp_combined` and `cancelled`.  Read the field names from `backend/app/models.py` rather than guessing them; `duration_ms` and `oltp_impact` are plausible and wrong.
 
 `cassandra` returning an error on an analytical query is a result, not a failure of the run.  The endpoint reports it as a decline.
 
@@ -73,7 +73,9 @@ curl -s "localhost:4040/api/v1/applications/$APP/jobs?status=running" | jq -r '.
 
 **A trend across runs is usually the table growing.**  "It is getting slower" turned out to be 34.5 s over 1.5 GB and then 28.7 s over 3.0 GB, a rate rising from 42 to 107 MB/s.  Repeat a measurement, and record the table size beside it, before believing a direction.
 
-**The first run after a restart is not representative.**  JIT, page cache and the connector's session setup all land on it.
+**The first run after a restart is not representative.**  JIT, page cache and the connector's session setup all land on it.  On the bounded read, a cold Presto took 1050 ms and a cold Thrift Server 2322 ms; warm, the same two answered in 184 to 324 ms and 244 to 480 ms.
+
+**A draining Kafka backlog reorders the JVM paths.**  The sink writing at 3,000 rows a second takes CPU that Spark and the bulk reader want, and cqlite, which is threads in the backend's own process, loses less of it.  While a backlog drained, the bulk reader read one window in 14.7 and 16.0 s against cqlite's 10.9 and 11.6 s; two later pairs over the same question on an idle sink reversed it, 7.9 and 9.7 s against 13.2 and 13.3 s.  Read the lag before ranking two paths — the `stack` skill has the one-line consumer-group check — because "the backlog was still draining" and "the bulk reader is slower here" fit the same timing.
 
 **Snapshot cost is a share, not the bulk of the work.**  Reuse won 2.4× on a small read and 1.34× on a windowed one; the snapshot is roughly a quarter of a bounded read.  Do not describe it as where the time goes.
 

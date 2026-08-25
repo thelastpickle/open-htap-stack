@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import MaterialIcon from '../components/MaterialIcon'
 import Toast, { useToast } from '../components/Toast'
-import { formatBytes, formatMs, getJson, postJson } from '../lib/api'
+import { formatBytes, formatMs, getJson, postJson, postNdjson } from '../lib/api'
 
 interface QueryResult {
   columns: string[]
@@ -172,6 +172,41 @@ function shardList(shards: number): string {
 }
 
 /**
+ * The order the paths are run in when they are run one at a time: quickest first,
+ * so that the first box appears in milliseconds rather than after the slowest path
+ * has finished.  It is fixed per question rather than computed, because the only
+ * way to know a path's time is to have run it, and the point of the ordering is to
+ * decide what to run first.
+ *
+ * Each ranking is a prediction and none of them is a measurement of the run on
+ * screen: the bars underneath are, so a run that contradicts its order shows it.
+ * Each was swept on this stack over repeated sequential runs of its own preset, and
+ * two conditions decide what the figures mean.  A first run after a restart charges
+ * Presto and the Thrift Server a warm-up that no later run pays, so the order
+ * follows the warm run.  And the sink draining a Kafka backlog at 3,000 rows a
+ * second takes the CPU that the JVM paths want, which is enough to reorder the two
+ * slowest on one window; every figure below is from a drained sink.
+ *
+ * Cassandra is first in all four, because it either answers from one partition in
+ * milliseconds or declines the grouping outright, and both take no time at all.
+ * cqlite moves from second to fifth as the question grows, which is the shape of the
+ * whole sweep: on `drone_latest_status` it opens one small file set and answers in
+ * 54 to 153 ms, on one window it seeks 16 named partitions in 13.2 s, and on the
+ * whole history it walks 957 MB of data files in 100.0 s.  The bulk reader moves the
+ * other way, last on the two small questions because a snapshot costs 1.1 to 3.6 s
+ * whatever it holds, and fourth on the history at 23.5 s.  Spark's own overhead puts
+ * it behind Presto in all four; on the bounded read alone the two are close enough to
+ * cross between runs, 184 to 324 ms for Presto against 244 to 480 ms for Spark, and
+ * Presto keeps the earlier slot because it is the one that wins when both are cold.
+ *
+ * The two small questions rank strictly and repeatably.  The window does not: its
+ * last three sit in one band and their order moves with the sink and with the size of
+ * the window, which the preset's own comment records.  So read a contradiction there
+ * as the ordering being wrong and not the run.
+ */
+const DEFAULT_RUN_ORDER: Engine[] = ['cassandra', 'cqlite', 'presto', 'spark', 'spark_bulk']
+
+/**
  * Four queries of deliberately different size, because one query cannot show
  * what five access paths are for, and because the size is most of the answer.
  * The bounded read is where the transactional path wins; grouping the fleet is
@@ -186,6 +221,9 @@ const COMPARE_PRESETS = [
     label: 'Latest state',
     cost: 'milliseconds',
     hint: 'One bounded read of the current fleet — the shape Cassandra is built for',
+    // Warm: cassandra 8.4 ms, cqlite 74.1 ms, presto 184.1 ms, spark 253.4 ms,
+    // the bulk reader 727.3 ms, most of the last being the snapshot.
+    order: ['cassandra', 'cqlite', 'presto', 'spark', 'spark_bulk'],
     sql: 'SELECT entity_id, speed_mps, altitude_m, risk_score\nFROM drone_latest_status\nWHERE is_flying = true\nLIMIT 10',
   },
   {
@@ -193,6 +231,9 @@ const COMPARE_PRESETS = [
     label: 'Group the fleet',
     cost: 'under a second',
     hint: 'The current fleet, grouped — the smallest question CQL cannot express at all',
+    // Warm: cassandra declines in 4.7 ms, cqlite 68.7 ms, presto 264.4 ms,
+    // spark 467.7 ms, the bulk reader 1.86 s.
+    order: ['cassandra', 'cqlite', 'presto', 'spark', 'spark_bulk'],
     sql:
       'SELECT event_type, count(*) AS assets,\n' +
       '       min(temp_internal_c) AS coldest, max(temp_internal_c) AS hottest\n' +
@@ -206,6 +247,22 @@ const COMPARE_PRESETS = [
     label: 'One window',
     cost: 'seconds',
     hint: 'The same grouping, bounded to the partitions holding one window — the question the data model was shaped for',
+    // Two things about this question are settled, and one is not.  Cassandra declines
+    // it in 3.0 to 13.2 ms, and Presto is decisively the quickest that can express it,
+    // 2.20 to 4.06 s against 12 to 25 s for the other three.  cqlite seeks the 16
+    // named partitions rather than walking the table, which is what moves it from
+    // second on the two small questions to last on this one, 13.2 to 24.8 s.
+    //
+    // The order of the last three is *not* settled, and this ordering is the middle of
+    // what was measured rather than a repeatable ranking.  Over four windows of 920 MB
+    // to 1,161 MB: spark 7.23, 15.15, 15.84 and 16.80 s; the bulk reader 7.88, 9.65,
+    // 11.85, 13.95 and 15.80 s plus a 1.1 to 3.6 s snapshot; cqlite 13.24, 13.26 and
+    // 24.80 s.  Two conditions move them.  Draining a Kafka backlog at 3,000 rows a
+    // second takes the CPU the two JVM paths want, and while it drained the bulk
+    // reader read one window in 14.7 and 16.0 s against cqlite's 10.9 and 11.6 s,
+    // which two later pairs on an idle sink reversed.  And the window itself grows,
+    // so no two of these figures are over the same rows.
+    order: ['cassandra', 'presto', 'spark', 'spark_bulk', 'cqlite'],
     // Built rather than fixed: the window has to be a bucket the sink actually
     // wrote, and which one that is changes every quarter of an hour.
     build: (window: EventWindow) =>
@@ -223,6 +280,12 @@ const COMPARE_PRESETS = [
     label: 'Every event ever ingested',
     cost: 'minutes',
     hint: 'The whole history, scanned on one node while it ingests — so it costs more every hour the demo runs',
+    // On a drained sink over 957 MB of data files: cassandra declines in 3.6 ms,
+    // presto 7.38 s, spark 10.38 s, the bulk reader 23.51 s plus a 2.45 s snapshot,
+    // cqlite 100.0 s.  A run while the sink drained a backlog gave the same order at
+    // 6.18, 11.01, 27.53 and 69.26 s over a third of the files, so the ranking is the
+    // measurement here and the figures are not: the table grows under every run of it.
+    order: ['cassandra', 'presto', 'spark', 'spark_bulk', 'cqlite'],
     sql:
       'SELECT event_type, count(*) AS event_count,\n' +
       '       min(temp_internal_c) AS coldest, max(temp_internal_c) AS hottest\n' +
@@ -444,13 +507,20 @@ function EngineCard({
 
   return (
     <div className="glass-panel overflow-hidden rounded-xl">
-      <div className="flex items-start justify-between gap-4 border-b border-white/5 px-6 py-4">
-        <div>
-          <p className="text-[10px] font-black uppercase tracking-wider" style={{ color: colour }}>
-            {label}
-          </p>
-          <p className="text-on-surface-variant mt-0.5 text-[9px] leading-relaxed">{role}</p>
-        </div>
+      <div className="flex items-start justify-between gap-3 border-b border-white/5 px-6 py-4">
+        {/* What the path is and how it reaches the data is a tooltip on the title
+            rather than a paragraph under it.  With five boxes side by side the two
+            things worth reading at a glance are the clock and the statement this
+            path was actually given, and three lines of prose above them left
+            neither any width.  The dotted underline is the cue that there is more
+            to read; the same text is on the path's checkbox above. */}
+        <p
+          className="cursor-help text-[10px] font-black uppercase tracking-wider underline decoration-dotted decoration-1 underline-offset-4"
+          style={{ color: colour }}
+          title={role}
+        >
+          {label}
+        </p>
         {succeeded && (
           <div className="shrink-0 text-right">
             <p className="font-headline text-2xl font-black tabular-nums" style={{ color: colour }}>
@@ -557,6 +627,48 @@ function EngineCard({
   )
 }
 
+/**
+ * A path that has not answered yet, in the slot its result will fill.  It exists so
+ * that a box arriving does not shift the four beside it, and so that a viewer can
+ * see which path is working: on the whole history that is minutes of one path at a
+ * time, and a grid that simply grew a column every few minutes said nothing about
+ * what it was waiting for.
+ */
+function PendingCard({
+  label,
+  role,
+  colour,
+  running,
+}: {
+  label: string
+  role: string
+  colour: string
+  running: boolean
+}) {
+  return (
+    <div className="glass-panel overflow-hidden rounded-xl opacity-50">
+      <div className="flex items-start justify-between gap-3 border-b border-white/5 px-6 py-4">
+        <p
+          className="cursor-help text-[10px] font-black uppercase tracking-wider underline decoration-dotted decoration-1 underline-offset-4"
+          style={{ color: colour }}
+          title={role}
+        >
+          {label}
+        </p>
+        <MaterialIcon
+          name={running ? 'sync' : 'schedule'}
+          className={`shrink-0 text-[16px] ${running ? 'animate-spin' : 'opacity-50'}`}
+        />
+      </div>
+      <p className="text-on-surface-variant p-6 text-[10px] italic leading-relaxed">
+        {running
+          ? 'Running now, with nothing else the dashboard controls running beside it.'
+          : 'Waiting for the paths above to finish, so that its figure is its own.'}
+      </p>
+    </div>
+  )
+}
+
 function ComparePanel() {
   const [preset, setPreset] = useState<string>(COMPARE_PRESETS[0].key)
   const [sql, setSql] = useState<string>(COMPARE_PRESETS[0].sql ?? DEFAULT_SQL)
@@ -575,25 +687,81 @@ function ComparePanel() {
   const [reuseSnapshot, setReuseSnapshot] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<BenchmarkResponse | null>(null)
+  const [pending, setPending] = useState(false)
+  // The paths this run will ask, in the order it will ask them, and the order they
+  // have answered in.  Both are needed: the first decides the slots and which one is
+  // working, the second the order the answers are read in.
+  const [runOrder, setRunOrder] = useState<Engine[]>([])
+  const [answered, setAnswered] = useState<Engine[]>([])
 
-  const run = useMutation({
-    mutationFn: () =>
-      postJson<BenchmarkResponse>('/api/query/benchmark', {
-        sql,
-        limit: 10,
-        engines: chosen,
-        mode,
-        reuse_snapshot: reuseSnapshot,
-      }),
-    onSuccess: (data) => {
-      setResults(data)
-      setError(null)
-    },
-    onError: (e: Error) => {
-      setError(e.message)
-      setResults(null)
-    },
-  })
+  /** The quickest-first order for the question on offer, restricted to the paths chosen. */
+  const orderFor = (presetKey: string, engines: Engine[]): Engine[] => {
+    const option = COMPARE_PRESETS.find((candidate) => candidate.key === presetKey)
+    const order: readonly Engine[] = option?.order ?? DEFAULT_RUN_ORDER
+    // A hand-edited statement keeps whichever preset was last selected, so this is
+    // an estimate for a question nobody has measured; the default covers a key that
+    // carries no order at all.
+    return order.filter((engine) => engines.includes(engine))
+  }
+
+  /**
+   * Run the comparison.  One at a time it reads the streaming route, so each path
+   * appears as it answers; all at once it reads the whole-body route, because paths
+   * that overlap have no individual figure to report as each finishes.
+   */
+  const start = async () => {
+    const order = orderFor(preset, chosen)
+    setError(null)
+    setAnswered([])
+    setRunOrder(order)
+    setPending(true)
+    // Cleared to the mode about to run rather than to null, so the empty slots are
+    // rendered from the first frame instead of after the first path answers.
+    setResults({ mode })
+    try {
+      if (mode === 'parallel') {
+        setResults(
+          await postJson<BenchmarkResponse>('/api/query/benchmark', {
+            sql,
+            limit: 10,
+            engines: chosen,
+            mode,
+            reuse_snapshot: reuseSnapshot,
+          }),
+        )
+        setAnswered(order)
+      } else {
+        await postNdjson(
+          '/api/query/benchmark/stream',
+          { sql, limit: 10, engines: order, mode: 'sequential', reuse_snapshot: reuseSnapshot },
+          (line) => {
+            if (line.event === 'baseline') {
+              setResults((current) => ({
+                ...(current ?? {}),
+                mode: 'sequential',
+                oltp_baseline: line.oltp_baseline as OltpImpact | null,
+              }))
+            } else if (line.event === 'engine') {
+              const engine = line.engine as Engine
+              setResults((current) => ({
+                ...(current ?? {}),
+                mode: 'sequential',
+                [engine]: line.result as EngineResult,
+              }))
+              setAnswered((current) => [...current, engine])
+            }
+          },
+        )
+      }
+    } catch (e) {
+      setError((e as Error).message)
+      // A run that failed part-way keeps the paths that did answer: they were timed
+      // alone and are as true as they were before the next path broke.
+      setRunOrder([])
+    } finally {
+      setPending(false)
+    }
+  }
 
   /** Keep at least one path selected: a comparison of nothing is not a question. */
   const toggle = (engine: Engine) =>
@@ -612,8 +780,25 @@ function ComparePanel() {
   // Render the paths the answer actually covers, not the ones selected now: the
   // selection can be changed after a run, and the results would then be labelled
   // with paths they never included.
-  const shown = ENGINES.filter((engine) => results?.[engine.key])
+  //
+  // In the order they answered, for a run made one at a time: that is the order they
+  // were asked in, which is quickest first, and it is the order they appeared on
+  // screen.  A parallel run keeps the fixed order instead, since nothing
+  // distinguishes one arrival from another when they overlap.
   const ranInParallel = results?.mode === 'parallel'
+  const shown = (
+    ranInParallel
+      ? ENGINES.filter((engine) => results?.[engine.key]).map((engine) => engine.key)
+      : answered
+  )
+    .map((key) => ENGINES.find((engine) => engine.key === key))
+    .filter((engine): engine is (typeof ENGINES)[number] => Boolean(engine && results?.[engine.key]))
+  // The paths this run has still to reach, in the order it will reach them.  The
+  // first of them is the one working now.
+  const waiting = pending ? runOrder.filter((key) => !answered.includes(key)) : []
+  // Slots rather than answers, so a box arriving does not reshuffle the ones beside
+  // it while a run is in flight.
+  const slots = shown.length + waiting.length
   const timings = shown.map((engine) => {
     const result = results?.[engine.key]
     const failed = Boolean(result?.available && result.error)
@@ -698,7 +883,7 @@ function ComparePanel() {
             <span className="text-on-surface-variant/60 text-[10px]">
               {mode === 'parallel'
                 ? 'Contending on purpose: every figure inflates, and none is comparable with a run made one at a time'
-                : 'Each path timed alone, so a figure is that path and nothing else'}
+                : 'Each path timed alone, so a figure is that path and nothing else; quickest first, and each box appears as its path answers'}
             </span>
           </div>
 
@@ -800,20 +985,20 @@ function ComparePanel() {
       </div>
 
       <button
-        onClick={() => run.mutate()}
-        disabled={run.isPending}
+        onClick={() => void start()}
+        disabled={pending}
         className="font-headline flex w-full cursor-pointer items-center justify-center gap-3 rounded border border-white/10 bg-surface-container px-8 py-3 font-bold tracking-wider transition-all hover:bg-surface-container-high active:scale-95 disabled:opacity-60"
       >
         <MaterialIcon
-          name={run.isPending ? 'sync' : 'compare_arrows'}
-          className={run.isPending ? 'animate-spin' : ''}
+          name={pending ? 'sync' : 'compare_arrows'}
+          className={pending ? 'animate-spin' : ''}
         />
-        {run.isPending ? 'Running…' : 'Run'}
+        {pending ? 'Running…' : 'Run'}
         <span className="font-normal opacity-70">
           {chosen.length === ENGINES.length
             ? 'all five paths'
             : `${chosen.length} ${chosen.length === 1 ? 'path' : 'paths'}`}
-          {chosen.length > 1 && (mode === 'parallel' ? ' at once' : ' one at a time')}
+          {chosen.length > 1 && (mode === 'parallel' ? ' at once' : ' one at a time, quickest first')}
         </span>
       </button>
 
@@ -844,11 +1029,11 @@ function ComparePanel() {
         <>
           <div
             className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${
-              shown.length >= 5
+              slots >= 5
                 ? 'xl:grid-cols-5'
-                : shown.length === 4
+                : slots === 4
                   ? 'xl:grid-cols-4'
-                  : shown.length === 3
+                  : slots === 3
                     ? 'xl:grid-cols-3'
                     : ''
             }`}
@@ -863,6 +1048,18 @@ function ComparePanel() {
                 baseline={results.oltp_baseline}
               />
             ))}
+            {waiting.map((key, index) => {
+              const engine = ENGINES.find((candidate) => candidate.key === key)!
+              return (
+                <PendingCard
+                  key={key}
+                  label={engine.label}
+                  role={engine.role}
+                  colour={engine.colour}
+                  running={index === 0}
+                />
+              )
+            })}
           </div>
 
           <div className="glass-panel space-y-4 rounded-xl border border-white/5 p-6">

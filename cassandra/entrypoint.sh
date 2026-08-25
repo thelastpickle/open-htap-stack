@@ -9,15 +9,34 @@ cp "${CASSANDRA_HOME}/conf/cassandra_latest.yaml" "${CASSANDRA_HOME}/conf/cassan
 CONF="${CASSANDRA_HOME}/conf/cassandra.yaml"
 mkdir -p /var/lib/cassandra/{data,commitlog,saved_caches}
 
+PARTITIONER="${CASSANDRA_PARTITIONER:-org.apache.cassandra.dht.Murmur3Partitioner}"
+NUM_TOKENS="${CASSANDRA_NUM_TOKENS:-16}"
+
 sed -i \
   -e "s/^cluster_name:.*/cluster_name: '${CASSANDRA_CLUSTER_NAME:-htap-demo}'/" \
-  -e "s/^num_tokens:.*/num_tokens: ${CASSANDRA_NUM_TOKENS:-16}/" \
+  -e "s|^partitioner:.*|partitioner: ${PARTITIONER}|" \
   -e "s/^seed_provider:/seed_provider:/" \
   -e "s/^listen_address:.*/listen_address: ${CONTAINER_IP}/" \
   -e "s/^rpc_address:.*/rpc_address: ${CONTAINER_IP}/" \
   -e "s/seeds: \"127.0.0.1:7000\"/seeds: \"${CONTAINER_IP}:7000\"/" \
   -e "s/seeds: \"127.0.0.1:7000\"/seeds: \"${CONTAINER_IP}:7000\"/" \
   "${CONF}"
+
+# Only Murmur3Partitioner and RandomPartitioner can use the token allocation algorithm, and
+# cassandra_latest.yaml sets allocate_tokens_for_local_replication_factor: 3, so any other
+# partitioner has to give it up: BootStrapper.getBootstrapTokens() routes to
+# TokenAllocation.allocateTokens() whenever that key is set, and the node then refuses to
+# start.  Without it a node takes random tokens, which every partitioner can supply, and one
+# token is what a single-node cluster wants in any case.
+if [ "${PARTITIONER}" != "org.apache.cassandra.dht.Murmur3Partitioner" ]; then
+  sed -i \
+    -e "s/^allocate_tokens_for_local_replication_factor:/#allocate_tokens_for_local_replication_factor:/" \
+    "${CONF}"
+  NUM_TOKENS=1
+  echo "Partitioner is ${PARTITIONER}: token allocation disabled, num_tokens forced to 1."
+fi
+
+sed -i -e "s/^num_tokens:.*/num_tokens: ${NUM_TOKENS}/" "${CONF}"
 
 # Accord, CEP-15.  cassandra_latest.yaml carries no accord block of its own at 6.0-alpha2, so
 # appending one adds a top-level key rather than shadowing an existing one.  Enabling the

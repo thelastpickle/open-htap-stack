@@ -5,6 +5,20 @@
             <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
+    <!-- KafkaPublisher logs one line per mutation at INFO, and the line carries the whole row:
+         every value column, including drone_latest_status's ~400-character text_payload.  At the
+         demo's write rate that is about 2,000 such lines a second, each roughly a kilobyte, on the
+         same console appender the node itself uses.  WARN keeps the publisher's failures and drops
+         the per-mutation line.  Measured before this: podman's log capture was already dropping
+         about nine in ten of them, so the lines were paid for and not even kept. -->
+    <logger name="org.apache.cassandra.cdc.kafka.KafkaPublisher" level="WARN" />
+
+    <!-- CdcSchemaSupplier stays at INFO although it repeats twice a second, once per segment poll.
+         Its line is the refusal itself: "Registered table demo.ingestion_counts with its counter
+         columns as blob", which is the fork's workaround reporting that it fired.  Silencing the
+         repetition would silence the finding, and two lines a second is not the cost the publisher
+         above was. -->
+
     <root level="INFO">
         <appender-ref ref="STDOUT" />
     </root>

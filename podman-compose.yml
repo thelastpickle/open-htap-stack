@@ -125,6 +125,14 @@ services:
       # segments rather than refusing the write when the bound is reached.
       CASSANDRA_CDC_ENABLED: "${CASSANDRA_CDC_ENABLED:-true}"
       CASSANDRA_CDC_TOTAL_SPACE: "${CASSANDRA_CDC_TOTAL_SPACE:-4096MiB}"
+      # The segment is the unit the Sidecar's CDC reader buffers in heap, so it is also the lever
+      # a heap failure invites; entrypoint.sh records why 8MiB was measured and rejected.  It is
+      # here so the sweep can be repeated without editing the entrypoint, and it is set to the
+      # release's own default so that setting it changes nothing by itself.
+      #
+      # CASSANDRA_CDC_ENABLED=false is also the recovery for a node that will not replay its
+      # commit log; the stack skill has it.
+      CASSANDRA_COMMITLOG_SEGMENT_SIZE: "${CASSANDRA_COMMITLOG_SEGMENT_SIZE:-32MiB}"
       # Where the published mutations go, and where their Avro schemas are registered.  The
       # backend reads the same three values, because a topic or a registry the two disagree on
       # is a Streaming page that shows nothing.

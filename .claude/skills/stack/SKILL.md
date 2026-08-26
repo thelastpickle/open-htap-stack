@@ -83,6 +83,37 @@ podman exec kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server loc
   --describe --group demo-cassandra-sink | awk 'NR>1 && NF>5 {n++; t+=$6} END {print n" partitions, total lag "t}'
 ```
 
+## Drain before you stop Cassandra, or it will not come back
+
+With CDC on, a node that still has commit log segments to replay **exits during startup**:
+
+```
+ERROR [main] DefaultDiskErrorsHandler.java:177 - Exiting due to error while processing commit log during initialization.
+java.io.IOException: Bad file descriptor
+	at org.apache.cassandra.db.commitlog.CommitLogSegment.writeCDCIndexFile(CommitLogSegment.java:388)
+	at org.apache.cassandra.db.commitlog.CommitLogReplayer.handleCDCReplayCompletion(CommitLogReplayer.java:234)
+```
+
+Every table's data is intact.  `handleCDCReplayCompletion` runs once per replayed segment that held a CDC mutation, and the 18-byte index file it writes into `cdc_raw` fails on the flush.  It is not disk space and it is not the bind mount; the same write from a shell into the same directory succeeds.  Measured on darwin/arm64.
+
+So make the drain part of stopping:
+
+```bash
+podman exec cassandra nodetool drain      # leaves one commit log segment, seven files in cdc_raw
+podman stop cassandra
+podman compose -f podman-compose.yml up -d --no-deps cassandra   # CQL back in ~55 s
+```
+
+If the node is already refusing to start, bring it up **with CDC off**, which skips the path because `sawCDCMutation` gates the call, then drain and recreate normally:
+
+```bash
+CASSANDRA_CDC_ENABLED=false podman compose -f podman-compose.yml up -d --no-deps --force-recreate cassandra
+podman exec cassandra nodetool drain
+podman stop cassandra && podman compose -f podman-compose.yml up -d --no-deps cassandra
+```
+
+What a drain gives up is the mutations sitting in `cdc_raw` that the publisher had not yet read.  Restart `data-cassandra-sink` and `backend` afterwards; neither recovers a dead session on its own.
+
 ## Wiping
 
 ```bash
@@ -99,5 +130,7 @@ The first is what you want between measurements.  The second changes the schema 
 - **A Spark query hangs, then times out** — usually the connector's schema refresh.  Restart `spark`, then reconnect.  `podman logs --tail 100 spark` shows the Thrift Server's own complaint.
 - **The sink's progress line** is the quickest sign of life: `podman logs --tail 2 data-cassandra-sink` prints `total_inserted=… (~1990/s)`.
 - **Cassandra is `Up (starting)` and nothing answers on 9042, or `spark` has an empty log** — read "An unclean stop stops Accord" above.  Both are the same cause.
+- **Cassandra exits during startup with `Bad file descriptor` after "Finished reading … CommitLog-9-…"** — read "Drain before you stop Cassandra" above.  This one is CDC, not Accord, and the two look alike from `podman ps`.
+- **The Streaming page shows an age in minutes** — the publisher is behind the writer, which happens whenever the sink is draining a Kafka backlog.  Check the sink's lag first; the 8.0 s figure is a floor and not a promise.
 - **`/api/sql-console/status` reports `connected: false` while `accord-sql` looks fine** — the Spring context died and the JVM did not.  Read the container's log to its end: `Cannot connect to Cassandra`, caused by `DriverTimeoutException: Query timed out after PT2S` at `CassandraExecutor.init:65`, is the cold-start failure.  `podman compose up -d --no-deps accord-sql` answers "Running" and changes nothing; `podman restart accord-sql` is the recovery.  The image's entrypoint now exits the container when nothing opens 5432 within `ACCORD_SQL_STARTUP_TIMEOUT_S`, 300 by default, so `restart: unless-stopped` retries; a container that is genuinely stuck predates that entrypoint, so rebuild it.
 - **`accord-sql` serves but its five SQL tables are missing** (`Table does not exist: OPERATORS`) — Cassandra's data was wiped under it.  `curl -X POST http://localhost:8000/api/sql-console/reset` rebuilds and reseeds; expect 2 errors, both `DROP TYPE`, and judge the `CREATE` and `INSERT` statements instead.

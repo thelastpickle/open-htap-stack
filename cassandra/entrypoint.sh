@@ -100,6 +100,32 @@ fi
 # the Sidecar's cleaner cannot be made to fire first, because the setting that would lower its
 # threshold arrives as zero and empties the directory instead; ../sidecar.yaml records that.
 #
+# commitlog_segment_size is pinned at 32MiB, which is this release's own default, because the
+# segment is what the Sidecar's CDC reader buffers and lowering it was measured and rejected.
+# BufferingCommitLogReader holds a whole segment in heap, the Sidecar starts with no -Xmx and so
+# takes 25% of this container's 8 GB limit, exactly 2147483648 bytes, and max_commit_logs lets
+# several readers open at once.  Four 32MiB segments exhausted that heap:
+# "OutOfMemoryError: Java heap space" at BufferingCommitLogReader.read.  The reader then retried
+# the same segment without advancing its high water mark, so the JVM stayed in
+# garbage-collection thrash and every Sidecar thread stalled with it, JMX included: one segment
+# was streamed 220 times over /api/v1/cdc/segments, a ring request blocked 290 s in
+# RingProvider.queryRack, and the Sidecar answered its own 5m request_timeout with 408, which
+# failed the spark_bulk path in CI.
+#
+# The lever taken is max_commit_logs, in ../cassandra/seed-cdc-configs.sh, and 8MiB segments were
+# the alternative: they quarter the heap a reader holds, and they lower the latency floor, since a
+# mutation waits for its segment to complete.  Measured, they cost more than they buy.  The
+# reader's per-segment cost dominates, so quartering the segment quadruples the queue: it read
+# about 2.7 segments a minute against a node completing about 28, and fell 495 segments behind
+# while the node's oldest-first deletion closed to within 17 segments of the one being read.  A
+# segment deleted before it is read is a mutation that never reaches Kafka.  Read the segment
+# counts as indicative rather than exact: they come from the Sidecar's access log, which requests
+# a newer segment's index while it reads an older one's data.
+#
+# CASSANDRA_COMMITLOG_SEGMENT_SIZE is kept as an override so the sweep can be repeated.  Note
+# that max_mutation_size defaults to half the segment size, so 8MiB caps a mutation at 4 MiB; the
+# widest row here is the 1536-float embedding, near 6 KiB, so that cap binds nothing.
+#
 # patch_yaml, rather than three more lines in the sed above, because a key may be set,
 # commented out or absent in this release's cassandra_latest.yaml and each case needs a
 # different edit.
@@ -115,12 +141,13 @@ patch_yaml() {
 }
 
 if [ "${CASSANDRA_CDC_ENABLED:-true}" = "true" ]; then
-  patch_yaml commitlog_directory   /var/lib/cassandra/commitlog
-  patch_yaml cdc_enabled           true
-  patch_yaml cdc_raw_directory     /var/lib/cassandra/cdc_raw
-  patch_yaml cdc_total_space       "${CASSANDRA_CDC_TOTAL_SPACE:-4096MiB}"
-  patch_yaml cdc_block_writes      false
-  patch_yaml cdc_on_repair_enabled false
+  patch_yaml commitlog_directory     /var/lib/cassandra/commitlog
+  patch_yaml commitlog_segment_size  "${CASSANDRA_COMMITLOG_SEGMENT_SIZE:-32MiB}"
+  patch_yaml cdc_enabled             true
+  patch_yaml cdc_raw_directory       /var/lib/cassandra/cdc_raw
+  patch_yaml cdc_total_space         "${CASSANDRA_CDC_TOTAL_SPACE:-4096MiB}"
+  patch_yaml cdc_block_writes        false
+  patch_yaml cdc_on_repair_enabled   false
 fi
 
 sed -i 's|cassandra_storagedir="$CASSANDRA_HOME/data|cassandra_storagedir="/var/lib/cassandra|' "${CASSANDRA_HOME}/bin/cassandra.in.sh"

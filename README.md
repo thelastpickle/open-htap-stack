@@ -194,11 +194,8 @@ SELECT /*+ COALESCE(1) */ * FROM events_for_bulk_queries;
 
 This writes the entire `demo.events` table to a single Parquet file in the `cassandra-data` directory. The `COALESCE(1)` reduces all partitions to one before writing, producing a single output file.
 
-Measured over 2,038,019,461 bytes of live SSTables in 16 generations: one file of 712,243,493 bytes, in 243.9 s.
-
 ### Move Parquet files quickly into the database
 
-This runs.&emsp;Measured on the 712,243,493 byte export above: the bulk writer shuffled it into 17 token splits and committed every one, in 300 s of write stage.&emsp;`demo.events` grew from 2,038,019,461 bytes over 16 SSTables to 4,336,618,653 bytes over 36.&emsp;An earlier note here recorded `OutOfMemoryError: unable to create native thread`, and that no longer reproduces; what replaces it is below.
 
 ```shell
 podman exec -it spark \
@@ -247,11 +244,11 @@ ALTER TABLE demo.drone_latest_status WITH cdc = true;
 INSERT INTO sidecar_internal.configs (service, config) VALUES ('cdc', {
   'cdc_enabled': 'true', 'topic': 'cdc-mutations', 'topic_format_type': 'STATIC',
   'jobid': 'htap-demo', 'datacenter': 'datacenter1',
-  'watermark_seconds': '1800', 'micro_batch_delay_millis': '500', 'max_commit_logs': '4'
+  'watermark_seconds': '1800', 'micro_batch_delay_millis': '500', 'max_commit_logs': '2'
 }) IF NOT EXISTS;
 ```
 
-**Measured** on a fresh stack: the first mutation reached Kafka 95.7 s after `up -d`, and over the following 1,447 s the topic took **2,718 records/s** with **no decode failure in 5.4 million records** and no growth in consumer lag.&emsp;End-to-end latency is **seconds, and not milliseconds**: p50 had a median of 8.0 s and a range of 2.7 to 21.1 s, because a segment reaches the reader only once it is complete, and at this write rate a 32 MiB segment completed every 9.3 s.&emsp;The publisher's own poll interval is 500 ms, so it is not the floor.
+**Measured** on a fresh stack: the first mutation reached Kafka 95.7 s after `up -d`, and over the following 1,447 s the topic took **2,718 records/s** with **no decode failure in 5.4 million records** and no growth in consumer lag.&emsp;End-to-end latency is **seconds, and not milliseconds**: p50 had a median of 8.0 s and a range of 2.7 to 21.1 s, because a segment reaches the reader only once it is complete, and at this write rate a 32 MiB segment completed every 9.3 s.&emsp;The publisher's own poll interval is 500 ms, so it is not the floor.&emsp;Read 8.0 s as the floor rather than as the demo's latency: the publisher's ceiling is the same order as the node's write rate to the table, so while the sink drains a Kafka backlog the age of the newest published record reaches minutes, measured at 92 to 156 s in one run, 400 to 480 s in a second and 836 to 848 s in a third.&emsp;An age once built stays: in that third run the publisher led the writer by only 7%, 2,882 records/s against 2,703, which needs hours to close a fourteen-minute backlog.
 
 Two limitations are worth stating here.&emsp;`cdc_raw` is bounded, and with `cdc_block_writes: false` the node deletes the oldest segment at the bound rather than refusing the write, so a publisher that falls far enough behind loses changes; measured, the directory held at the bound for thirteen minutes while both publication and the request path continued.&emsp;And the stream carries **mutations, not rows**: `operationType` reads `UPDATE` for a CQL `INSERT`, and `isPartial` is `true`, because a mutation carries the cells it wrote and not the row as it now stands.
 
@@ -332,7 +329,7 @@ Three access paths share the same persisted data:
 
 - **OLTP path** — point reads and bounded partition reads through Cassandra's request path. Latency performance: p99 write < 5ms, p99 read < 50ms.
 - **OLAP path** — wide scans and aggregations via the Spark Bulk Reader, reading SSTable files directly from coordinated snapshots. Does not contend with OLTP. Measured on this one node, counting the whole table with no predicate: 452,446,775 bytes of snapshot in 13.4 s, so 33.9 MB/s, and the snapshot itself cost 323 ms of that. Read it as a floor rather than a throughput figure, because the measurement is a laptop running eight containers on seven cores; the mechanism is what scales per node, and this demo does not measure that. No write rate is quoted, because the bulk writer does not work here yet — see the note above. The dashboard also reads the same files with no snapshot and no JVM, in its own process, through cqlite: the same count took 32.9 s over 450,318,008 bytes of live files, single-threaded against the bulk reader's four cores, and answers as of the last flush.
-- **CDC path** — change streams to Kafka via the Sidecar, read from discarded commit log segments rather than by querying the node. Measured here: 2,718 records/s to the topic, a p50 median of 8.0 s end to end, bounded by the 32 MiB commit log segment rather than by the publisher. The replication-factor-aware deduplication is configured, `watermark_seconds: 1800`, and this one node at RF=1 does not exercise it.
+- **CDC path** — change streams to Kafka via the Sidecar, read from discarded commit log segments rather than by querying the node. Measured here: 2,718 records/s to the topic, and a p50 median of 8.0 s end to end when the publisher is ahead of the writer, bounded then by the 32 MiB commit log segment rather than by the publisher. Under a sink backlog the publisher is the bound instead and the age reaches minutes. The replication-factor-aware deduplication is configured, `watermark_seconds: 1800`, and this one node at RF=1 does not exercise it.
 
 The architectural property that makes this work, that analytical scans do not touch the OLTP hot path — holds **by construction**, not by tuning. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full technical treatment.
 

@@ -194,16 +194,20 @@ SELECT /*+ COALESCE(1) */ * FROM events_for_bulk_queries;
 
 This writes the entire `demo.events` table to a single Parquet file in the `cassandra-data` directory. The `COALESCE(1)` reduces all partitions to one before writing, producing a single output file.
 
+Measured over 2,038,019,461 bytes of live SSTables in 16 generations: one file of 712,243,493 bytes, in 243.9 s.
+
 ### Move Parquet files quickly into the database
 
-> FIXME: still broken, and no longer with the error recorded here before. &emsp;`DecoratedKey … not serializable result: java.nio.HeapByteBuffer` does not reproduce; two other obstacles were measured, in this order. &emsp;First, every task failed startup validation with "Sidecar is unreachable", because the shaded Vert.x client resolves `cassandra` through its own Netty resolver rather than the JDK's, and in this container that resolver queries the host's nameserver instead of podman's. &emsp;`-Dvertx.disableDnsResolver=true`, in the command below, gets past it: `SidecarValidation` and `CassandraValidation` then both pass. &emsp;Second, the write reaches its shuffle and the executor dies with `OutOfMemoryError: unable to create native thread`, exit code 52, and retries until it is stopped. &emsp;That is container sizing rather than a version problem, and the bulk **reader** is unaffected throughout: it reaches the same Sidecar from the same container.
+This runs.&emsp;Measured on the 712,243,493 byte export above: the bulk writer shuffled it into 17 token splits and committed every one, in 300 s of write stage.&emsp;`demo.events` grew from 2,038,019,461 bytes over 16 SSTables to 4,336,618,653 bytes over 36.&emsp;An earlier note here recorded `OutOfMemoryError: unable to create native thread`, and that no longer reproduces; what replaces it is below.
 
 ```shell
 podman exec -it spark \
   spark-shell \
     --packages org.apache.cassandra:cassandra-analytics-core_spark3_2.12:0.5-mck0,org.apache.cassandra:analytics-sidecar-vertx-client-all:0.5-mck0,org.apache.cassandra:cassandra-bridge_spark3_2.12:0.5-mck0 \
-    --conf spark.executor.extraJavaOptions=-Dvertx.disableDnsResolver=true
+    --conf "spark.executor.extraJavaOptions=-Dcassandra.releaseVersion=6.0-alpha2 -Dcassandra.analytics.bridges.sstable_format=bti -Dvertx.disableDnsResolver=true"
 ```
+
+That `--conf` names three properties, and how it names them matters.&emsp;`-Dvertx.disableDnsResolver=true` is here because every task once failed startup validation with "Sidecar is unreachable": the shaded Vert.x client resolves `cassandra` through its own Netty resolver rather than the JDK's, and that resolver queried the host's nameserver instead of podman's.&emsp;The other two repeat what `spark/conf/spark-defaults.conf` already sets, because `--conf spark.executor.extraJavaOptions` **replaces** that value rather than adding to it, and a bare `-Dvertx.disableDnsResolver=true` therefore takes the release version and the SSTable format off the executor.&emsp;The write succeeded without those two, so neither is required here; naming them keeps the flag from being a silent subtraction.
 
 ```scala
 val df = spark.read.parquet("/var/lib/cassandra/parquet-exports/demo_events")

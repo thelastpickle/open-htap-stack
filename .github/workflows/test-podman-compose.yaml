@@ -96,13 +96,24 @@ jobs:
           podman ps -a
         timeout-minutes: 10
 
-      - name: Start Kafka and Cassandra
+      - name: Start Kafka, Apicurio and Cassandra
         run: |
-          podman start kafka cassandra
+          # apicurio goes up here, before Cassandra, and the reason is CDC.  The
+          # Sidecar starts inside the cassandra container and registers its Avro
+          # schema with the registry on its first published batch; a registry that is
+          # not answering then makes KafkaAvroSerializer fail and the batch is retried
+          # rather than lost, but the topic does not appear and every CDC assertion
+          # below reads an absent topic.  It depends on nothing else, so starting it
+          # first costs nothing.
+          podman start kafka apicurio cassandra
 
           echo -e "\n=== Waiting for Kafka to be healthy ==="
           timeout 720 bash -c 'until podman exec kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:19092 --list >/dev/null 2>&1; do echo "Waiting for Kafka..."; sleep 5; done'
           echo "✓ Kafka is healthy"
+
+          echo -e "\n=== Waiting for Apicurio to be ready ==="
+          timeout 180 bash -c 'until curl -sf http://localhost:8085/health/ready >/dev/null 2>&1; do echo "Waiting for Apicurio..."; sleep 5; done'
+          echo "✓ Apicurio is ready"
 
           echo -e "\n=== Waiting for Cassandra to be healthy ==="
           timeout 300 bash -c 'until podman exec cassandra cqlsh -e "DESCRIBE KEYSPACES" cassandra 9042 >/dev/null 2>&1; do echo "Waiting for Cassandra..."; sleep 10; done'
@@ -1801,6 +1812,193 @@ jobs:
           PY
           echo "✓ Both schemas were read from their own engines, and six of the demo's tables report Accord"
         timeout-minutes: 10
+
+      - name: Test CDC to Kafka
+        run: |
+          TMP_DIR="${TMP_DIR:-.ci-tmp}"
+          mkdir -p "$TMP_DIR"
+
+          echo -e "\n=== One table opts into CDC, and events deliberately does not ==="
+          # cdc is a per-table option, and which tables carry it is the decision worth
+          # protecting.  drone_latest_status is the table a downstream consumer would
+          # follow; events would fill cdc_raw far faster than the publisher drains it,
+          # at 2,000 writes a second, so it stays out.  Asserted both ways, because a
+          # blanket "cdc on everything" change would pass a one-sided check.
+          CDC_FLAGS=$(podman exec cassandra cqlsh cassandra -e \
+            "SELECT table_name, cdc FROM system_schema.tables WHERE keyspace_name = 'demo';" 2>&1)
+          echo "$CDC_FLAGS" | grep -qE 'drone_latest_status *\| *True' \
+            || { echo "::error::demo.drone_latest_status does not report cdc = true"; echo "$CDC_FLAGS"; exit 1; }
+          echo "$CDC_FLAGS" | grep -qE '^ *events *\| *False' \
+            || { echo "::error::demo.events reports cdc = true; consensus-free ingest is what that costs"; echo "$CDC_FLAGS"; exit 1; }
+          echo "✓ drone_latest_status opts in; events does not"
+
+          echo -e "\n=== The Sidecar publishes to Kafka, and registers its schema ==="
+          # The topic does not exist until the first batch is published, and on a fresh
+          # stack that was measured at 95.7s after `up -d`.  This step runs long after
+          # that, so the wait is a guard rather than the normal path.
+          OFFSETS=""
+          for attempt in $(seq 1 60); do
+            OFFSETS=$(podman exec kafka /opt/kafka/bin/kafka-get-offsets.sh \
+              --bootstrap-server kafka:19092 --topic cdc-mutations 2>/dev/null || true)
+            END=$(echo "$OFFSETS" | awk -F: '{s+=$3} END {print s+0}')
+            if [ "${END:-0}" -gt 0 ]; then break; fi
+            echo "Waiting for the first published mutation..."
+            sleep 5
+          done
+          [ "${END:-0}" -gt 0 ] \
+            || { echo "::error::cdc-mutations has no records; the Sidecar published nothing"; exit 1; }
+          echo "  cdc-mutations end offset $END over $(echo "$OFFSETS" | wc -l | tr -d ' ') partitions"
+
+          # Read the contract from the registry rather than from a record, because that
+          # is where a downstream consumer would read it.  {topic}-value is the subject
+          # name Confluent's serializer writes, and Apicurio serves it under its
+          # compatibility endpoint.
+          curl -s http://localhost:8000/api/streaming/cdc/schema > "$TMP_DIR/cdc-schema.json"
+          curl -s http://localhost:8000/api/streaming/cdc?limit=50 > "$TMP_DIR/cdc-stream.json"
+          python3 - "$TMP_DIR" << 'PY'
+          import json, sys
+          from pathlib import Path
+
+          tmp = Path(sys.argv[1])
+          problems = []
+
+          schema = json.loads((tmp / "cdc-schema.json").read_text())
+          if schema.get("error"):
+              problems.append(f"the registry could not be read: {schema['error']}")
+          avro = schema.get("avro_schema") or {}
+          columns = {c["name"]: c for c in schema.get("payload_fields") or []}
+          print(f"  subject {schema.get('subject')}, schema id {schema.get('schema_id')}, "
+                f"version {schema.get('version')}, record {avro.get('name')}")
+          print(f"  payload columns: {len(columns)}")
+          if avro.get("name") != "CassandraCDC":
+              problems.append(f"the registered record is named {avro.get('name')!r}, not 'CassandraCDC'")
+          # The row is a nested `payload` record whose fields are the table's columns.
+          # entity_id is the partition key, so a schema without it is not this table.
+          if "entity_id" not in columns:
+              problems.append(f"the payload record has no entity_id; its columns are {sorted(columns)}")
+          # Each column carries the CQL type it was converted from, which is what lets
+          # the page say `timestamp` where Avro says `long`.  Asserted on one column
+          # rather than all, so adding a column does not fail this step.
+          if columns.get("updated_at", {}).get("cql_type") != "timestamp":
+              problems.append(f"updated_at reports cqlType {columns.get('updated_at', {}).get('cql_type')!r}")
+
+          stream = json.loads((tmp / "cdc-stream.json").read_text())
+          status = stream.get("status") or {}
+          print(f"  tail: state {status.get('state')}, consumed {status.get('consumed')}, "
+                f"p50 {status.get('latency_p50_ms')} ms, max {status.get('latency_max_ms')} ms, "
+                f"failures {status.get('decode_failures')}")
+          if status.get("state") != "tailing":
+              problems.append(f"the tail reports state {status.get('state')!r}: {status.get('error')}")
+          # A decode failure means the record on the topic does not match the schema the
+          # registry serves, which is the one thing a downstream consumer cannot work
+          # around.  Zero, not a ratio.
+          if status.get("decode_failures"):
+              problems.append(f"{status['decode_failures']} records could not be decoded")
+          if not status.get("consumed"):
+              problems.append("the tail consumed no records")
+
+          records = [r for r in (stream.get("records") or []) if not r.get("decode_error")]
+          if not records:
+              problems.append("no record decoded, so nothing below could be checked")
+          for record in records:
+              if (record.get("keyspace"), record.get("table")) != ("demo", "drone_latest_status"):
+                  problems.append(f"a record names {record.get('keyspace')}.{record.get('table')}, "
+                                  "so a second table is publishing")
+                  break
+          # The stream carries mutations, not rows: operationType reads UPDATE although
+          # the sink issued a CQL INSERT, because Cassandra draws no distinction below
+          # the query layer.  isPartial is printed rather than asserted, since it
+          # depends on what the mutation touched.
+          operations = sorted({r.get("operation") for r in records})
+          partial = sum(1 for r in records if r.get("partial"))
+          print(f"  {len(records)} records decoded: operations {operations}, {partial} partial")
+          if "UPDATE" not in operations:
+              problems.append(f"no record reports operation UPDATE; the operations are {operations}")
+          sample = next((r for r in records if r.get("columns")), None)
+          if sample is None:
+              problems.append("no record carried columns, so payload was not flattened")
+          else:
+              print(f"  sample key {sample.get('key')}, {len(sample['columns'])} columns, "
+                    f"age {sample.get('age_ms')} ms")
+
+          for problem in problems:
+              print(f"::error::{problem}")
+          sys.exit(1 if problems else 0)
+          PY
+          echo "✓ The topic carries this table's mutations against a registered schema"
+
+          echo -e "\n=== A table the CDC reader cannot deserialize must not stop the stream ==="
+          # One commit log serves every table, so the reader's schema has to know every
+          # table in order to deserialize any segment.  demo.drone_text_embeddings
+          # declares vector<float, 1536>, which the Sidecar's driver 3.x cannot parse,
+          # so the table never reaches the schema builder and its mutations have to be
+          # skipped.  On Cassandra 6.0 the reader's skip did not fire: the unknown-table
+          # exception arrives wrapped in CoordinatorBehindException, so a catch of the
+          # declared type missed it and the same segment was re-read for ever.  Measured
+          # on the unpatched build: 146 unrecoverable errors in one minute, and
+          # publication frozen for the following eight.  cassandra/dist/VENDOR.md has
+          # the chain; the fix is 69add7b in the analytics fork.
+          #
+          # A DELETE of a row that does not exist is enough, and is the cheapest probe:
+          # it writes a tombstone mutation for that table into the shared commit log.
+          BEFORE=$(podman exec kafka /opt/kafka/bin/kafka-get-offsets.sh \
+            --bootstrap-server kafka:19092 --topic cdc-mutations 2>/dev/null \
+            | awk -F: '{s+=$3} END {print s+0}')
+          podman exec cassandra cqlsh cassandra -e \
+            "DELETE FROM demo.drone_text_embeddings WHERE entity_id = 'ci-cdc-probe';" >/dev/null 2>&1 \
+            || { echo "::error::the probe DELETE was refused"; exit 1; }
+          echo "  probe written at end offset $BEFORE"
+
+          # Wait for the publisher to move past it.  The mutation reaches the reader
+          # only once its 32 MiB commit log segment is complete, which at the demo's
+          # write rate was measured at 9.3s and on a quieter runner may be far longer;
+          # so this is bounded and reported rather than asserted.  The assertion that
+          # holds either way is the error count below: a wedged reader logs on its first
+          # attempt at the segment, and does so whether or not the offset has moved.
+          ADVANCED="no"
+          for attempt in $(seq 1 60); do
+            AFTER=$(podman exec kafka /opt/kafka/bin/kafka-get-offsets.sh \
+              --bootstrap-server kafka:19092 --topic cdc-mutations 2>/dev/null \
+              | awk -F: '{s+=$3} END {print s+0}')
+            if [ "${AFTER:-0}" -gt "${BEFORE:-0}" ]; then ADVANCED="yes"; break; fi
+            sleep 5
+          done
+          if [ "$ADVANCED" = "yes" ]; then
+            echo "  the stream advanced to $AFTER after the probe"
+          else
+            echo "  note: the stream had not advanced past $BEFORE within 300s, so the segment"
+            echo "  holding the probe was still incomplete; the error count below is the assertion"
+          fi
+
+          WEDGED=$(podman logs cassandra 2>&1 | grep -c 'CommitLog unrecoverable error' || true)
+          echo "  'CommitLog unrecoverable error' in the node's log: $WEDGED"
+          [ "${WEDGED:-0}" -eq 0 ] \
+            || { echo "::error::the CDC reader could not deserialize a segment $WEDGED times; a table's type defeats its schema, and the stream stops rather than skipping the row"; exit 1; }
+          echo "✓ The reader skipped what it cannot deserialize instead of stopping"
+
+          echo -e "\n=== CDC does not reach the request path ==="
+          # The whole claim of this repository is that streaming and analytical
+          # machinery stay off the OLTP path, and CDC has one way to break it:
+          # cdc_total_space bounds cdc_raw, and with cdc_block_writes left at its
+          # default of true Cassandra enforces the bound by refusing every write to the
+          # keyspace.  Measured here at 4,261,415,150 bytes in 127 segments, with the
+          # Sidecar's own cleaner unable to fire first.  So the node trims instead, and
+          # what is asserted is that a write is still accepted.  The directory's size is
+          # printed and not asserted: a runner's stack is minutes old and nowhere near
+          # the bound, so a threshold here would assert nothing.
+          podman exec cassandra sh -c 'grep -E "^cdc_(block_writes|total_space):" /opt/cassandra/conf/cassandra.yaml'
+          RAW_BYTES=$(podman exec cassandra du -sb /var/lib/cassandra/cdc_raw | cut -f1)
+          RAW_SEGMENTS=$(podman exec cassandra sh -c 'ls /var/lib/cassandra/cdc_raw/*.log 2>/dev/null | wc -l' | tr -d ' ')
+          echo "  cdc_raw: $RAW_SEGMENTS segments, $RAW_BYTES bytes"
+          WRITE=$(podman exec cassandra cqlsh cassandra -e \
+            "INSERT INTO demo.drone_latest_status (entity_id, event_id, event_time, event_type, updated_at) VALUES ('ci-cdc-write-probe', now(), toTimestamp(now()), 'ci_probe', toTimestamp(now()));" 2>&1 || true)
+          if echo "$WRITE" | grep -qiE 'CDCWriteException|Rejecting mutation|Unable to complete'; then
+            echo "::error::a write to a CDC-enabled table was refused, so cdc_raw is enforcing its bound against the request path"
+            echo "$WRITE"
+            exit 1
+          fi
+          echo "✓ A write to the CDC-enabled table was accepted with CDC running"
+        timeout-minutes: 15
 
       - name: Test the cqlite token split
         run: |

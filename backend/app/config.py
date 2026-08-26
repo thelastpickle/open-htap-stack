@@ -94,9 +94,25 @@ class Settings(BaseSettings):
     accord_sql_user: str = "htap-mission-control"
     accord_sql_connect_timeout_s: float = 5.0
 
-    # Kafka — used by the platform health probe only
+    # Kafka — the platform health probe, and the CDC tail below
     kafka_host: str = "kafka"
     kafka_port: int = 19092
+
+    # Change Data Capture.  The Sidecar publishes demo.drone_latest_status mutations
+    # to this topic as Confluent-framed Avro, and the Streaming page shows what
+    # arrives.  The registry is Apicurio's Confluent-compatible endpoint, and the
+    # backend needs it for the same reason any consumer does: a record carries the id
+    # of its schema, not the schema.
+    cdc_topic: str = "cdc-mutations"
+    cdc_schema_registry_url: str = "http://apicurio:8080/apis/ccompat/v7"
+    # How many mutations the tail keeps.  A ring buffer, so watching the stream costs
+    # a fixed amount of memory however long the page is left open; the point of the
+    # page is the latest mutations, and a log of every mutation is what the topic
+    # already is.
+    cdc_buffer_size: int = 200
+    # Seconds the consumer waits for records before it loops.  It runs in a thread,
+    # so this is only how promptly the loop notices a shutdown.
+    cdc_poll_timeout_s: float = 1.0
 
     # Spark master UI — used by the platform health probe only
     spark_ui_host: str = "spark"

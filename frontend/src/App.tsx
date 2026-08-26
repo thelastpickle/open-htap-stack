@@ -8,6 +8,7 @@ import HealthPage from './pages/Health'
 import MapPage from './pages/Map'
 import OverviewPage from './pages/Overview'
 import SettingsPage from './pages/Settings'
+import StreamingPage from './pages/Streaming'
 import TransactionsPage from './pages/Transactions'
 
 const NAV_ITEMS = [
@@ -21,6 +22,9 @@ const NAV_ITEMS = [
   // cassandra-sql's own keyspaces is an interface that writes, like Accord, and not
   // a sixth path on Explore.
   { path: '/transactions', label: 'Transactions', icon: 'account_tree' },
+  // After Transactions, because it follows the writes: Transactions is where a write
+  // is made, and this is where the same write arrives on Kafka out of the commit log.
+  { path: '/streaming', label: 'Streaming', icon: 'stream' },
   { path: '/health', label: 'Health', icon: 'monitor_heart' },
   { path: '/settings', label: 'Settings', icon: 'settings' },
 ]
@@ -303,6 +307,7 @@ export default function App() {
               <Route path="/alerts" element={<AlertsPage />} />
               <Route path="/explore" element={<ExplorePage />} />
               <Route path="/transactions" element={<TransactionsPage />} />
+              <Route path="/streaming" element={<StreamingPage />} />
               <Route path="/health" element={<HealthPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>

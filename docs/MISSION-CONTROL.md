@@ -42,6 +42,7 @@ The fifth path is inside the box the dashboard already occupies, which is why it
 | **Alerts**   | Zone-proximity and breach alerts, newest first                             | `alerts_by_bucket`, read one hourly partition at a time                           |
 | **Explore**  | One statement against one chosen path, vector search, and the five-path comparison | Whichever path you pick; all five read the same Cassandra data              |
 | **Transactions** | Three subtabs, selected by `?tab=`: Accord, SQL and Schema               | Accord over six `demo` tables, cassandra-sql over its own three keyspaces, and each engine's own catalog |
+| **Streaming** | The latest mutations as they arrive on Kafka, with the registered Avro schema | The `cdc-mutations` topic and Apicurio; nothing here reads Cassandra          |
 | **Health**   | Reachability, latency by access path, and the work in flight                | A connection probe per service, one timed query per path, and each engine's own query list |
 | **Settings** | Fleet size, event rate, outlier share, pause, and the breach scenario      | Held in the backend; the data producer polls and adopts them                      |
 

@@ -54,6 +54,31 @@ services:
       timeout: 5s
       retries: 30
 
+  apicurio:
+    # The schema registry the Sidecar's CDC publisher writes to.  Apicurio rather than
+    # cp-schema-registry because every component of this stack is Apache-licensed and the
+    # Confluent build is not; Apicurio serves a Confluent-compatible API under
+    # /apis/ccompat/v7, which is what KafkaAvroSerializer and the dashboard both speak.
+    # Measured against 3.0.13 before it was adopted: a POST to
+    # /apis/ccompat/v7/subjects/<subject>/versions answered {"id":1}, and a GET of
+    # /apis/ccompat/v7/schemas/ids/1 returned the schema, which is the whole of the contract
+    # the Confluent wire format needs.
+    image: apicurio/apicurio-registry:3.0.13
+    container_name: apicurio
+    networks: [htap-net]
+    ports:
+      - "8085:8080"   # the registry API and its own web UI
+    environment:
+      # Storage is the image's default in-process H2, so a restart loses the registered
+      # schemas.  That costs nothing here: the Sidecar re-registers a schema on its next
+      # publish, and the dashboard reads a schema by the id in the record it is decoding.
+      QUARKUS_HTTP_CORS_ORIGINS: "*"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/health/ready >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
   cassandra:
     build:
       context: ./cassandra
@@ -84,6 +109,28 @@ services:
       # also forces num_tokens to 1; the entrypoint says why.
       CASSANDRA_PARTITIONER: "${CASSANDRA_PARTITIONER:-org.apache.cassandra.dht.Murmur3Partitioner}"
       CASSANDRA_ACCORD_ENABLED: "${CASSANDRA_ACCORD_ENABLED:-true}"
+      # Change Data Capture.  The Sidecar in this container reads the commit log segments
+      # Cassandra hard-links into cdc_raw and publishes one table's mutations to Kafka; the
+      # sink owns which table that is.  Off here disables the cassandra.yaml keys and the
+      # config seed both, so the node runs as it did before CDC existed.
+      #
+      # cdc_total_space bounds cdc_raw, and so bounds how far behind the publisher may fall
+      # before a mutation is deleted unpublished.  One table opts into CDC but every table's
+      # mutations pass through the same commit log, so the directory fills at the node's whole
+      # write rate: measured from the segments' mtimes, 4 to 10 segments of 32 MiB a minute,
+      # median 7, which is about 18 minutes to fill 4 GiB.  An earlier comment here said two
+      # minutes, which was an estimate and was an order of magnitude wrong.
+      #
+      # cassandra/entrypoint.sh sets cdc_block_writes false, so the node deletes the oldest
+      # segments rather than refusing the write when the bound is reached.
+      CASSANDRA_CDC_ENABLED: "${CASSANDRA_CDC_ENABLED:-true}"
+      CASSANDRA_CDC_TOTAL_SPACE: "${CASSANDRA_CDC_TOTAL_SPACE:-4096MiB}"
+      # Where the published mutations go, and where their Avro schemas are registered.  The
+      # backend reads the same three values, because a topic or a registry the two disagree on
+      # is a Streaming page that shows nothing.
+      CDC_TOPIC: "${DEMO_CDC_TOPIC:-cdc-mutations}"
+      CDC_KAFKA_BOOTSTRAP: "kafka:19092"
+      CDC_SCHEMA_REGISTRY_URL: "http://apicurio:8080/apis/ccompat/v7"
       # JVM heap settings to prevent OOM kills
       MAX_HEAP_SIZE: "${CASSANDRA_MAX_HEAP_SIZE:-4G}"
     # Container memory limits (should be higher than MAX_HEAP_SIZE to account for off-heap memory)
@@ -346,6 +393,11 @@ services:
       # TABLE when the subsystem is off, and the two disagreeing would stop the
       # sink at its schema step.  See ensure_schema in consumer.py.
       CASSANDRA_ACCORD_ENABLED: "${CASSANDRA_ACCORD_ENABLED:-true}"
+      # And it is the sink that opts drone_latest_status into CDC, for the same reason: the
+      # table's options are written where the table is created.  Read from the declaration
+      # the cassandra service reads, so that turning CDC off leaves no table asking a
+      # publisher that is not running to follow it.
+      CASSANDRA_CDC_ENABLED: "${CASSANDRA_CDC_ENABLED:-true}"
     restart: unless-stopped
 
 
@@ -407,6 +459,13 @@ services:
       SPARK_THRIFT_PORT: "10000"
       KAFKA_HOST: "kafka"
       KAFKA_PORT: "19092"
+      # The CDC topic the Sidecar publishes to, and the registry that holds the Avro schema
+      # each record names.  The Streaming page tails the topic through the backend; the buffer
+      # is bounded, so a page nobody is watching costs one consumer and a fixed slice of
+      # memory.  Same three values the cassandra service seeds into the Sidecar's config.
+      CDC_TOPIC: "${DEMO_CDC_TOPIC:-cdc-mutations}"
+      CDC_SCHEMA_REGISTRY_URL: "http://apicurio:8080/apis/ccompat/v7"
+      CDC_BUFFER_SIZE: "${DEMO_CDC_BUFFER_SIZE:-200}"
       SPARK_UI_HOST: "spark"
       SPARK_UI_PORT: "8080"
       # Where the cqlite reader looks for the keyspace directories.  Stated here

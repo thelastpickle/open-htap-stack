@@ -12,8 +12,8 @@ ENV CASSANDRA_HOME=/opt/cassandra
 # The Sidecar is built here and committed, because 6.0 support is not in any release.
 # 0.4.0 has no 6.0 adapter, and the Sidecar refuses a node whose version no
 # @MinimumVersion factory claims; upstream declares 0.5-SNAPSHOT, so this local build is
-# 0.5-mck0.  dist/VENDOR.md records the fork, the commit and the build command.
-ENV SIDECAR_VERSION=0.5-mck0
+# 0.5-mck2.  dist/VENDOR.md records the fork, the commit and the build command.
+ENV SIDECAR_VERSION=0.5-mck2
 ENV SIDECAR_HOME=/opt/cassandra-sidecar
 
 ENV PATH="${CASSANDRA_HOME}/bin:${SIDECAR_HOME}/bin:${PATH}"
@@ -54,7 +54,8 @@ RUN useradd -m -u 999 cassandra \
     && echo "cassandra ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY seed-cdc-configs.sh /seed-cdc-configs.sh
+RUN chmod +x /entrypoint.sh /seed-cdc-configs.sh
 
 USER cassandra
 EXPOSE 7000 9042 9043

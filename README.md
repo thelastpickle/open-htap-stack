@@ -15,7 +15,7 @@ Comes with a [web drone dashboard demo](docs/MISSION-CONTROL.md) of realtime dat
   - SparkSQL and Presto for analytics, both running here
   - Postgres wire-protocol and dialect adapter for application SQL, via Apache Calcite: GEICO's cassandra-sql, running here on its own keyspaces, with joins, subqueries and `BEGIN`/`COMMIT`.&emsp;A proof of concept by its own account, and the section below reports what it does and does not hold
 - **Resource isolation by construction** — OLAP reads via persisted-structure paths that do not contend with the OLTP request path
-- **Native CDC to Kafka** via the Sidecar, easy to plug into existing platforms, ecosystems, and migration paths
+- **Native CDC to Kafka** via the Sidecar, easy to plug into existing platforms and migration paths.&emsp;Running here, off the request path: one table's mutations reach Kafka as registered Avro at 2,718 records/s, read from the commit log rather than by querying the node
 - **Ecosystem integration**: Apache Kafka, Apache Spark, Presto, Apache Parquet, Apache Iceberg
 - **Freedom to operate** — Apache-licensed, deployable anywhere, no per-credit or per-DBU licensing
 - **80%+ Lower TCO** than OLTP + ETL + warehouse stacks — see the [TCO worksheet](docs/TCO-Comparisons.md)
@@ -32,8 +32,9 @@ Comes with a [web drone dashboard demo](docs/MISSION-CONTROL.md) of realtime dat
 5. [Mission Control dashboard](docs/MISSION-CONTROL.md) — the demo you can show a boardroom
 6. [Accord transactions](docs/ACCORD-TRANSACTIONS.md) — the two demonstrations, their steps and their cost
 7. [Application SQL](docs/APPLICATION-SQL.md) — cassandra-sql over Cassandra, and what it does not hold
-8. [TCO Comparisons](docs/TCO-Comparisons.md) — worksheet and sensitivity analysis
-9. [Hard Questions FAQ](docs/ARCHITECTURE.md#hard-questions-faq) — direct answers
+8. [CDC to Kafka](docs/CDC-TO-KAFKA.md) — the change stream, its record format and its cost
+9. [TCO Comparisons](docs/TCO-Comparisons.md) — worksheet and sensitivity analysis
+10. [Hard Questions FAQ](docs/ARCHITECTURE.md#hard-questions-faq) — direct answers
 
 ---
 
@@ -62,6 +63,7 @@ podman compose -f podman-compose.yml up
 | Presto UI                | <http://localhost:8088/ui/>                    |
 | Spark master UI          | <http://localhost:8080>                        |
 | Spark application UI     | <http://localhost:4040>                        |
+| Apicurio schema registry | <http://localhost:8085>                        |
 
 ### The 4-minute demonstration
 
@@ -93,10 +95,14 @@ started; nothing is seeded or pre-rendered.
    `ROLLBACK`, and no row is left behind.
 7. **Transactions → Schema** — both data models, read from the engines that own them. The CQL side
    marks which tables are Accord tables; the SQL side names what its catalog reports stale.
-8. **Health** — reachability per service, latency per access path, and the query in flight. Cancel a
+8. **Streaming** — the change stream, as it arrives. Each row is one mutation the Sidecar read out of a
+   discarded commit log segment and published to Kafka; the panel shows the registered Avro schema
+   beside them, and nothing on the page queries Cassandra. `isPartial` on each row is the honest part:
+   the stream carries the cells a write touched, not the row as it now stands.
+9. **Health** — reachability per service, latency per access path, and the query in flight. Cancel a
    running comparison from here.
-9. **Settings → Trigger breach scenario** — write a real alert and watch the map, the KPIs and the
-   alert feed pick it up.
+10. **Settings → Trigger breach scenario** — write a real alert and watch the map, the KPIs and the
+    alert feed pick it up.
 
 See [docs/MISSION-CONTROL.md](docs/MISSION-CONTROL.md) for what each page queries, how the demo
 controls reach the data producer, and how to run either half from source.
@@ -217,11 +223,35 @@ This writes SSTables directly to disk and uses the Sidecar to load them into Cas
 
 ### CDC (Change Data Capture) to Kafka
 
-Simple configuration to CDC all database writes into a Kafka topic:
+Cassandra's Change Data Capture (CEP-8) hard-links each commit log segment into `cdc_raw` as it discards it.&emsp;The Sidecar beside the node reads those segments and publishes one table's mutations to Kafka as Avro, with the schema registered in Apicurio.&emsp;Nothing queries Cassandra to do it: the change stream is taken from the write path's own log, so it is one more way the demo keeps machinery off the request path.
 
+It runs here, and the **Streaming** page at <http://localhost:4000/streaming> shows the mutations arriving.&emsp;Turning it on is three settings, one of which is a table option:
+
+```yaml
+# cassandra.yaml — cdc_raw must share a filesystem with the commit log, because it is hard links
+cdc_enabled: true
+cdc_raw_directory: /var/lib/cassandra/cdc_raw
+cdc_total_space: 4096MiB
+cdc_block_writes: false          # trim the oldest segment rather than reject the write
 ```
-todo
+
+```sql
+-- the table opts in; unlike transactional_mode, cdc can be turned on after the fact
+ALTER TABLE demo.drone_latest_status WITH cdc = true;
+
+-- the Sidecar reads its publisher settings from a table it creates itself
+INSERT INTO sidecar_internal.configs (service, config) VALUES ('cdc', {
+  'cdc_enabled': 'true', 'topic': 'cdc-mutations', 'topic_format_type': 'STATIC',
+  'jobid': 'htap-demo', 'datacenter': 'datacenter1',
+  'watermark_seconds': '1800', 'micro_batch_delay_millis': '500', 'max_commit_logs': '4'
+}) IF NOT EXISTS;
 ```
+
+**Measured** on a fresh stack: the first mutation reached Kafka 95.7 s after `up -d`, and over the following 1,447 s the topic took **2,718 records/s** with **no decode failure in 5.4 million records** and no growth in consumer lag.&emsp;End-to-end latency is **seconds, and not milliseconds**: p50 had a median of 8.0 s and a range of 2.7 to 21.1 s, because a segment reaches the reader only once it is complete, and at this write rate a 32 MiB segment completed every 9.3 s.&emsp;The publisher's own poll interval is 500 ms, so it is not the floor.
+
+Two limitations are worth stating here.&emsp;`cdc_raw` is bounded, and with `cdc_block_writes: false` the node deletes the oldest segment at the bound rather than refusing the write, so a publisher that falls far enough behind loses changes; measured, the directory held at the bound for thirteen minutes while both publication and the request path continued.&emsp;And the stream carries **mutations, not rows**: `operationType` reads `UPDATE` for a CQL `INSERT`, and `isPartial` is `true`, because a mutation carries the cells it wrote and not the row as it now stands.
+
+See [docs/CDC-TO-KAFKA.md](docs/CDC-TO-KAFKA.md) for the record format, the full measurement table, the deletion that logs only at DEBUG, and the two local fixes the Sidecar needed.
 
 ### Example SQL Transactions
 
@@ -298,7 +328,7 @@ Three access paths share the same persisted data:
 
 - **OLTP path** — point reads and bounded partition reads through Cassandra's request path. Latency performance: p99 write < 5ms, p99 read < 50ms.
 - **OLAP path** — wide scans and aggregations via the Spark Bulk Reader, reading SSTable files directly from coordinated snapshots. Does not contend with OLTP. Measured on this one node, counting the whole table with no predicate: 452,446,775 bytes of snapshot in 13.4 s, so 33.9 MB/s, and the snapshot itself cost 323 ms of that. Read it as a floor rather than a throughput figure, because the measurement is a laptop running eight containers on seven cores; the mechanism is what scales per node, and this demo does not measure that. No write rate is quoted, because the bulk writer does not work here yet — see the note above. The dashboard also reads the same files with no snapshot and no JVM, in its own process, through cqlite: the same count took 32.9 s over 450,318,008 bytes of live files, single-threaded against the bulk reader's four cores, and answers as of the last flush.
-- **CDC path** — change streams to Kafka via the Sidecar, with RF-aware deduplication.
+- **CDC path** — change streams to Kafka via the Sidecar, read from discarded commit log segments rather than by querying the node. Measured here: 2,718 records/s to the topic, a p50 median of 8.0 s end to end, bounded by the 32 MiB commit log segment rather than by the publisher. The replication-factor-aware deduplication is configured, `watermark_seconds: 1800`, and this one node at RF=1 does not exercise it.
 
 The architectural property that makes this work, that analytical scans do not touch the OLTP hot path — holds **by construction**, not by tuning. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full technical treatment.
 

@@ -35,10 +35,18 @@ export JAVA_HOME="$(jenv prefix 11)" JDK_VERSION=11 SCALA_VERSION=2.12 SPARK_VER
 ./gradlew -PartifactType=spark -Pversion=0.5-mck0 \
   :cassandra-analytics-core:publishToMavenLocal \
   :cassandra-bridge:publishToMavenLocal \
-  :cassandra-analytics-spark-converter:publishToMavenLocal --parallel
+  :cassandra-analytics-spark-converter:publishToMavenLocal \
+  :cassandra-analytics-cdc:publishToMavenLocal \
+  :cassandra-analytics-cdc-codec:publishToMavenLocal \
+  :cassandra-analytics-cdc-sidecar:publishToMavenLocal \
+  :cassandra-avro-converter:publishToMavenLocal --parallel
 ```
 
 Naming the modules is what keeps `cassandra-analytics-integration-framework` and `-integration-tests` out, and with them a `sidecar-server` dependency and the dtest jars.  `DEV-README.md`'s documented commands omit `JDK_VERSION=11` and resolve a profile that does not exist.
+
+The four CDC modules are in the second pass for the Sidecar, not for Spark.  Nothing in `spark/` resolves them and `vendor-analytics.sh` does not commit them; the Sidecar build reads them from `~/.m2` when it is given `-PanalyticsVersion`, which is what puts a 6.0 bridge behind its CDC feature.  See `cassandra/dist/VENDOR.md`.
+
+That is also why the Sidecar's copy is one revision ahead of this directory's.  `cassandra/dist/` bundles analytics `0.5-mck1`, which carries a commit log reader fix for Cassandra 6.0, and here the revision stays `0.5-mck0`: nothing in `spark/` reads a commit log, so the fix cannot change what these six artifacts do, and re-vendoring would re-commit six jars through Git LFS for identical behaviour.  Publish the two passes above with `-Pversion=0.5-mck1` when rebuilding the Sidecar, and leave this directory alone.
 
 Then bring the result into this directory:
 

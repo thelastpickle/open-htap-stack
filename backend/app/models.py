@@ -680,3 +680,99 @@ class SchemaView(BaseModel):
     # pg_tables still lists tables that were dropped.
     warnings: List[str] = []
     error: Optional[str] = None
+
+
+# ──────────────────────── Change Data Capture ────────────────────────
+
+
+class CdcRecord(BaseModel):
+    """One mutation, as it arrived on the CDC topic.
+
+    ``columns`` is what the Sidecar's Avro record carries beside its own header
+    fields, so it is the table's own columns for the mutation that touched them.  An
+    UPDATE names only what it wrote, which is why a row here can be sparse.
+    """
+
+    # Monotonic within this backend's run, so the page can ask for what it has not
+    # seen without trusting Kafka offsets across a partition.
+    seq: int
+    partition: int
+    offset: int
+    # keyspace:table:hash, written by the publisher as a plain UTF-8 string.
+    key: str = ""
+    keyspace: str = ""
+    table: str = ""
+    operation: str = ""
+    # The mutation's own write time, from the record, and the broker's, from the
+    # message.  Both in milliseconds since the epoch, so the page can show either.
+    mutation_at_ms: int = 0
+    kafka_at_ms: int = 0
+    # How old the mutation was when this backend decoded it: the demo's end-to-end
+    # latency for that record, Cassandra write to dashboard.  Absent on a record read
+    # from before the tail attached, which would measure the backlog instead.
+    age_ms: Optional[float] = None
+    # A record the tail read to fill its buffer on attach, rather than one it saw
+    # arrive.  Excluded from the latency figures for that reason.
+    backfill: bool = False
+    partial: bool = False
+    columns: Dict[str, Any] = {}
+    # The columns the mutation itself named, from the envelope's updateFields.  The
+    # publisher's Avro record has a field per column of the table and fills the rest
+    # with null, so this is what distinguishes a column written as null from one the
+    # mutation never touched.
+    update_fields: List[str] = []
+    # The Avro schema id the record named, and the header fields that are not
+    # columns.  Kept because the demo's claim is about the wire format as much as
+    # the data.
+    schema_id: Optional[int] = None
+    decode_error: Optional[str] = None
+
+
+class CdcStreamStatus(BaseModel):
+    """What the tail is doing, in the terms the Streaming page shows."""
+
+    # starting / waiting_for_topic / tailing / error
+    state: str = "starting"
+    topic: str = ""
+    bootstrap: str = ""
+    registry: str = ""
+    partitions: List[int] = []
+    buffer_size: int = 0
+    buffered: int = 0
+    # Records this backend has consumed since it started, and how many of those it
+    # could not decode.  A decode failure is kept in the buffer with its reason
+    # rather than dropped, because a record the dashboard cannot read is a finding.
+    consumed: int = 0
+    decode_failures: int = 0
+    # Records a second, over the last measured interval.
+    rate_per_sec: float = 0.0
+    # End-to-end latency over the records seen live, mutation write to decode here.
+    latency_p50_ms: Optional[float] = None
+    latency_max_ms: Optional[float] = None
+    schema_ids: List[int] = []
+    last_record_at_ms: Optional[int] = None
+    error: Optional[str] = None
+
+
+class CdcStreamResponse(BaseModel):
+    status: CdcStreamStatus
+    # Newest first.
+    records: List[CdcRecord] = []
+
+
+class CdcSchemaView(BaseModel):
+    """The Avro schema the topic's records are written against."""
+
+    subject: str = ""
+    schema_id: Optional[int] = None
+    version: Optional[int] = None
+    # The registry's own reply, parsed.  Field names and their Avro types, in
+    # declaration order, so the page can show the contract rather than a blob.
+    fields: List[Dict[str, Any]] = []
+    # The columns of the table, from the nested `payload` record: the name, the Avro
+    # type the publisher chose and the CQL type it chose it for.  Separate from the
+    # ten envelope fields, because the two answer different questions.
+    payload_fields: List[Dict[str, Any]] = []
+    registry: str = ""
+    avro_schema: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None

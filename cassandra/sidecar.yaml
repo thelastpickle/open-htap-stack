@@ -1,5 +1,5 @@
 #
-# Cassandra Sidecar 0.5-mck0 configuration file.  A trimmed copy of the template the
+# Cassandra Sidecar 0.5-mck1 configuration file.  A trimmed copy of the template the
 # distribution ships; see dist/VENDOR.md for which keys were checked against 0.5.
 #
 cassandra_instances:
@@ -8,6 +8,11 @@ cassandra_instances:
       port: 9042
       storage_dir: /var/lib/cassandra
       staging_dir: /var/lib/cassandra/staging
+      # CDC reads these two directories directly, in this container, because the Sidecar runs
+      # beside the node rather than in a container of its own.  They must match the
+      # cdc_raw_directory and commitlog_directory that entrypoint.sh patches into cassandra.yaml.
+      cdc_dir: /var/lib/cassandra/cdc_raw
+      commitlog_dir: /var/lib/cassandra/commitlog
       jmx_host: 127.0.0.1
       jmx_port: 7199
       jmx_ssl_enabled: false
@@ -61,8 +66,32 @@ sidecar:
       expire_after_access: 2h # 2 hours
       maximum_size: 10000
   cdc:
+    enabled: true
     segment_hardlink_cache_expiry: 5m # 5 minutes
-    table_schema_refresh_time: 60s    # Interval time between table schema refresh for CDC
+    # The schema refresh is what notices a table opting into CDC, and the sink creates
+    # demo.drone_latest_status after this Sidecar has started, so the interval is also how long a
+    # fresh stack waits before its first mutation is published.  10s rather than the 60s the
+    # template suggests: the refresh compares the driver's own schema text, so it is cheap.
+    table_schema_refresh_time: 10s
+    # The CDC and Kafka settings themselves come from sidecar_internal.configs, which
+    # seed-cdc-configs.sh writes once the Sidecar has created the table.  This is how long after
+    # that write the publisher starts.
+    config_refresh_time: 5s
+    # Who trims cdc_raw is settled in ../entrypoint.sh, by cdc_block_writes, and not here.
+    #
+    # cdc_raw_max_directory_max_percent is deliberately left unset, because setting it to
+    # anything fractional empties the directory.  CdcRawDirectorySpaceCleaner deletes
+    # oldest-first while the directory exceeds cdc_total_space times that percentage, and
+    # CdcConfigurationImpl declares the field as a float but its setter as
+    # setCdcRawDirectoryMaxPercentUsage(long); Jackson binds the setter, so 0.75 arrives as 0.
+    # Measured here with 0.75 in this file: the cleaner logged "Insufficient Cdc buffer size to
+    # maintain 5-minute window segment=... maxSize=0" and deleted every segment but the newest
+    # on each one-minute pass, holding cdc_raw at 3 to 7 segments where 4096 MiB was configured.
+    # A segment deleted before the Sidecar has read it is a silent gap in the topic, so the
+    # value stays absent and the cleaner keeps its default of 1.0, where it never fires.
+    #
+    # cdc_raw_critical_buffer_window and cdc_raw_low_buffer_window are left unset for the same
+    # reason: they only annotate a deletion this cleaner does not make.
   worker_pools:
     service:
       name: "sidecar-worker-pool"
@@ -76,7 +105,10 @@ sidecar:
     max_retries: 3
     retry_delay: 200ms
   schema:
-    is_enabled: false
+    # On, because CDC needs it: the Sidecar keeps its CDC settings and its per-segment progress
+    # in sidecar_internal, and CassandraClusterSchemaMonitor does not run at all while this is
+    # off.  It creates the keyspace and its tables itself.
+    is_enabled: true
     keyspace: sidecar_internal
     replication_strategy: SimpleStrategy
     replication_factor: 1

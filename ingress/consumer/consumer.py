@@ -80,6 +80,20 @@ ACCORD_ENABLED = os.getenv("CASSANDRA_ACCORD_ENABLED", "true").lower() == "true"
 # option cannot be fixed in place, and needs ./stop-and-clean-data-and-schema.sh.
 TRANSACTIONAL = " WITH transactional_mode='full'" if ACCORD_ENABLED else ""
 
+# Which table the Sidecar's Change Data Capture publisher follows.  One table opts in,
+# drone_latest_status: it is the fleet's live state, one row per asset, so a mutation of
+# it is the event a downstream consumer would want, and at a hundred assets its rate is
+# the demo's whole write rate against a hundred keys.  events deliberately stays out.
+# Opting it in would put every raw row through the publisher as well, and the demo's
+# claim about the raw table is that the analytical paths read it without a copy.
+#
+# Unlike transactional_mode, cdc can be turned on with ALTER TABLE, so a table that
+# already exists is one statement away rather than a wipe away.  The option is still
+# written here, because the sink owns the schema and CREATE TABLE IF NOT EXISTS will not
+# apply it to a table that exists.
+CDC_ENABLED = os.getenv("CASSANDRA_CDC_ENABLED", "true").lower() == "true"
+CDC = " WITH cdc = true" if CDC_ENABLED else ""
+
 
 def event_bucket(event_time: datetime) -> str:
     """The window an event belongs to, as "YYYY-MM-DDTHH:MM" in UTC.
@@ -221,6 +235,10 @@ def ensure_schema(session, keyspace: str, table: str):
 
     # Latest state per asset — the live map and the fleet KPIs.  One row per
     # asset, so a full scan of it is bounded by fleet size.
+    #
+    # This is also the one CDC table: see CDC above, and the Streaming page that reads
+    # what the Sidecar publishes.  An existing table can be opted in with
+    # ALTER TABLE demo.drone_latest_status WITH cdc = true.
     session.execute(
         f"""
         CREATE TABLE IF NOT EXISTS {keyspace}.drone_latest_status (
@@ -243,7 +261,7 @@ def ensure_schema(session, keyspace: str, table: str):
           risk_score double,
           text_payload text,
           updated_at timestamp
-        );
+        ){CDC};
         """
     )
 
@@ -478,10 +496,35 @@ def ensure_schema(session, keyspace: str, table: str):
         """
     )
     print(f"[sink] session tables transactional_mode: {'full' if ACCORD_ENABLED else 'off'}")
+    ensure_cdc(session, keyspace)
 
     seed_zones(session, keyspace)
     seed_zone_occupancy(session, keyspace)
     print("[sink] schema ensured")
+
+
+def ensure_cdc(session, keyspace: str) -> None:
+    """Bring drone_latest_status's cdc option to what CASSANDRA_CDC_ENABLED asks for.
+
+    The CREATE TABLE above carries the option, which covers a fresh keyspace and nothing
+    else: CREATE TABLE IF NOT EXISTS applies none of its options to a table that already
+    exists, so a stack that has been running since before CDC was added would keep a
+    table with the option off and a Sidecar with nothing to publish.  Read the current
+    value and alter only on a difference, so a sink restart against an already-correct
+    table issues no schema change.
+    """
+    want = "true" if CDC_ENABLED else "false"
+    row = session.execute(
+        "SELECT cdc FROM system_schema.tables "
+        "WHERE keyspace_name = %s AND table_name = 'drone_latest_status'",
+        (keyspace,),
+    ).one()
+    have = "true" if (row and row.cdc) else "false"
+    if have == want:
+        print(f"[sink] drone_latest_status cdc: {have}")
+        return
+    session.execute(f"ALTER TABLE {keyspace}.drone_latest_status WITH cdc = {want};")
+    print(f"[sink] drone_latest_status cdc: {have} -> {want} (altered)")
 
 
 def seed_zones(session, keyspace: str) -> None:

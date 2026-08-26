@@ -28,6 +28,15 @@ psycopg[binary]==3.2.13
 # Outbound HTTP for the optional embedding and NL-to-SQL endpoints
 httpx==0.28.1
 
+# The CDC tail: a Kafka consumer, and an Avro reader for what the Sidecar publishes.
+# kafka-python-ng is the maintained fork the sink already uses, so both sides of the
+# topic speak through the same client.  fastavro reads one record against a schema
+# fetched from the registry by id, which is all a Confluent-framed message needs; the
+# Confluent client itself is not used, since it carries librdkafka and its own licence.
+# Both publish wheels for this image's Python, so nothing here compiles.
+kafka-python-ng==2.2.3
+fastavro==1.12.2
+
 # The SQL engine for the cqlite path.  This pin and the datafusion and
 # datafusion-ffi pins the reader was compiled against are one pin, not three:
 # the reader hands this library a capsule holding a repr(C) struct, and the two

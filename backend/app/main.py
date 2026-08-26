@@ -20,7 +20,7 @@ from app.db.accord_sql_client import accord_sql_client
 from app.db.presto_client import presto_client
 from app.db.spark_client import spark_bulk_client, spark_client
 from app.routes import alerts, demo, health, map, overview, query, settings as settings_routes
-from app.routes import schema_explorer, sql_console, transactions, vector, zones
+from app.routes import schema_explorer, sql_console, streaming, transactions, vector, zones
 
 ROUTERS = (
     overview.router,
@@ -35,6 +35,7 @@ ROUTERS = (
     transactions.router,
     sql_console.router,
     schema_explorer.router,
+    streaming.router,
 )
 
 
@@ -73,12 +74,21 @@ async def lifespan(app: FastAPI):
     # sink writes.  One task for the process's lifetime; it idles until the Explore
     # page turns it on, and it never sits in a write.
     embedder_task = asyncio.create_task(vector.live_embedder.run())
+
+    # The CDC tail, which consumes the topic the Sidecar publishes to whether or not
+    # anybody has the Streaming page open.  It has to: the page shows the latest
+    # mutations, and a consumer that attached when the page opened would show the
+    # latest mutations since it attached instead.  It keeps a fixed number of records,
+    # so the cost of leaving it running is bounded.
+    cdc_task = asyncio.create_task(streaming.cdc_tail.run())
     try:
         yield
     finally:
-        embedder_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await embedder_task
+        for task in (embedder_task, cdc_task):
+            task.cancel()
+        for task in (embedder_task, cdc_task):
+            with suppress(asyncio.CancelledError):
+                await task
 
 
 def create_app() -> FastAPI:

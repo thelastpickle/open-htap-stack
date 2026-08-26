@@ -30,8 +30,10 @@ Comes with a [web drone dashboard demo](docs/MISSION-CONTROL.md) of realtime dat
 3. [Why this stack](docs/WHY.md) — the vision and the argument
 4. [Architecture deep-dive](docs/ARCHITECTURE.md) — scope, consistency, enterprise considerations
 5. [Mission Control dashboard](docs/MISSION-CONTROL.md) — the demo you can show a boardroom
-6. [TCO Comparisons](docs/TCO-Comparisons.md) — worksheet and sensitivity analysis
-7. [Hard Questions FAQ](docs/ARCHITECTURE.md#hard-questions-faq) — direct answers
+6. [Accord transactions](docs/ACCORD-TRANSACTIONS.md) — the two demonstrations, their steps and their cost
+7. [Application SQL](docs/APPLICATION-SQL.md) — cassandra-sql over Cassandra, and what it does not hold
+8. [TCO Comparisons](docs/TCO-Comparisons.md) — worksheet and sensitivity analysis
+9. [Hard Questions FAQ](docs/ARCHITECTURE.md#hard-questions-faq) — direct answers
 
 ---
 
@@ -77,12 +79,23 @@ started; nothing is seeded or pre-rendered.
    query outright, which states plainly why the other four exist. Under each result is the
    point-read latency measured while that path was working, so the isolation the two file readers
    claim is shown rather than asserted. Run the paths one at a time to see what each costs; run them
-   all at once to see what they cost each other.
+   all at once to see what they cost each other. Each box fills as its path answers, and the quickest
+   path is asked first, so the first result arrives in milliseconds.
 4. **Explore → Vector search** — semantic search over the assets' text payloads, through Cassandra
    SAI, with each hit's live position fetched by point read. Turn on **Live embedding** and the index
    follows the snippets as they are rewritten, in a loop behind the writes; the panel says how far
    behind it is, and the point read on the Health page says what it cost the request path.
-5. **Settings → Trigger breach scenario** — write a real alert and watch the map, the KPIs and the
+5. **Transactions → Accord** — run a transaction whose condition lives in other partitions. Of the six
+   steps, two are refused, and the row count after each is what proves a refusal changed nothing. A
+   second demonstration grants airspace clearance from a semaphore held in three tables.
+6. **Transactions → SQL** — Postgres-dialect SQL over Cassandra, through GEICO's cassandra-sql. Joins,
+   subqueries and `BEGIN`/`COMMIT`, on tables of its own. Run a preset, then the same statement with
+   `ROLLBACK`, and no row is left behind.
+7. **Transactions → Schema** — both data models, read from the engines that own them. The CQL side
+   marks which tables are Accord tables; the SQL side names what its catalog reports stale.
+8. **Health** — reachability per service, latency per access path, and the query in flight. Cancel a
+   running comparison from here.
+9. **Settings → Trigger breach scenario** — write a real alert and watch the map, the KPIs and the
    alert feed pick it up.
 
 See [docs/MISSION-CONTROL.md](docs/MISSION-CONTROL.md) for what each page queries, how the demo
@@ -210,56 +223,11 @@ Simple configuration to CDC all database writes into a Kafka topic:
 todo
 ```
 
-### Example Accord transactions
+### Example SQL Transactions
 
-Accord runs here, on the **Accord** subtab of the Transactions page and at `/api/transactions`.&emsp;The stack starts with `accord.enabled: true`, and six tables are created with `transactional_mode='full'`: `sessions_open`, `session_seq_applied` and `session_timeline` for the sequence demonstration below, and `zone_occupancy`, `zone_clearance` and `drone_clearance` for the clearance one.&emsp;`events` is deliberately left out, so consensus is never in front of 2,000 writes a second; see [docs/DATA-MODEL.md](docs/DATA-MODEL.md) for why that matters more than it sounds.
+Accord runs here, on the **Accord** subtab of the Transactions page and at `/api/transactions`.&emsp;Six `demo` tables declare `transactional_mode='full'`; `events` does not, so consensus is never in front of 2,000 writes a second.
 
-What the transaction demonstrates is a conditional write whose condition lives in **other partitions**.&emsp;A batch is atomic but not conditional, and a lightweight transaction conditions on a single partition, so neither can refuse a replay.&emsp;This one reads three partitions in three tables and writes two of them, and it applies only if the session is open, this sequence number has not been applied, and its predecessor has:
-
-```sql
-BEGIN TRANSACTION
-  LET session_ok = (SELECT session_id FROM demo.sessions_open WHERE user_id = ? AND session_id = ?);
-  LET already    = (SELECT seq FROM demo.session_seq_applied WHERE user_id = ? AND session_id = ? AND seq = ?);
-  LET prev_ok    = (SELECT seq FROM demo.session_seq_applied WHERE user_id = ? AND session_id = ? AND seq = ?);
-  SELECT session_ok.session_id, already.seq, prev_ok.seq;
-  IF session_ok IS NOT NULL AND already IS NULL AND prev_ok IS NOT NULL THEN
-    INSERT INTO demo.session_timeline (user_id, session_id, seq, event_id, event_time, event_type, payload)
-      VALUES (?, ?, ?, ?, ?, ?, ?);
-    INSERT INTO demo.session_seq_applied (user_id, session_id, seq) VALUES (?, ?, ?);
-  END IF
-COMMIT TRANSACTION;
-```
-
-Every timeuuid and timestamp is bound by the caller.&emsp;`now()` inside a transaction would be evaluated per replica, and Accord requires a deterministic statement.&emsp;The `prev_ok` guard is omitted for `seq=0`, which has no predecessor.
-
-The demo drives six steps against a session of its own and reports the row count after each.&emsp;The two refusals are the point: they are reported as refusals rather than errors, and what proves they changed nothing is the count, not the response.
-
-| Step | Applied | `session_timeline` after it |
-| --- | --- | --- |
-| open the session | yes | 0 rows |
-| apply `seq=0` | yes | 1 row |
-| replay `seq=0` | **no** — already applied | 1 row |
-| attempt `seq=2` out of order | **no** — `seq=1` would leave a gap | 1 row |
-| apply `seq=1` | yes | 2 rows |
-| apply `seq=2` | yes | 3 rows |
-
-An Accord transaction returns no `[applied]` column, only the row its own `SELECT` projects, so the backend reads the guard values back out of that projection and decides.&emsp;That is why the assertion in CI is the row count and not the field.
-
-**Measured**, four runs of 2,000 applied transactions each, on a seven-core laptop with the ingest running at 2,000 events/s.&emsp;The two references write the same row into `session_timeline_plain`, which has the same columns and key and no transactional mode, at the same QUORUM:
-
-| Write | p50 across four runs | max across four runs |
-| --- | --- | --- |
-| the transaction above | 1.66 – 1.87 ms | 6.2 – 26.7 ms |
-| `IF NOT EXISTS` lightweight transaction | 0.83 – 1.00 ms | 4.7 – 32.0 ms |
-| plain `INSERT` | 0.43 – 0.56 ms | 3.2 – 28.4 ms |
-
-At the median the transaction costs about twice a lightweight transaction and about four times a plain insert, for three partition reads and two writes rather than one of each.&emsp;**The maxima say nothing.**&emsp;Every one of the three wanders across an order of magnitude between runs and none separates from the others, so on this stack a single maximum is a measure of what compaction and the sink were doing, not of the write path.&emsp;Four runs is what it took to see that; one run had suggested the transaction's tail was the interesting figure.
-
-The point read stays put while the transactions run.&emsp;Over 52 to 57 reads of one asset during each run, p50 moved from an idle 2.1 – 2.4 ms to 2.6 – 3.2 ms, with no failures; the same runs' worst single read was between 8.2 and 52.7 ms.
-
-#### Airspace clearance: a semaphore across three tables
-
-The second demonstration on that subtab is admission control, which is the harder claim.&emsp;Three more tables opt in — `zone_occupancy`, `zone_clearance` and `drone_clearance` — and a grant reads the zone's remaining slots and the asset's existing clearance, in two partitions of two tables, then writes three:
+The subtab runs two transactions that CQL cannot express, each conditioning a write on rows in **other partitions**: a sequence apply that refuses both a replay and a gap, and the airspace semaphore below, which grants a fixed capacity under contention.
 
 ```sql
 BEGIN TRANSACTION
@@ -274,35 +242,15 @@ BEGIN TRANSACTION
 COMMIT TRANSACTION;
 ```
 
-**It counts down rather than up, and that is Accord's constraint rather than a preference.**&emsp;`IF occ.granted < occ.capacity` compares one `LET` reference to another, which Accord refuses with `SyntaxException … IllegalArgumentException null`; so the invariant is held as a decrementing `remaining` and the counter's agreement with the holder rows is checked afterwards, on every response, as `capacity == remaining + holders`.
+Two partitions of two tables are read and three are written, so a lightweight transaction cannot express it.&emsp;**Measured**: 8, 16 and 32 concurrent askers against a capacity of 2 each granted exactly 2, and a grant's p50 is 1.31 ms.&emsp;One node at `replication_factor: 1` pays no round trip, so read that as a floor.
 
-The demo drives seven steps against the Gardermoen zone, whose capacity the sink seeds at 2:
-
-| Step | Applied | Slots left after it |
-| --- | --- | --- |
-| grant `asset-000000` | yes | 1 of 2, one held |
-| replay that grant | **no** — the asset already holds a clearance | 1 of 2 |
-| grant the same asset a second zone | **no** — one clearance per asset | the royal palace untouched, 3 of 3 |
-| grant `asset-000001` the last slot | yes | 0 of 2, two held |
-| grant `asset-000002` into a full zone | **no** — all 2 slots are held | 0 of 2 |
-| release `asset-000000` | yes | 1 of 2, one held |
-| release it again | **no** — it holds no clearance | 1 of 2 |
-
-`consistent: true` at every step.&emsp;**Measured** over 100 repeats: a grant's p50 is 1.31 ms and its maximum 5.07 ms, a release's 1.24 ms and 4.07 ms.
-
-**The contention run is what a semaphore exists for.**&emsp;Asking concurrently with 8, 16 and 32 askers against a capacity of 2 granted exactly 2 every time, with no errors, and the two winners differed between runs; a lightweight transaction cannot express this, because the count and the holder live in different partitions.
-
-**What this does not measure.**&emsp;One node, `replication_factor: 1`.&emsp;Accord's cost is the wide-area round trip it saves, and a single replica pays no round trip at all, so these figures are a floor and carry nothing about consensus at scale.&emsp;CEP-15 describes its own implementation as "incomplete and not ready for production use".
+See [docs/ACCORD-TRANSACTIONS.md](docs/ACCORD-TRANSACTIONS.md) for both statements, their step tables, the contention run and the CEP-15 caveats.
 
 ### Example Application (OLTP) SQL
 
-GEICO's [cassandra-sql](https://github.com/geico/cassandra-sql) runs here, on the **SQL** subtab of the Transactions page and at `/api/sql-console`.&emsp;It speaks the Postgres wire protocol, plans with Apache Calcite, and stores rows in Cassandra as an ordered key-value encoding of its own.&emsp;An application connects with `psql` or any Postgres driver and gets joins, subqueries, aggregates over non-key columns, and multi-statement transactions.
+GEICO's [cassandra-sql](https://github.com/geico/cassandra-sql) runs here, on the **SQL** subtab of the Transactions page and at `/api/sql-console`.&emsp;It speaks the Postgres wire protocol, plans with Apache Calcite, and stores rows in Cassandra as an ordered key-value encoding of its own, so an application gets joins, subqueries, aggregates over non-key columns and multi-statement transactions.&emsp;It reads its own three keyspaces and not `demo.events`, which is why it is absent from the five-path comparison.
 
-**It reads its own three keyspaces and not `demo.events`, so it is absent from the five-path comparison.**&emsp;A timing beside those five would compare different data.&emsp;Its tables are Accord tables: `DESCRIBE TABLE cassandra_sql.kv_store` reports `transactional_mode = 'full'`, which is what its transactions are built on.
-
-The schema is this repository's own, and it is the fleet's: five tables named `operators`, `drones`, `zones`, `flights` and `flight_legs`, with two ENUM types, a sequence, four foreign keys and two indexes, seeded with five Norwegian operators, eight drones under `asset-NNNNNN` serials and the three real Oslo zones the map draws.&emsp;**No row here is a copy of a `demo` row.**&emsp;These are cassandra-sql's own tables under its own encoding, written by this page and by nothing else; the fleet names are there so the two data models read as one domain, not because anything synchronises them.
-
-The statement below is the one Cassandra has no answer to:
+The statement below writes and updates rows in four tables, and `ROLLBACK` in place of `COMMIT` leaves none of them behind:
 
 ```sql
 BEGIN;
@@ -315,47 +263,11 @@ UPDATE operators SET flight_hours = flight_hours + 1 WHERE operator_id = 1001;
 COMMIT;
 ```
 
-Replace `COMMIT` with `ROLLBACK` and no row is left behind, which is what shows the writes were held rather than applied as they went.&emsp;The Accord section above conditions a write on other partitions; this one discards a whole multi-table write on a client's change of mind, and neither a CQL batch nor a lightweight transaction can do that.
+**Measured** over two warm sweeps: p50 31.0 / 34.0 ms for the transaction, 9.3 / 9.4 ms for the same statement rolled back, and 19.1 / 15.2 ms for a four-join select.&emsp;These are tables of five and eight rows, so read the figures as the cost of planning and of one round trip.
 
-**Measured** on the running stack, five runs of each statement, in three sweeps, against a freshly restarted service.&emsp;The columns are the two warm sweeps' medians, and they are quoted as a pair rather than averaged so that their agreement is visible:
+**It is a proof of concept by its own account**, "not production-ready" at "~40% (core features only)" SQL compliance, and eleven behaviours were measured here.&emsp;An integer bound parameter silently returns no rows, `UNIQUE` is the one declared constraint the engine enforces, arithmetic promotes an integer column to a double, and four further defects are join defects.
 
-| Statement | p50, two warm sweeps | Worst single run, first sweep | Rows |
-| --- | --- | --- | --- |
-| the transaction above | 31.0 / 34.0 ms | 38.3 ms | no result set |
-| the same, rolled back | 9.3 / 9.4 ms | 14.9 ms | 0 |
-| four joins, over legs, flights, operators, drones and zones | 19.1 / 15.2 ms | 21.6 ms | 2 |
-| `GROUP BY airframe` with five aggregates | 7.5 / 7.4 ms | 13.4 ms | 4 |
-| drones above the register's own average range | 12.5 / 12.6 ms | 18.5 ms | 4 |
-| `GROUP BY` with `HAVING`, over a join | 7.8 / 8.7 ms | 11.1 ms | 1 |
-| `EXPLAIN` of the join | 4.0 / 3.3 ms | 240.0 ms | 32 |
-
-These are tables of five and eight rows, so read the warm figures as the cost of planning and of one round trip rather than as a throughput measure.&emsp;The two transactions climb the same two counters on every run, so each run changes the rows the next would read; the timings are unaffected and the row counts are not cumulative, the flight's primary key overwriting rather than duplicating.
-
-**One statement pays a first-use cost, and it is `EXPLAIN`.**&emsp;An earlier sweep on a warm service found no first-sweep effect at all, which is what a service that has already answered every statement shape should show; the sweep above was therefore taken after restarting `accord-sql`, and there `EXPLAIN`'s first run cost 240.0 ms against a 3.3 ms warm median, a factor of 70.&emsp;No other statement's first run separated from its own median, and `EXPLAIN` ran last of the seven, so the six shapes before it had already warmed whatever a process warms.&emsp;A previous edition of this table read the whole first sweep as several times slower and called the cause unestablished; on the drone schema the effect is one statement's, once per service.
-
-**What it does not hold.**&emsp;The project calls itself a proof of concept, "not production-ready", at "~40% (core features only)" SQL compliance, and warns that "Accord doesn't support variable sized keys — Byte Order Partitioner + Accord is poorly tested, journals are not compacting, gets slower over time".&emsp;That last warning does not apply here: this stack runs Murmur3, and no code under `src/main/` reads the partitioner (see below).&emsp;Measured against the service itself on the schema above:
-
-- **A bound parameter of an integer type silently returns no rows.**&emsp;`WHERE operator_id = 1001` written as a literal returns `Oslo Survey AS`; the same statement binding the integer 1001 returns an empty list, and raises nothing.&emsp;Binding the string `"1001"` returns the row, and a text column binds correctly either way, so the comparison is a text one that a typed bind misses.&emsp;The console therefore offers no parameters, because offering one would offer a silent wrong answer.
-- **A duplicate PRIMARY KEY overwrites**, and a **FOREIGN KEY**, **NOT NULL** and an **ENUM** are each accepted and not enforced.&emsp;A flight naming drone 9999 is stored although no such drone exists, and a status declared `flight_status` stores the string `'nonsense'`.&emsp;**UNIQUE is held**, by name: a second seed is refused with "UNIQUE constraint violation: operators_licence_unique on columns (licence)", which is why the page carries a Reset button and why re-running the schema does not restore it.&emsp;So the layer can hold a constraint over Cassandra, and the other three are a gap in the prototype rather than something the storage engine forbids.
-- **Arithmetic promotes an integer column to a double.**&emsp;Drone 2003's battery cycles read back `74` as seeded and `75.0` once the transaction's `SET battery_cycles = battery_cycles + 1` has run.&emsp;It is the arithmetic and not the `UPDATE`: `SET battery_cycles = 74` puts back `74`.&emsp;`DECIMAL` is a double as well, so a `DECIMAL(10,2)` fee of `18.00` reads back `18.0`; money is therefore inexact here.&emsp;Every value arrives as text, and `SELECT 1/0` answers `Infinity` rather than raising.
-- **`COUNT(*)` over an empty table raises** rather than answering zero: "Aggregation failed: Index 0 out of bounds for length 0".&emsp;Inside a `UNION ALL` that failure takes the whole statement with it, so the page counts one table per statement.&emsp;`UNION ALL` itself is sound, contrary to what this file said before.
-
-**Four defects are join defects, and the page reproduces all four beside a control.**&emsp;Single-table arithmetic and single-table `ORDER BY` are both exact, which is what places each of these in the join and not in the expression:
-
-1. **A column name held by two joined tables resolves to one of them for the whole statement**, and an alias does not help.&emsp;`l.distance_km` over `flight_legs` joined to `flights` answers the flight's 21.4 for both legs; dropping the `flights` join answers 6.2 and 15.2.
-2. **`ORDER BY` is ignored on a grouped result.**&emsp;`GROUP BY airframe ORDER BY airframe` and `ORDER BY n DESC` return the same engine-chosen order.&emsp;The same clause on an ungrouped `SELECT` sorts correctly.
-3. **Binary arithmetic across two joined tables returns its right-hand operand and discards the operator.**&emsp;`SUM(l.dwell_min * z.fee_per_min)` answers 45.0 and 18.0, which are the fees; reversing the operands answers the dwells, and `+` behaves as `*` does.&emsp;A flat literal rate in place of the joined column gives the correct product.
-4. **Arithmetic against a literal inside a join projection drops the column.**&emsp;`SELECT l.leg_no, l.dwell_min * 1, z.capacity` returns two columns, `leg_no` and `capacity`, so a client reading by position gets the wrong one.
-
-The presets are written around all four, and each says in its own description what it therefore omits.&emsp;CI prints these and asserts nothing about them, because an assertion on a defect fails on the release that fixes it; it does assert each control, since a control that raised would leave its probe evidencing nothing.
-
-Two more findings, both about resetting the schema.&emsp;**`DROP TYPE` ignores its `IF EXISTS`** and raises "DROP TYPE failed: ENUM type does not exist" exactly as the bare form does, where `DROP TABLE IF EXISTS` and `DROP SEQUENCE IF EXISTS` are silent, and **`DROP INDEX` is unimplemented in both forms**, answering "Unsupported SQL type"; a `DROP TABLE` takes the table's indexes with it, which is how the reset gets rid of them.&emsp;And **the ENUM declarations do not survive a restart of the service although the tables do**: after restarting the container the five `DROP TABLE` statements each took real time and succeeded, so their definitions had persisted into Cassandra, while both `DROP TYPE` statements reported the type missing.&emsp;A caller must therefore judge a reset by its `CREATE` and `INSERT` statements rather than by an error count.
-
-Three notes for anyone reproducing this.&emsp;The Postgres port is `private static final int POSTGRES_PORT = 5432` in the source and is not configurable, whatever the project's README implies.
-
-**One patch is needed to run it in a container at all**, and `accord-sql/patches/` holds the whole diff.&emsp;cassandra-sql opens two Cassandra sessions: the one in `CassandraConfig` reads `cassandra.contact-points`, and the one in `CassandraExecutor` hard-codes `localhost:9042`.&emsp;The second is a `@Component` with an unconditional `@PostConstruct`, so with Cassandra in another container the bean fails and the application never starts.&emsp;The patch gives it the four properties the first session already reads.&emsp;It is worth upstreaming and has not been yet.
-
-**The partitioner needed no patch**, which is the one thing about the requirement worth stating.&emsp;The project's prerequisites demand `ByteOrderedPartitioner` and this stack runs Murmur3: no code under `src/main/` reads the partitioner, the one range scan is legal under Murmur3, and row order is discarded anyway.&emsp;`CassandraConfigTest` does assert that `system_views.settings` reports the byte-ordered partitioner, and that test therefore fails here, which is why the build runs `-x test`.&emsp;Byte-ordered partitioning was measured here and rejected for the rest of the stack: it costs the `spark` and `spark_bulk` paths, both of which refuse it in libraries this repository does not own, and the vector search page, because storage-attached indexes refuse it too.
+See [docs/APPLICATION-SQL.md](docs/APPLICATION-SQL.md) for each measured behaviour, the full timing table, the container patch and the partitioner finding.
 
 ### The schema explorer
 
@@ -365,7 +277,7 @@ The third subtab reads both data models from the engines that own them, at `/api
 
 **On the cassandra-sql side the catalog is partly stale, and the route says which parts.**&emsp;It reads `pg_class WHERE relkind = 'r'` and one `pg_attribute` per `oid`, which are accurate: exactly the five live tables and their 40 columns, in `attnum` order.&emsp;It does not read `pg_tables`, which still lists `customers`, `orders`, `order_items` and `products` long after they were dropped, and it reports that staleness as a warning rather than hiding it.&emsp;Three more gaps come back the same way: there is no `information_schema`, `pg_constraint` is empty, so `UNIQUE` is the one constraint this engine enforces and the one its catalog does not report, and `pg_enum` and `pg_sequence` do not exist although the schema declares two ENUMs and a sequence.&emsp;The route also names the three keyspaces those rows encode into, so a reader can see this is SQL over Cassandra rather than a second database.&emsp;**`pg_attribute` is created on first use**, so a service that has restarted refuses every read of it while `pg_class` still answers, and the route then reports five tables with no columns and a note each; pressing Reset is the `CREATE TABLE` that registers it.
 
-**The route joins in Python**, and the reason is the section above: this engine's joins are four of the defects the page reproduces.
+**The route joins in Python**, and the reason is in [docs/APPLICATION-SQL.md](docs/APPLICATION-SQL.md): four of the defects the SQL subtab reproduces are this engine's joins.
 
 ---
 

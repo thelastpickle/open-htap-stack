@@ -63,6 +63,12 @@ jobs:
           # unpinned dependencies the images download.  Those downloads are the least
           # reliable part of the build, so retry; a retry reuses the layers the
           # previous attempt already committed.
+          #
+          # Which is why a download must be verified in the same RUN that fetches it.  A
+          # fetch that succeeds with the wrong bytes commits its layer, and all three
+          # attempts then reuse it: enwik9.zip failed this way, and the retries could only
+          # repeat the same "unzip: cannot find zipfile directory".  See
+          # ingress/producer/Dockerfile.
           for attempt in 1 2 3; do
             no_cache=""
             if [ "$attempt" = 1 ]; then no_cache="--no-cache"; fi

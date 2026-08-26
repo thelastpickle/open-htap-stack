@@ -90,6 +90,14 @@ class TextSampler:
     def __init__(self, path: str, seed: int = 0, max_scan_back: int = 2048, max_scan_fwd: int = 4096):
         import mmap
         self.path = path
+        # enwik9 is not in the image unless the build asked for it, so name the reason
+        # rather than leaving a bare FileNotFoundError for a supported configuration.
+        if not os.path.exists(path):
+            hint = ""
+            if path.endswith("enwik9"):
+                hint = ("; the image is built without it, so rebuild with "
+                        "--build-arg FETCH_ENWIK9=1 or leave TEXT_FILE at /app/wikipedia.txt")
+            raise FileNotFoundError(f"TEXT_FILE {path} is not in this image{hint}")
         self._fh = open(path, "rb")
         self._mm = mmap.mmap(self._fh.fileno(), 0, access=mmap.ACCESS_READ)
         self._size = self._mm.size()

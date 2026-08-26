@@ -65,6 +65,8 @@ CI is slow (~15 min to a first failure) and podman on the runner has no systemd,
 
 Assertions must be structural, not timing-based, and must hold on a stack that is minutes old with data still arriving. A fresh CI stack has no closed 15-minute window, small tables, and a growing Kafka backlog; assumptions that hold on a laptop that has been ingesting for an hour do not hold there.
 
+**A build-time download must carry a checksum, and a download nothing needs must be opt-in.** CI failed on `ingress/producer/Dockerfile`'s unconditional 322 MB `enwik9.zip` fetch: `wget -qc` wrote a file in 150 ms and exited 0, where the same step had taken 13.7 s and succeeded six hours before, so the host answered that runner with something short and the build died one step later at "unzip: cannot find zipfile directory". Three build attempts could not help, because the bad download sat in a layer the second and third reused, and `-q` had discarded whatever the server said. So the fetch is now one `RUN`, checksummed, and behind `--build-arg FETCH_ENWIK9=1`: `wikipedia.txt` is the default corpus and enwik9 serves only volume testing, which takes 1.0 GB off the image, 280 MB against 1.28 GB. Every other download in every other image already verifies a checksum; keep it that way.
+
 ## Architecture notes that span files
 
 **The demo schema is owned by the sink**, `ingress/consumer/consumer.py:ensure_schema()`, not by any migration. See the `schema` skill before changing it: a rebuild alone will not apply a new key.

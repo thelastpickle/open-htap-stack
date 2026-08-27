@@ -136,7 +136,10 @@ def get_platform_health() -> PlatformHealthResponse:
             print(f"[health] drone count failed: {e}")
 
     return PlatformHealthResponse(
-        services=services, total_drones=total_drones, overall_health_score=score
+        services=services,
+        total_drones=total_drones,
+        overall_health_score=score,
+        container_cli=settings.container_cli,
     )
 
 

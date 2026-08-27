@@ -13,6 +13,10 @@ interface PlatformHealth {
   services: ServiceHealth[]
   overall_health_score: number
   total_drones: number
+  // Which container command this stack runs under, so the commands below name one the
+  // operator has: podman here, docker at the workshop.  The backend reads it from a
+  // setting compose passes; see backend/app/config.py.
+  container_cli?: string
 }
 
 interface Latency {
@@ -381,6 +385,8 @@ export default function HealthPage() {
   const services = data?.services ?? []
   const up = services.filter((s) => s.status === 'up').length
   const healthPercent = Math.round((data?.overall_health_score ?? 0) * 100)
+  // podman until the backend answers, since that is what this repository runs.
+  const cli = data?.container_cli ?? 'podman'
 
   return (
     <section className="space-y-8">
@@ -490,7 +496,7 @@ export default function HealthPage() {
                     </div>
                   )}
                   {container && (
-                    <CopyableCommand command={`podman restart ${container}`} onResult={show} />
+                    <CopyableCommand command={`${cli} restart ${container}`} onResult={show} />
                   )}
                 </div>
               </div>
@@ -517,9 +523,9 @@ export default function HealthPage() {
           </span>
         </p>
         <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2">
-          <CopyableCommand command="podman restart backend" onResult={show} />
+          <CopyableCommand command={`${cli} restart backend`} onResult={show} />
           <CopyableCommand command="scripts/cleanup-data.sh" onResult={show} />
-          <CopyableCommand command="podman exec cassandra nodetool clearsnapshot --all" onResult={show} />
+          <CopyableCommand command={`${cli} exec cassandra nodetool clearsnapshot --all`} onResult={show} />
           <CopyableCommand command="./stop-and-clean-data-and-schema.sh" onResult={show} />
         </div>
         <p className="text-on-surface-variant mt-3 text-[10px] leading-relaxed opacity-70">

@@ -156,6 +156,14 @@ class Settings(BaseSettings):
     demo_max_entities: int = 2000
     demo_outlier_percent: float = 5.0
 
+    # Which container command the dashboard should tell an operator to run.  The Health
+    # page renders a restart and two log commands as copyable text, and this repository
+    # runs podman, so that is the default.  A workshop attendee runs docker, and a
+    # dashboard that hands them a command their machine does not have is the one failure
+    # they cannot diagnose: the product told them the wrong thing.  A setting rather than
+    # a build argument, because the alternative is two frontend images.
+    container_cli: str = "podman"
+
     # API
     allowed_origins: str = "*"
 

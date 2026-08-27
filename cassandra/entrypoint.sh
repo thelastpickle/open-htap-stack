@@ -113,8 +113,11 @@ fi
 # failed the spark_bulk path in CI.
 #
 # The lever taken is max_commit_logs, in ../cassandra/seed-cdc-configs.sh, and 8MiB segments were
-# the alternative: they quarter the heap a reader holds, and they lower the latency floor, since a
-# mutation waits for its segment to complete.  Measured, they cost more than they buy.  The
+# the alternative: they quarter the heap a reader holds, and whether they lower the publication
+# delay is unknown, because a mutation does not wait for its segment to complete.  That claim was
+# here and two write rates refute it: at 400 events a second the delay's p50 was 2.2 to 4.7 s
+# while segments completed 45 to 46 s apart, where at 2,000 it was 8.0 s and 9.3 s apart, so the
+# lower rate gives the *lower* delay.  Measured, 8MiB segments cost more than they buy anyway.  The
 # reader's per-segment cost dominates, so quartering the segment quadruples the queue: it read
 # about 2.7 segments a minute against a node completing about 28, and fell 495 segments behind
 # while the node's oldest-first deletion closed to within 17 segments of the one being read.  A

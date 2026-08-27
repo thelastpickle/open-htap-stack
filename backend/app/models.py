@@ -354,6 +354,9 @@ class PlatformHealthResponse(BaseModel):
     services: List[ServiceHealth] = []
     overall_health_score: float = 0.0
     total_drones: int = 0
+    # The container command this stack is run with, so the page's copyable commands name
+    # one the operator has.  See settings.container_cli.
+    container_cli: str = "podman"
 
 
 # ──────────────────── Work in flight, and stopping it ────────────────────

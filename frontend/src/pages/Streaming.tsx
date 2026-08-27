@@ -437,14 +437,14 @@ export default function StreamingPage() {
           colour={state.colour}
         />
         <Figure
-          label="Publish rate"
+          label="Consume rate"
           value={status ? `${formatCount(Math.round(status.rate_per_sec))}/s` : '—'}
-          note="Records a second, over the last measured interval"
+          note="This page's own tail, between two polls; the topic's end offsets are the publish rate"
         />
         <Figure
           label="Latency p50"
           value={formatMs(status?.latency_p50_ms)}
-          note={`Write to this page; max ${formatMs(status?.latency_max_ms)}`}
+          note={`Write to Kafka append, so it measures the publisher; max ${formatMs(status?.latency_max_ms)}`}
         />
         <Figure
           label="Window"
@@ -486,9 +486,9 @@ export default function StreamingPage() {
               No mutations yet
             </p>
             <p className="text-on-surface-variant mx-auto mt-2 max-w-xl text-xs leading-relaxed">
-              {state.note} A commit log segment reaches <code>cdc_raw</code> only once Cassandra
-              discards it, so the first record on a fresh stack arrives after the first segment
-              fills rather than with the first write.
+              {state.note} The topic does not exist until the Sidecar creates it with its first
+              batch, so a fresh stack publishes nothing for a while: measured at 95.7 s from{' '}
+              <code>up -d</code> to the first record, most of it the node and the Sidecar starting.
             </p>
           </div>
         ) : (

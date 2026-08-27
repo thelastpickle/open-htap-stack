@@ -27,6 +27,38 @@ services:
     volumes:
       - kafka-data:/var/lib/kafka/data
     environment:
+      # log.dirs has to be set, and the default is the trap.  /var/lib/kafka/data is
+      # Confluent's path; apache/kafka defaults log.dirs to /tmp/kafka-logs, so the volume
+      # above held 0 bytes while the topics grew inside the container's own writable layer.
+      # Measured: 84 GB there, which filled the podman machine's 256 GB disk, killed this
+      # container, and left the rest of the stack unable to write.  `podman system df`
+      # reports that layer under Containers rather than Local Volumes, which is what made
+      # it hard to attribute.
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+
+      # Two bounds, because a stack left running needs the time one and a laptop with a
+      # finite disk needs the size one.  Both were read back from the broker:
+      # `kafka-configs.sh --describe --all` reports each as a STATIC_BROKER_CONFIG, so the
+      # KAFKA_ prefix does reach server.properties on this image.  log.retention.ms then
+      # reads null with no synonym, which is not the hours setting failing; Kafka resolves
+      # ms from hours when it uses it.
+      #
+      # retention.bytes is per partition and it bounds the *closed* segments, so the real
+      # ceiling is about twice its face value: log.segment.bytes defaults to the same 1 GiB,
+      # a partition therefore holds one closed segment plus the active one, and the retention
+      # check runs every 5 minutes.  Measured on a running broker with 3 partitions each of
+      # demo-events and cdc-mutations: 1027, 1155 and 1155 MB against 1762, 1870 and 1154 MB,
+      # 8.1 GB in the volume.  Read the ceiling as some 12 GiB and not the 6 GiB the face
+      # values suggest; lowering log.segment.bytes would tighten it, and has not been tried.
+      #
+      # Neither bound binds a short run: at 400 events a second, four hours is some
+      # 5.8M records.  The time bound is well clear of the publisher lag this stack has been
+      # measured to build, which reached about 2.4M records, some 15 minutes at the CDC
+      # publish rate; a record deleted before the sink reads it is data lost, so do not
+      # lower it to minutes.
+      KAFKA_LOG_RETENTION_HOURS: "6"
+      KAFKA_LOG_RETENTION_BYTES: "1073741824"
+
       # KRaft combined mode (single node, no ZooKeeper)
       KAFKA_NODE_ID: "1"
       KAFKA_PROCESS_ROLES: "broker,controller"
@@ -309,7 +341,13 @@ services:
       # 5432 only.  The project also serves /api/sql/health on 8080, which the
       # backend reaches inside the network, but 8080 on the host is the Spark
       # master UI.
-      - "5432:5432"
+      #
+      # Only the host side moves.  The container side is a private static final in
+      # the service's PostgresProtocolServer, whatever its README implies, and the
+      # backend addresses it inside the network; so ACCORD_SQL_PORT is for a host
+      # that already runs Postgres on 5432, which is the collision an attendee is
+      # most likely to have.  The variable was in .env and read by nothing.
+      - "${ACCORD_SQL_PORT:-5432}:5432"
     environment:
       CASSANDRA_CONTACT_POINTS: "cassandra"
       CASSANDRA_PORT: "9042"
@@ -457,6 +495,10 @@ services:
       CASSANDRA_HOST: "cassandra"
       CASSANDRA_PORT: "9042"
       CASSANDRA_KEYSPACE: "${DEMO_KEYSPACE:-demo}"
+      # Which command the Health page's copyable restart and log commands name.  podman
+      # here; a workshop attendee runs docker, and a dashboard handing them a command
+      # their machine does not have is the one failure they cannot diagnose.
+      CONTAINER_CLI: "${CONTAINER_CLI:-podman}"
       # The same two values the sink writes with, so the window the compare page
       # offers names partitions that exist.
       EVENT_BUCKET_MINUTES: "${DEMO_EVENT_BUCKET_MINUTES:-15}"

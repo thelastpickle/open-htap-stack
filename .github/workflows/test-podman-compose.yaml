@@ -2375,7 +2375,11 @@ jobs:
           echo -e "\n=== Containers ==="
           podman ps -a
 
-          for service in kafka cassandra spark presto data-producer data-cassandra-sink; do
+          # backend is here because it runs all five access paths, and the reason a path
+          # answered oddly is usually one line it printed and nothing else did.  A missing
+          # snapshot_bytes cost a dive through the Sidecar's access log to attribute, where
+          # "[db] could not size snapshot ... ReadTimeout" would have named it at once.
+          for service in kafka cassandra spark presto backend data-producer data-cassandra-sink; do
             echo -e "\n=== $service logs ==="
             podman logs "$service" || true
           done

@@ -1,0 +1,19 @@
+# Applies to a build whose context is the repository root.  No service has one today: each
+# names its own subdirectory, and backend/ and spark/ carry their own .dockerignore.  This
+# file is here so that adding a root-context build cannot silently upload the working tree:
+# .git alone is over a gigabyte here, because the Git LFS object store lives inside it.
+.git
+.github
+.claude
+cassandra-data
+frontend/node_modules
+frontend/dist
+docs
+workshop
+**/__pycache__
+*.py[cod]
+.venv
+venv
+.ci-tmp
+.DS_Store
+*.swp

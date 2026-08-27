@@ -157,6 +157,11 @@ const ENGINES: { key: Engine; label: string; role: string; colour: string }[] = 
  * which one is worth naming.  `closed` is false when nothing has closed since ingest
  * began and the window on offer is the one still filling — which changes what the
  * comparison can claim, so the page says so.
+ *
+ * `settled` is the stronger flag and the one the exactness claim rests on: the sink
+ * files an event under the event's own timestamp, so a sink behind the topic keeps
+ * writing into windows the clock has already passed.  A closed window is therefore
+ * not necessarily a finished one, and only a finished one obliges the paths to agree.
  */
 interface EventWindow {
   bucket_minutes: number
@@ -164,6 +169,7 @@ interface EventWindow {
   current: string
   bucket: string
   closed: boolean
+  settled: boolean
 }
 
 /** `0,1,2,…,n-1`, the shards of one window, for an IN list. */
@@ -965,9 +971,11 @@ function ComparePanel() {
                 ' minutes over ' +
                 eventWindow.shards +
                 ' shards' +
-                (eventWindow.closed
-                  ? ' · closed, so the paths that can answer it must agree exactly'
-                  : ' · still filling, because none has closed since ingest began, so the totals will differ by whatever arrives in between')
+                (!eventWindow.closed
+                  ? ' · still filling, because none has closed since ingest began, so the totals will differ by whatever arrives in between'
+                  : eventWindow.settled
+                    ? ' · closed, and the sink has moved past it, so the paths that can answer it must agree exactly'
+                    : ' · closed, but the sink has not been shown to have moved past it, so the totals may differ by whatever it is still writing into it')
               : ''}
           </span>
         </div>
@@ -1189,10 +1197,14 @@ function ComparePanel() {
                 Compare it against the whole history above and
                 the difference is the data model, not the engines. Cassandra still declines the
                 grouping, because a bounded question is not the same as an expressible one. And a
-                window that has closed cannot change, so the paths that can answer it agree on the
-                totals exactly, where the unbounded presets see the table grow underneath them — the
-                line above the statement says whether the window on offer has closed yet, since for
-                the first quarter of an hour after a wipe none has.
+                window the sink has finished writing cannot change, so the paths that can answer it
+                agree on the totals exactly, where the unbounded presets see the table grow
+                underneath them. The clock closing a window is not enough on its own: the sink files
+                each event under the event's own timestamp, so a sink behind the topic keeps
+                inserting into windows the clock has passed, and three paths reading one such window
+                returned 80,810, 81,697 and 82,869 rows. The line above the statement says which
+                state the window on offer is in, since for the first quarter of an hour after a wipe
+                none has closed at all.
               </p>
               <p>
                 Run the whole history twice an hour apart and the second run is slower, because the

@@ -854,19 +854,33 @@ def _holds_events(bucket: str) -> bool:
 
 @router.get("/window")
 def get_window() -> Dict[str, Any]:
-    """Which window the compare page should ask about, and whether it is closed.
+    """Which window the compare page should ask about, and what may be claimed of it.
 
     Built here rather than in the browser because the answer depends on the data:
     the buckets exist only because the sink wrote them, so it is the stack's clock,
     its configuration and its contents that decide which one is worth naming.
 
-    A closed window is the one to prefer, since it cannot change while the paths
-    read it and they therefore agree on the totals exactly.  But a demo minutes old
-    has no closed window that holds anything — the first quarter of an hour after a
-    wipe is all in the window still filling — so this walks back to the newest closed
+    ``closed`` is the clock: the window's minutes are over.  A demo minutes old has
+    no closed window that holds anything, since the first quarter of an hour after a
+    wipe is all in the window still filling, so this walks back to the newest closed
     window with events in it and falls back to the current one when there is none.
-    ``closed`` says which happened, because it is the difference between "these
-    totals must agree" and "they will differ by whatever arrived in between".
+
+    ``settled`` is the writer, and it is the flag that licenses claiming the paths
+    agree exactly.  A closed window can still be growing, because the sink derives
+    ``event_bucket`` from the event's own timestamp rather than from the clock: one
+    running behind the topic keeps inserting into windows the clock has passed.  CI
+    established that with three paths reading one closed window and returning 80,810,
+    81,697 and 82,869 rows, while the sink ran some 645,900 records behind a producer
+    at 1,899/s against its own 712/s.
+
+    The test for it is whether the window now filling holds a row.  The sink consumes
+    each partition in offset order and the producer appends in time order, so a
+    partition that has yielded an event of the current window has no earlier event
+    left on it.  Across twelve partitions that is necessary and not sufficient, since
+    one caught up does not prove twelve are; it does rule out the case measured, a
+    sink a whole window behind on all of them.  It also reads false for the moment
+    after a boundary, before the first event of the new window is written, so treat a
+    false as "not shown to have moved past" rather than as "still writing".
     """
     now = datetime.now(timezone.utc)
     minutes = max(1, settings.event_bucket_minutes)
@@ -880,6 +894,7 @@ def get_window() -> Dict[str, Any]:
                 "current": current,
                 "bucket": candidate,
                 "closed": True,
+                "settled": _holds_events(current),
             }
     return {
         "bucket_minutes": minutes,
@@ -887,6 +902,8 @@ def get_window() -> Dict[str, Any]:
         "current": current,
         "bucket": current,
         "closed": False,
+        # The window still filling is by definition still being written to.
+        "settled": False,
     }
 
 

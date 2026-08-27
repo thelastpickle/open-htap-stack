@@ -553,9 +553,9 @@ jobs:
           # The same grouping as the whole-history preset, restricted to one 15-minute
           # window.  The backend says which window to name and how many shards it
           # spans, because the sink wrote them and the clock has moved since this file
-          # was written.  It also says whether that window has closed: this stack is
-          # minutes old, so every event so far is in the window still filling, and the
-          # equality check below only applies once one has closed.
+          # was written.  It also says whether the sink has finished writing that window,
+          # which is what the equality check below waits for: this stack is minutes old,
+          # so nearly every event so far is in the window still filling.
           #
           # Flush again first, and immediately before asking which window: the reader
           # of the live files can only answer about a window whose rows have reached
@@ -602,15 +602,26 @@ jobs:
               # the window rather than all of it: the producer emits twenty event types
               # round-robin.  It is the paths agreeing on it that is being asserted.
               totals[name] = sum(row[1] for row in result["rows"])
-          # A window that has closed cannot change, so the paths that can read it must
-          # agree exactly.  That is the assertion the unbounded presets cannot make and
-          # what a time-bucketed model buys — but it only holds for a closed window, and
-          # this stack is minutes old, so usually the only window with events in it is
-          # the one still filling.  Asserting equality then would be asserting that no
-          # event arrived mid-comparison, which is false by design.
-          if window["closed"]:
+          # A window the sink has finished writing cannot change, so the paths that can
+          # read it must agree exactly.  That is the assertion the unbounded presets
+          # cannot make and what a time-bucketed model buys.
+          #
+          # The clock closing a window does not finish it, and asserting on "closed" is
+          # what failed here: the sink files each event under the event's own timestamp,
+          # so a sink behind the topic keeps inserting into windows the clock has passed.
+          # Three paths read the closed window 2026-08-27T18:15 and returned 80,810,
+          # 81,697 and 82,869 rows, growing in the order they ran, while the sink sat
+          # some 645,900 records behind a producer running 1,899/s against its own 712/s.
+          # Two runners crossing that same boundary failed together, the second reporting
+          # 83,118, 85,200 and 86,227, which is what places the cause in the model rather
+          # than in one stack.
+          # "settled" is the backend reporting that the sink has moved on.  On a runner
+          # it usually has not, the sink being the slower of the two, so this assertion
+          # usually does not run here; the row-for-row check in the next step is what
+          # holds the paths to the same rows on a stack whose window is still growing.
+          if window["settled"]:
               if len(set(totals.values())) > 1:
-                  problems.append(f"a closed window gave different totals per path: {totals}")
+                  problems.append(f"a settled window gave different totals per path: {totals}")
           # The live-file reader is held to a different rule, and is checked apart from
           # the others for that reason: it sees only what has been flushed, so it may
           # legitimately report fewer events than a path that reads through the
@@ -629,8 +640,11 @@ jobs:
           if problems:
               print("::error::windowed comparison: " + "; ".join(problems))
               sys.exit(1)
-          if window["closed"]:
-              print(f"  window {window['bucket']} has closed, and every path reading through the coordinator agreed to the row: {sorted(set(totals.values()))[0]:,} events across the five types the preset returns")
+          if window["settled"]:
+              print(f"  window {window['bucket']} has closed and the sink has moved past it, and every path reading through the coordinator agreed to the row: {sorted(set(totals.values()))[0]:,} events across the five types the preset returns")
+          elif window["closed"]:
+              print(f"  window {window['bucket']} has closed, but the sink has not been shown to have"
+                    f" moved past it, so the totals are only required to be non-empty: {totals}")
           else:
               print(f"  window {window['bucket']} is still filling — nothing has closed since ingest began —"
                     f" so the totals are only required to be non-empty: {totals}")

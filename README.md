@@ -35,6 +35,7 @@ Comes with a [web drone dashboard demo](docs/MISSION-CONTROL.md) of realtime dat
 8. [CDC to Kafka](docs/CDC-TO-KAFKA.md) — the change stream, its record format and its cost
 9. [TCO Comparisons](docs/TCO-Comparisons.md) — worksheet and sensitivity analysis
 10. [Hard Questions FAQ](docs/ARCHITECTURE.md#hard-questions-faq) — direct answers
+11. [Porting the Python services to Java](docs/JAVA-PORT.md) — the architect's review the rewrite started from
 
 ---
 

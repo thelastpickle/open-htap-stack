@@ -1,0 +1,417 @@
+name: Publish Images
+
+# Publishes every image the stack runs to GitHub Container Registry, so a room full of
+# laptops pulls instead of building, and reaches one registry rather than two.
+#
+# Six are built here, one for each `build:` context in `podman-compose.yml`.
+#
+# Four are mirrored, by `imagetools create` with no build: kafka, apicurio, presto and the
+# Spark base image are upstream images the compose file names, and twenty laptops behind one
+# conference NAT are one address to Docker Hub, whose anonymous pull limit answers
+# `toomanyrequests`; that reads to a participant as nothing at all. Mirroring the Spark base
+# does not make the spark service offline: its compose command still fetches jna and guava
+# from repo1.maven.org at container start, and its jars still resolve through the vendored
+# Ivy tree it mounts.
+#
+# Trunk publishes, so `latest` and `trunk` resolve to the current trunk at all times. A
+# `paths` filter was the obvious way to skip a docs-only push and is not used: on `push`,
+# GitHub applies `paths` to the tag legs as well, so a `v*` tag laid on a commit that
+# touched no build context would publish nothing at all. Ten publishes on a docs push is
+# the cheaper mistake; runners and GHCR are both free for a public repository.
+#
+# Nothing is built or copied until `Test Podman Compose` has succeeded on the same commit,
+# which the `require-ci` job below waits for. A trunk push starts both workflows at once,
+# so that wait is the test workflow's own duration, 22 to 24 minutes on a recent trunk run
+# against its 45-minute job timeout; a `v*` tag on a commit trunk already tested resolves
+# in one API call.
+#
+# The Git LFS objects are cached, because they are the one cost visibility does not cover.
+# `cassandra/dist/apache-cassandra-sidecar-0.5-mck2.tar.gz` is 511 MB and the two
+# `backend/dist` wheels are 20 MB and 21 MB, so the four jobs that need LFS objects would
+# fetch 1,104 MB per run against a repository's 1 GB monthly LFS bandwidth. The cache key is
+# the hash of the pointer files, which name the object by its oid, so a run pays LFS
+# bandwidth only when a vendored artefact changes.
+#
+# No build cache, and the reason is that interaction: a `type=gha` cache shares one 10 GB
+# Actions cache with the LFS objects above, and evicting them puts the 1,104 MB back. If
+# build time becomes the complaint, the lever is a registry cache in GHCR rather than the
+# Actions one.
+#
+# The first successful run creates ten *private* packages, because that is GHCR's
+# default for an organisation. Make each one public once, under the organisation's
+# package settings, or every participant needs a token to pull. Verify it with
+# `docker manifest inspect` after `docker logout ghcr.io`: a pull that works while the
+# runner holds a credential proves nothing about a participant's laptop.
+
+on:
+  push:
+    branches:
+      - trunk
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel a superseded branch run, keep every tag run. Two trunk runs in flight would race
+  # on the `latest` and `trunk` tags, and the older one finishing second would leave both
+  # pointing behind trunk. A tag is published once and has nothing to race with.
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
+
+env:
+  REGISTRY: ghcr.io
+  # Slashes are legal in a GHCR package name, so the ten sit together under one prefix
+  # rather than scattering `backend` and `frontend` among the organisation's packages.
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/open-htap-stack
+
+jobs:
+  require-ci:
+    # Waits for `Test Podman Compose` to succeed on this very commit, and fails the run if
+    # it does not. Every other job needs this one, so a red commit publishes nothing.
+    #
+    # Polling rather than a `workflow_run` trigger, and the tag sets below are the reason:
+    # under `workflow_run` GITHUB_REF is the default branch and GITHUB_SHA its head, so
+    # `type=semver` would produce no release version and `type=sha` would name a commit
+    # this run did not test. Polling keeps the run attached to the ref that started it, at
+    # the price of a runner sitting idle for the test workflow's duration.
+    name: require CI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    permissions:
+      actions: read
+
+    env:
+      TEST_WORKFLOW: Test Podman Compose
+      # 60 minutes covers the test job's own 45-minute timeout plus queueing. Beyond that
+      # there is nothing to wait for: the run either never started or is wedged.
+      WAIT_SECONDS: '3600'
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Wait for the test workflow to succeed on this commit
+        run: |
+          set -euo pipefail
+          deadline=$(( $(date +%s) + WAIT_SECONDS ))
+
+          while :; do
+            # One commit can carry several runs of the same workflow: a push, the daily
+            # schedule, and a `v*` tag laid on it later all report the same head_sha.
+            # A failed poll is retried rather than fatal: `set -e` on a transient 5xx or a
+            # rate limit would fail a publish over something the next poll answers.
+            if ! runs="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&per_page=100" \
+              --jq '.workflow_runs[]
+                    | select(.name == env.TEST_WORKFLOW)
+                    | "\(.status) \(.conclusion) \(.html_url)"')"; then
+              echo "the runs API did not answer; retrying"
+              runs=''
+              answered=false
+            else
+              answered=true
+            fi
+
+            if [ -n "${runs}" ]; then
+              echo "${runs}"
+
+              # Any one success is enough. The runs are of one workflow over one tree, so
+              # a second run disagreeing is flakiness rather than a second verdict.
+              if grep -q '^completed success ' <<< "${runs}"; then
+                echo "${TEST_WORKFLOW} succeeded on ${GITHUB_SHA}"
+                exit 0
+              fi
+
+              # Nothing left running, and none of what finished succeeded.
+              if ! grep -qv '^completed ' <<< "${runs}"; then
+                echo "::error::${TEST_WORKFLOW} concluded without success on ${GITHUB_SHA}"
+                exit 1
+              fi
+            elif [ "${answered}" = true ]; then
+              # A trunk push starts both workflows at once, so this run can reach here
+              # before GitHub has created the other one.
+              echo "no ${TEST_WORKFLOW} run for ${GITHUB_SHA} yet"
+            fi
+
+            if [ "$(date +%s)" -ge "${deadline}" ]; then
+              echo "::error::no successful ${TEST_WORKFLOW} run for ${GITHUB_SHA} within ${WAIT_SECONDS}s"
+              exit 1
+            fi
+            sleep 30
+          done
+
+  build:
+    # One job per service per architecture, each on a runner of that architecture.
+    # Not QEMU: `backend/Dockerfile` picks its cqlite wheel with `uname -m`, so an
+    # emulated build would install the wrong one or none, and `accord-sql` runs a
+    # Gradle build that emulation makes an order of magnitude slower.
+    name: ${{ matrix.service.name }} (${{ matrix.platform.arch }})
+    runs-on: ${{ matrix.platform.runner }}
+    timeout-minutes: 60
+    needs: require-ci
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          # `lfs` names the Git LFS paths this context needs, and empty means none. The
+          # checkout deliberately does not fetch LFS wholesale: four of the six contexts
+          # need none of it, and `lfs: true` would pull all 726 MB in each of twelve jobs.
+          - name: cassandra
+            context: ./cassandra
+            lfs: cassandra/dist/**
+          - name: accord-sql
+            context: ./accord-sql
+            lfs: ''
+          - name: backend
+            context: ./backend
+            lfs: backend/dist/**
+          - name: frontend
+            context: ./frontend
+            lfs: ''
+          - name: data-producer
+            context: ./ingress/producer
+            lfs: ''
+          - name: data-cassandra-sink
+            context: ./ingress/consumer
+            lfs: ''
+        platform:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      # After the checkout, so `.git` exists, and before the pull, so the objects are
+      # already in the local store when `git lfs pull` looks for them. The key is computed
+      # here, from the pointer files, and reused for the save at the end of the job; on the
+      # first run for a new artefact both architecture jobs miss and one loses the save
+      # with a warning, which is a warning and not a failure.
+      - name: Restore the Git LFS objects
+        if: matrix.service.lfs != ''
+        uses: actions/cache@v4
+        with:
+          path: .git/lfs/objects
+          key: lfs-${{ matrix.service.name }}-${{ hashFiles(matrix.service.lfs) }}
+
+      - name: Fetch the Git LFS objects this image copies
+        if: matrix.service.lfs != ''
+        run: git lfs pull --include="${{ matrix.service.lfs }}"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive the labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.service.name }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service.context }}
+          platforms: linux/${{ matrix.platform.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # No tag here. Each architecture pushes an untagged manifest and the merge
+          # job below names them, so neither architecture can win a tag race.
+          outputs: type=image,name=${{ env.IMAGE_PREFIX }}/${{ matrix.service.name }},push-by-digest=true,name-canonical=true,push=true
+          provenance: false
+
+      - name: Export the digest
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          digest='${{ steps.build.outputs.digest }}'
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.service.name }}-${{ matrix.platform.arch }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    # Assembles one multi-architecture manifest per service from the two digests.
+    name: manifest ${{ matrix.service }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: build
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - cassandra
+          - accord-sql
+          - backend
+          - frontend
+          - data-producer
+          - data-cassandra-sink
+
+    steps:
+      - name: Download the digests
+        uses: actions/download-artifact@v4
+        with:
+          pattern: digests-${{ matrix.service }}-*
+          path: ${{ runner.temp }}/digests
+          merge-multiple: true
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive the tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.service }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha,format=long
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - name: Create the manifest
+        run: |
+          set -euo pipefail
+          image='${{ env.IMAGE_PREFIX }}/${{ matrix.service }}'
+
+          # An `if` rather than `[ -n … ] &&`, because a blank line in the tag list would
+          # make the second return 1 and `set -e` would end the job there.
+          args=()
+          while read -r tag; do
+            if [ -n "${tag}" ]; then args+=( --tag "${tag}" ); fi
+          done <<< '${{ steps.meta.outputs.tags }}'
+          [ "${#args[@]}" -gt 0 ] || { echo "::error::metadata-action produced no tag"; exit 1; }
+
+          # One digest per architecture, so anything other than two is a build that
+          # pushed twice or a matrix leg that vanished.
+          sources=()
+          for digest in "${RUNNER_TEMP}"/digests/*; do
+            sources+=( "${image}@sha256:$(basename "${digest}")" )
+          done
+          [ "${#sources[@]}" -eq 2 ] || { echo "::error::expected 2 digests, found ${#sources[@]}"; exit 1; }
+
+          docker buildx imagetools create "${args[@]}" "${sources[@]}"
+
+      - name: Show what was published
+        run: |
+          set -euo pipefail
+          docker buildx imagetools inspect \
+            '${{ env.IMAGE_PREFIX }}/${{ matrix.service }}:${{ steps.meta.outputs.version }}'
+
+  mirror:
+    # Copies the four upstream images the compose file names into the same prefix, so a
+    # participant reaches one registry and no anonymous Docker Hub limit. `imagetools
+    # create` with one source copies the whole manifest list, both architectures, without
+    # building anything and without this runner holding the layers as an image.
+    #
+    # Each mirror carries the same tag set as a built image, so one tag selects all ten:
+    # pinning a release tag would otherwise resolve for six services and fail for four.
+    # The upstream version goes on as a further tag, so what was copied is legible in the
+    # registry rather than only in this file.
+    name: mirror ${{ matrix.image.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    # A mirror copies an upstream manifest and reads none of this tree, so CI cannot fail
+    # on its account. It waits all the same: the ten tags move together, and a run that
+    # mirrored four images while the six builds were blocked would leave `latest` meaning
+    # one thing for kafka and another for the backend.
+    needs: require-ci
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: kafka
+            upstream: apache/kafka:4.3.1
+            version: '4.3.1'
+          - name: apicurio-registry
+            upstream: apicurio/apicurio-registry:3.0.13
+            version: '3.0.13'
+          - name: presto
+            upstream: prestodb/presto:0.298.1
+            version: '0.298.1'
+          # The whole upstream tag as the version, qualifiers included: `3.5.9` alone would
+          # not say which Scala, Java or base this is, and the compose file pins all four.
+          - name: spark
+            upstream: apache/spark:3.5.9-scala2.12-java17-python3-ubuntu
+            version: '3.5.9-scala2.12-java17-python3-ubuntu'
+
+    steps:
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive the tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE_PREFIX }}/${{ matrix.image.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha,format=long
+            type=raw,value=${{ matrix.image.version }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+
+      - name: Copy the manifest list
+        run: |
+          set -euo pipefail
+
+          # An `if` rather than `[ -n … ] &&`, for the same reason as the manifest job: a
+          # blank line in the tag list would make the second return 1 and end the job.
+          args=()
+          while read -r tag; do
+            if [ -n "${tag}" ]; then args+=( --tag "${tag}" ); fi
+          done <<< '${{ steps.meta.outputs.tags }}'
+          [ "${#args[@]}" -gt 0 ] || { echo "::error::metadata-action produced no tag"; exit 1; }
+
+          docker buildx imagetools create "${args[@]}" '${{ matrix.image.upstream }}'
+
+      - name: Show that both architectures came across
+        run: |
+          set -euo pipefail
+          inspected="$(docker buildx imagetools inspect \
+            '${{ env.IMAGE_PREFIX }}/${{ matrix.image.name }}:${{ matrix.image.version }}')"
+          echo "${inspected}"
+          # A single-architecture copy would leave half the room unable to start the stack,
+          # and it is silent until an attendee runs it.
+          for platform in linux/amd64 linux/arm64; do
+            grep -q "${platform}" <<< "${inspected}" \
+              || { echo "::error::${platform} is missing from the mirror"; exit 1; }
+          done

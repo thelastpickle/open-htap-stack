@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.thelastpickle.htap</groupId>
+    <artifactId>htap-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>htap-common</artifactId>
+  <name>Open HTAP stack: shared arithmetic</name>
+  <description>
+    The values the sink, the producer and the backend must spell identically.
+    A sink and a backend disagreeing about event_shard produce queries that match
+    nothing, which is why podman-compose.yml declares the bucket width and shard
+    count once and both services read them.
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        This module may declare no dependency outside test scope, ever, transitively
+        included. Test scope holds junit-jupiter, which reaches neither image. The
+        Python it replaces duplicated this arithmetic between the backend and the
+        sink on purpose, so that the sink's image did not carry the backend's
+        package and a change made for the dashboard could not silently change
+        what the sink writes. A shared module keeps both properties only while it
+        stays a leaf: the moment it wants Jackson, a driver or a config API, the
+        sink is coupled to the backend's dependency tree again and the duplication
+        was protecting something real.
+
+        java.lang.Math, java.time and java.util.zip.CRC32 are enough. The
+        enforcer is here rather than a comment alone because the failure is
+        invisible: an added dependency compiles, passes and only shows up as an
+        image that grew and a coupling nobody chose.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>no-dependency-outside-test-scope</id>
+            <goals><goal>enforce</goal></goals>
+            <configuration>
+              <rules>
+                <!--
+                  Everything is banned and test scope is the one exception, rather than
+                  compile, runtime and provided named as the three to ban: `system` is a
+                  fourth that reaches the compile classpath, and a rule listing scopes
+                  passes it. An allowlist cannot be short of a scope.
+                -->
+                <bannedDependencies>
+                  <searchTransitive>true</searchTransitive>
+                  <excludes>
+                    <exclude>*</exclude>
+                  </excludes>
+                  <includes>
+                    <include>*:*:*:*:test</include>
+                  </includes>
+                </bannedDependencies>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

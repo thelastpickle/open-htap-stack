@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.thelastpickle.htap</groupId>
+  <artifactId>htap-parent</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <name>Open HTAP stack</name>
+  <description>
+    The Java services of the stack: the Mission Control backend, the synthetic
+    producer, the Kafka sink, and the arithmetic all three must agree on.
+  </description>
+
+  <modules>
+    <module>htap-common</module>
+  </modules>
+
+  <properties>
+    <maven.compiler.release>25</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <junit.version>6.1.3</junit.version>
+    <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
+    <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
+    <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
+    <!--
+      The lifecycle plugins a build here actually runs, pinned although nothing configures
+      them: unpinned, their versions come from the super-POM of whichever Maven the runner
+      image ships, so a runner-image bump would change the plugin set without changing the
+      tree. These four are the versions Maven 3.9.16 resolved before the pins, so the pins
+      change nothing today and hold that as the image moves. Deploy and site are left out
+      because no build here reaches either phase.
+    -->
+    <maven-resources-plugin.version>3.4.0</maven-resources-plugin.version>
+    <maven-jar-plugin.version>3.5.0</maven-jar-plugin.version>
+    <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
+    <maven-clean-plugin.version>3.2.0</maven-clean-plugin.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!--
+        6.1.3 rather than a 5.x, because that is what quarkus-bom 3.39.1 manages.
+        The backend module will import that BOM, and two JUnit majors in one
+        reactor is a class of breakage nobody should have to diagnose.
+
+        Read, not assumed: line 10834 of
+        https://repo1.maven.org/maven2/io/quarkus/quarkus-bom/3.39.1/quarkus-bom-3.39.1.pom
+        manages org.junit.jupiter:junit-jupiter-api at 6.1.3. Raising the Quarkus
+        version means reading it again, and the check is one `grep -n
+        junit-jupiter-api` over that file.
+      -->
+      <dependency>
+        <groupId>org.junit</groupId>
+        <artifactId>junit-bom</artifactId>
+        <version>${junit.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>${maven-compiler-plugin.version}</version>
+          <configuration>
+            <compilerArgs>
+              <!--
+                Every warning, and each one fails the build. -Xlint:all on its own
+                leaves them all in place, read once on the console of whoever happened
+                to run the build; the port is about to add a great deal of code, and a
+                warning nobody is obliged to read is a warning nobody reads.
+              -->
+              <arg>-Xlint:all</arg>
+              <arg>-Werror</arg>
+            </compilerArgs>
+          </configuration>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>${maven-surefire-plugin.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-enforcer-plugin</artifactId>
+          <version>${maven-enforcer-plugin.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-resources-plugin</artifactId>
+          <version>${maven-resources-plugin.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-jar-plugin</artifactId>
+          <version>${maven-jar-plugin.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-install-plugin</artifactId>
+          <version>${maven-install-plugin.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-clean-plugin</artifactId>
+          <version>${maven-clean-plugin.version}</version>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>require-jdk-25</id>
+            <goals><goal>enforce</goal></goals>
+            <configuration>
+              <rules>
+                <!--
+                  release=25 lets an older JDK compile for 25 only if it knows the
+                  release, so a JDK 21 fails with "release version 25 not supported"
+                  and a reader has to work out where 25 came from. Stated here, the
+                  requirement fails where it is declared. 25 rather than 22 is what
+                  the tests were measured against: JEP 454 finalised java.lang.foreign
+                  in 22 and the cqlite binding will need it, so 22 is the floor that
+                  API sets, and this bound says which JDK the suite has actually run
+                  on.
+                -->
+                <requireJavaVersion>
+                  <version>[25,)</version>
+                </requireJavaVersion>
+              </rules>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

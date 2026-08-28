@@ -1,0 +1,112 @@
+name: Java unit tests
+
+# The Maven reactor's own suite, which needs no stack: pure arithmetic and geometry that
+# the sink, the producer and the backend must all agree on. Separate from Test Podman
+# Compose because that workflow builds the six images podman-compose.yml declares a
+# `build:` for, brings up all ten of its services and takes 22 to 24 minutes; a wrong
+# shard number should not wait on any of it.
+#
+# No `paths` filter, and the reason is this job's own: a filter is how a suite silently
+# stops running when a path moves. The whole job is a checkout, a JDK and one `mvn
+# verify`, so running it on every push costs less than remembering to widen a filter.
+# publish-images.yaml declines a filter too, on a different argument that does not reach
+# here: on `push` GitHub applies `paths` to the tag legs as well, so a `v*` tag laid on a
+# docs-only commit would publish nothing. That is about a release, not about a suite.
+#
+# No `schedule` either, unlike the compose workflow. That one runs daily because the stack
+# pulls unpinned upstream images; here the dependencies and every plugin the reactor runs
+# are pinned in pom.xml, so nothing upstream of the code changes between two runs of the
+# same tree. Two inputs are the exception and neither is pinnable from the POM: the JDK,
+# where `java-version: '25'` takes the newest Zulu 25 patch the runner offers, and Maven
+# itself, whose version comes from the runner image and with it the super-POM the pinned
+# plugins would otherwise take their versions from.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/trunk' }}
+
+jobs:
+  reactor:
+    # Pinned for the same reason as the compose job: this is here to catch drift in the
+    # repository, not in the runner image.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        # No `lfs: true`: nothing the reactor compiles today lives in LFS. The cqlite
+        # module will, and this line comes back with it.
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          # Zulu 25, which is what the tests were developed and measured against
+          # locally. The parent POM's requireJavaVersion rule fails the build if this
+          # ever resolves to something lower, so a wrong version here is loud.
+          distribution: zulu
+          java-version: '25'
+          cache: maven
+
+      - name: Build and test
+        id: build
+        # -C fails the build on a checksum that does not match the artifact, where
+        # Maven's default is to warn and carry on with the bytes it got. A silent
+        # warning in a 200-line download log is not a thing anyone reads.
+        run: mvn -B -ntp -C verify
+
+      - name: Report what ran
+        # Surefire's own summary scrolls past in a long log, and a suite that silently
+        # ran zero tests is the failure this guards. The count comes from the XML
+        # reports rather than the console, so it is the same number the build acted on.
+        # !cancelled() rather than always(), because the `concurrency` block above cancels a
+        # superseded push on every ref but trunk, and this step's annotation would then say
+        # the suite did not run when what happened is that the run was replaced.
+        if: ${{ !cancelled() }}
+        env:
+          # What decides whether no reports is a failure. A build that failed before
+          # surefire ran has already printed the cause, and a second annotation naming a
+          # different one buries it; a build that succeeded and produced no report is the
+          # silent case this step exists for, so only that one exits non-zero.
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+        run: |
+          # globstar, because `*/target/…` matches one directory level and so would
+          # find nothing the day a module sits under a directory of its own. It
+          # would find nothing loudly, as the zero-report branch below, which is the
+          # only reason this is a correction rather than a defect.
+          shopt -s nullglob globstar
+          reports=(**/target/surefire-reports/TEST-*.xml)
+          if [ ${#reports[@]} -eq 0 ]; then
+            if [ "$BUILD_OUTCOME" = success ]; then
+              echo "::error::the build passed and wrote no surefire report under any module's target/; the suite did not run"
+              exit 1
+            fi
+            echo "no surefire reports, and the build did not succeed ($BUILD_OUTCOME); its own failure is the one to read"
+            exit 0
+          fi
+          python3 - "${reports[@]}" << 'PY'
+          import os, sys, xml.etree.ElementTree as ET
+          total = failures = errors = skipped = 0
+          for path in sys.argv[1:]:
+              suite = ET.parse(path).getroot()
+              total += int(suite.get("tests", 0))
+              failures += int(suite.get("failures", 0))
+              errors += int(suite.get("errors", 0))
+              skipped += int(suite.get("skipped", 0))
+              print(f"  {suite.get('name')}: {suite.get('tests')} tests")
+          print(f"{total} tests in {len(sys.argv) - 1} classes, "
+                f"{failures} failures, {errors} errors, {skipped} skipped")
+          if total == 0:
+              # Gated on the build's outcome for the same reason as the no-report branch
+              # above: a report set parsing to zero tests after a build that already failed
+              # would put this annotation last in the log, over the cause.
+              if os.environ.get("BUILD_OUTCOME") == "success":
+                  print("::error::the suite ran zero tests")
+                  sys.exit(1)
+              print("zero tests, and the build did not succeed; its own failure is the one to read")
+          PY

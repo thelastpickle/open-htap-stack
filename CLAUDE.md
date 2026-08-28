@@ -53,13 +53,15 @@ Frontend: `cd frontend && npm run build` — this runs `tsc -b` first, so it is 
 
 Backend: no test suite. `python3 -m py_compile backend/app/**/*.py` is the syntax check; correctness is verified by running queries against the stack. To run the backend on the host instead of in the network, set `CASSANDRA_TRANSLATE_ADDRESSES_TO=127.0.0.1` — otherwise the driver discovers `172.20.0.10` and cannot reach it.
 
+Java: `mvn -B -ntp -C verify` from the repository root builds and tests the whole reactor; `mvn -B -ntp -C -pl htap-common test` is one module. It needs a JDK 25 on `JAVA_HOME`, which the parent POM's `requireJavaVersion` rule checks rather than leaving to a compiler error, and it compiles with `-Xlint:all -Werror`, so a warning is a build failure. `-C` makes a dependency checksum mismatch fail; Maven's default is to warn and carry on with the bytes it got.
+
 Rust: no Rust is built here.  The cqlite reader's source lives in the cqlite fork; `cd ~/src/mck/cqlite/cqlite-datafusion && cargo test --all && cargo fmt --all --check && cargo clippy --all-targets` — 38 unit tests and a doctest, in about a second.  There are **no** fixture SSTables: every test is over a synthetic schema or a temporary directory, so anything about reading real files is verified by running a query against the stack.  A reader change reaches this stack through `scripts/build-cqlite-wheel.sh`; see `backend/dist/VENDOR.md`.
 
 Ports: dashboard `4000`, backend API and `/docs` `8000`, Cassandra `9042`, Sidecar `9043`, Presto `8088`, Spark master UI `8080`, Spark application UI `4040`, Thrift Server `10000`, Kafka `9092`, cassandra-sql's Postgres wire protocol `5432`.
 
 ## Testing
 
-There is one test suite and it is `.github/workflows/test-podman-compose.yaml`: a single job that builds the stack, waits on each service, then asserts behaviour through the CLIs and the dashboard API. The "Test Mission Control dashboard" step is the largest and covers the five paths.
+There are two suites and they check different things. `.github/workflows/test-podman-compose.yaml` is a single job that builds the stack, waits on each service, then asserts behaviour through the CLIs and the dashboard API; the "Test Mission Control dashboard" step is the largest and covers the five paths. `.github/workflows/java-tests.yaml` runs `mvn -B -ntp -C verify` over the Maven reactor, which is where the ported logic that needs no stack is tested. That is `htap-common`'s three classes today, one per thing the sink and the backend must agree on: `EventPartitions` for the bucket and shard arithmetic, `Geometry` for WKT parsing and polygon distance, `TimeUuids` for minting an event id. Nothing in the reactor starts a container, so it answers in seconds where the compose suite takes ~15 minutes to a first failure.
 
 CI is slow (~15 min to a first failure) and podman on the runner has no systemd, so healthchecks never leave "starting" — the workflow does its own ordering and waiting rather than trusting `depends_on: service_healthy`. **Run a step locally before pushing**; see the `ci-step` skill, which extracts a step from the YAML and runs it verbatim against the running stack.
 

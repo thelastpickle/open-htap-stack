@@ -18,6 +18,15 @@ __pycache__/
 .venv/
 venv/
 
+# Java.  Every module writes to its own target/, so the pattern is unanchored.
+# The rule lands in the commit that adds the reactor, so every amend of an earlier
+# commit is unprotected, and a `git add -A` in one committed nineteen build files
+# three times: into the first commit, into the second after the first was rewritten,
+# and into the third while this branch was being corrected against its reviews.
+# .gitattributes routes *.jar through Git LFS, so the snapshot jar among them went in
+# as an LFS pointer each time.  Amend an earlier commit with named paths, not -A.
+target/
+
 # Editors and OS
 .DS_Store
 .idea/

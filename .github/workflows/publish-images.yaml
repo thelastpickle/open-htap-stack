@@ -157,7 +157,9 @@ jobs:
         service:
           # `lfs` names the Git LFS paths this context needs, and empty means none. The
           # checkout deliberately does not fetch LFS wholesale: four of the six contexts
-          # need none of it, and `lfs: true` would pull all 726 MB in each of twelve jobs.
+          # need none of it, and `lfs: true` would pull all 804.5 MB in each of twelve jobs.
+          # The Java backend image will want `htap-cqlite/dist/**` here, which is 78.3 MB of
+          # that total and is why no context lists it yet.
           - name: cassandra
             context: ./cassandra
             lfs: cassandra/dist/**

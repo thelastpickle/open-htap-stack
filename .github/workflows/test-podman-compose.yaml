@@ -25,7 +25,43 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v7
         with:
-          lfs: true
+          # `lfs: true` here fetched all 804.5 MB of the repository's LFS objects, and this
+          # job opens 72 of the 74.  The two it does not are `htap-cqlite/dist/**`, the Java
+          # binding's libraries, which no service in this stack builds from; on GitHub's free
+          # 1 GB of monthly LFS bandwidth that was 78.3 MB a run for nothing.
+          lfs: false
+
+      # What the images and the mounts read: the Sidecar tarball, the cqlite wheel and the
+      # ivy jars podman-compose.yml bind-mounts into the Spark container.  Measured against
+      # `git lfs ls-files`: these three patterns name 72 objects and exclude exactly the pair
+      # above.  Adding a service that reads an LFS path means adding it here.
+      - name: Fetch the LFS objects this stack is built from
+        run: |
+          PATTERNS="cassandra/dist/**,backend/dist/**,spark/ivy/**"
+          git lfs pull --include="${PATTERNS}"
+
+          # `git lfs pull` exits 0 when a pattern matches nothing, so the pull alone cannot
+          # report the case the comment above warns about: the day one of these paths moves,
+          # the step passes and the failure arrives minutes later as a checksum mismatch in
+          # an image build or an empty bind mount.  So assert both directions.  Every object
+          # the patterns name must now be content rather than a 130-byte pointer, and every
+          # object they do not name must be one of the Java binding's libraries, which is
+          # what fails when a path moves or a service starts reading a fourth one.
+          POINTERS=0
+          while read -r f; do
+            if head -c 64 "$f" | grep -qF "https://git-lfs.github.com/spec/v1"; then
+              echo "::error::$f is still an LFS pointer after the pull"
+              POINTERS=1
+            fi
+          done < <(git lfs ls-files -n -I "${PATTERNS}")
+          [ "$POINTERS" = 0 ] || exit 1
+
+          UNFETCHED=$(git lfs ls-files -n -X "${PATTERNS}" | grep -v '^htap-cqlite/dist/' || true)
+          if [ -n "$UNFETCHED" ]; then
+            echo "::error::these LFS objects are neither pulled here nor the Java binding's:"
+            echo "$UNFETCHED"
+            exit 1
+          fi
 
       - name: Set up Podman and Podman Compose
         run: |

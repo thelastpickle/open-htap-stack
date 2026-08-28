@@ -27,6 +27,12 @@ venv/
 # as an LFS pointer each time.  Amend an earlier commit with named paths, not -A.
 target/
 
+# The cqlite C library is committed gzipped and only gzipped, because Git LFS compresses
+# nothing and 78 MB of it is the pair against 114 MB for one raw library.  The build script
+# deletes the raw file after gzipping it; this is what stops a raw one that arrives another
+# way from being staged, which is a 114 MB LFS object that cannot be taken back out.
+htap-cqlite/dist/*.so
+
 # Editors and OS
 .DS_Store
 .idea/

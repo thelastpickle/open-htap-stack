@@ -16,7 +16,9 @@
 | `…-linux_aarch64.whl` | 20,385,999 bytes | `45aa36a2e9eef0e445ce7d7b59c80090e63459e8b30d0895de31390411ad0066` |
 | `…-linux_x86_64.whl` | 21,429,769 bytes | `a2c6f917adbe27ff663fc432ad7ccf28e9f7d5b053750e80603fb8d928b88486` |
 
-Both are stored in Git LFS; `.gitattributes` tracks `*.whl`, and the CI workflow checks out with `lfs: true`.
+Both are stored in Git LFS; `.gitattributes` tracks `*.whl`, and `test-podman-compose.yaml` checks out with `lfs: false` and then pulls `cassandra/dist/**`, `backend/dist/**` and `spark/ivy/**` by name.  A new LFS path a service reads has to be added to that step, or its image builds against a 130-byte pointer.
+
+The Java port reads the same SSTable files through a C boundary over the same fork, one commit above this one; see [`../../htap-cqlite/dist/VENDOR.md`](../../htap-cqlite/dist/VENDOR.md).  Anything below about the token bound and the `ea` version letter holds for that library too.  The two artefacts differ in where the boundary is, and that file says why it was moved.
 
 ## Why the source is not here
 
@@ -42,7 +44,7 @@ The Rust crates are published at 55.0.0, which carries a newer arrow; the Python
 
 ## What the fork branch carries
 
-Three commits above `2bde26a7`, and the first two are why the wheel cannot come from crates.io.
+Three commits above `2bde26a7` at the time this wheel was built, and the first two are why it cannot come from crates.io.  A fourth, `914e1280`, sits above them now and adds the C boundary the Java port uses; it changes nothing this wheel is built from.
 
 ### `4bc6b913` — apply a query's token bound on a BTI reader, which dropped it
 

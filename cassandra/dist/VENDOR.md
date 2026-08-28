@@ -45,7 +45,7 @@ The repair is in the analytics fork, `69add7b` on `mck/37/trunk`, published as `
 
 ## Why the artifact is committed
 
-A 511 MB binary in the tree is a real cost, and the alternatives were worse.  Building the Sidecar inside the Cassandra image would put a Gradle build, a JDK download and a Maven Central fetch into every stack rebuild, including the scheduled CI build that runs with no layer cache.  Building on the host into an ignored directory would make the repository un-runnable for anyone who has not first cloned two other repositories.  Git LFS keeps the clone honest: `.gitattributes` tracks `*.tar.gz`, and the CI workflow already checks out with `lfs: true`.
+A 511 MB binary in the tree is a real cost, and the alternatives were worse.  Building the Sidecar inside the Cassandra image would put a Gradle build, a JDK download and a Maven Central fetch into every stack rebuild, including the scheduled CI build that runs with no layer cache.  Building on the host into an ignored directory would make the repository un-runnable for anyone who has not first cloned two other repositories.  Git LFS keeps the clone honest: `.gitattributes` tracks `*.tar.gz`, and `test-podman-compose.yaml` pulls `cassandra/dist/**` by name, having stopped checking out with `lfs: true` once a path this stack does not read joined the repository.
 
 ## Rebuilding
 

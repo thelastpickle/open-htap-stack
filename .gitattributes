@@ -1,3 +1,9 @@
 *.jar filter=lfs diff=lfs merge=lfs -text
+# htap-cqlite/dist/ holds only the gzipped form, and what keeps a raw library out is the
+# .gitignore rule beside it, not this line: LFS-tracking one only decides where the 114 MB
+# goes, and into LFS is where it cannot be taken back out of.  This line is for a `.so` that
+# some later service does want committed, so that it is never a blob.
+*.so filter=lfs diff=lfs merge=lfs -text
+*.so.gz filter=lfs diff=lfs merge=lfs -text
 *.tar.gz filter=lfs diff=lfs merge=lfs -text
 *.whl filter=lfs diff=lfs merge=lfs -text

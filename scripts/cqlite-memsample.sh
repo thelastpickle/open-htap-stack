@@ -23,6 +23,9 @@ mkdir -p .ci-tmp
 LABEL="$1"
 SQL="$2"
 INTERVAL="${3:-5}"
+# The same default as podman-compose.yml's backend mapping, and the same
+# variable, so a stack brought up with BACKEND_PORT set is still reachable here.
+BACKEND_PORT="${BACKEND_PORT:-8000}"
 
 field() { podman exec backend awk -v k="$1" '$1==k{print $2}' /sys/fs/cgroup/memory.stat; }
 gb() { python3 -c "import sys; print(f'{int(sys.argv[1])/1e9:.2f}')" "$1"; }
@@ -31,7 +34,7 @@ jq -n --arg sql "$SQL" \
   '{sql: $sql, limit: 5, engines: ["cqlite"], mode: "sequential", reuse_snapshot: false}' \
   > ".ci-tmp/mem-$LABEL-req.json"
 
-curl -s -m 3600 -X POST localhost:8000/api/query/benchmark \
+curl -s -m 3600 -X POST "localhost:$BACKEND_PORT/api/query/benchmark" \
   -H 'Content-Type: application/json' -d "@.ci-tmp/mem-$LABEL-req.json" \
   > ".ci-tmp/mem-$LABEL.json" &
 CURL=$!

@@ -464,7 +464,14 @@ services:
       cassandra:
         condition: service_healthy
     ports:
-      - "8000:8000"   # REST API and OpenAPI docs at /docs
+      # REST API and OpenAPI docs at /docs.  Only the host side moves: the
+      # frontend's nginx proxies /api to http://backend:8000, the producer reads
+      # its settings from http://backend:8000/api/settings/demo, and the
+      # healthcheck curls localhost:8000 inside the container, so all three are
+      # indifferent to this.  What does follow the variable is a host-side
+      # caller: scripts/cqlite-memsample.sh, and `npm run dev`, whose Vite proxy
+      # already has VITE_API_PROXY for the same purpose.
+      - "${BACKEND_PORT:-8000}:8000"
     volumes:
       # The cqlite path parses these files in place, with no snapshot and no
       # Sidecar.  Read-only because a reader must never be able to corrupt the

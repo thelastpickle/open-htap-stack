@@ -36,3 +36,7 @@ podman-compose.local.yml
 cassandra_debug.log
 backend.log
 settings-cache/
+
+# Where roborev writes a diff too large for a review prompt, which is snapshot_dir
+# in .roborev.toml.  Named in both places so the two cannot disagree.
+/.roborev-snapshot/

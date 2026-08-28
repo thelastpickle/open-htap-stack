@@ -1,0 +1,76 @@
+# roborev settings for this repository.  Only the keys this repository needs are
+# set; `roborev init` writes a template of every key, which is noise here.  Global
+# defaults in ~/.roborev/config.toml supply the rest.
+
+# The same agent the global default_agent names today.  Repeated here on purpose,
+# and the key differs by scope: a repository sets `agent`, the global file sets
+# `default_agent`, so this pins the repository against a later change to that
+# default rather than following it.
+agent = 'claude-code'
+review_reasoning = 'high'
+
+# Where an oversized diff is written, so the tool and .gitignore name one path.
+# The default is this same directory, but stating it is what makes the ignore rule
+# checkable without provoking an oversized review to find out.  The path resolves
+# against the repository root and not against whatever directory a review was
+# started from, which is why .gitignore anchors its rule with a leading slash;
+# roborev refuses any other base, and says so in five validation messages of its
+# own, among them "snapshot_dir must be a relative path under the repo root" and
+# "snapshot_dir must stay under the repo root".
+snapshot_dir = '.roborev-snapshot/'
+
+# This replaces the global guidelines rather than adding to them, so anything the
+# user later sets globally does not reach a review of this repository.  Measured,
+# because the two behaviours are indistinguishable while the global value is empty:
+# setting the global key to a marker string and then reading `roborev config get
+# review_guidelines` here returned this text alone, with no occurrence of the
+# marker.  The global file was restored.  The first version of this comment also
+# quoted the returned size, which went stale the next time the block was edited and
+# was then a figure describing an earlier text; the marker's absence is the whole
+# of the evidence, so the size is gone.
+review_guidelines = '''
+This repository is a runnable demonstration that one Cassandra dataset serves both
+transactional and analytical work.  Its credibility rests on every number in it
+being a measurement from a real run, so flag these before anything stylistic.
+
+Evidence:
+- A claim in prose, a comment or UI copy that no run produced.  A figure with no
+  rate, no row count and no statement of what the stack was doing is not a
+  measurement.  Commit messages are outside this, because every review prompt
+  roborev builds says "Do not review the commit message"; the rule holds for them
+  too and CLAUDE.md is where it is read, before one is written.
+- A number carried over from an earlier arrangement after the thing it measured
+  changed.
+- A stated limitation removed rather than re-measured.  The awkward numbers are
+  the point.
+- An assertion or guard that cannot fail, so it evidences nothing.  An `||` after
+  a pipeline is the recurring case: it tests the last command's status, not the
+  first's, so `ls missing | head` exits 0.  This one fires in shell scripts and in
+  workflow steps rather than in test code.
+
+Tests:
+- A Java class added with no test for it in the same commit.  Deferring tests to a
+  follow-up commit is not acceptable here.
+- A test that asserts a timing rather than a structure.  CI runs against a stack
+  minutes old with small tables and a growing Kafka backlog, so an assumption that
+  holds on a laptop after an hour of ingest does not hold there.
+
+Compatibility:
+- A changed route path, JSON field name, HTTP status or error shape.  The React
+  frontend calls every endpoint by a bare path string and reads errors from a
+  `detail` field, so any of these breaks a page with no compile error anywhere.
+- A demo lock changed from non-blocking to queueing.  Every one of them returns
+  409 rather than waiting, because a queued caller would be timed while the run
+  ahead of it finished.
+
+Supply chain:
+- A build-time download with no checksum, or a download nothing needs that is not
+  behind an opt-in build argument.
+
+Language, in prose and in comments:
+- Apply the "Language rules" and "House writing style" sections of CLAUDE.md, which
+  hold the whole of the standard: the four taboo stems, the rhetorical patterns, the
+  vocabulary list, em-dashes, sentence spacing and hard wrapping.  They are not
+  restated here, because two copies diverge and then the repository has two
+  standards.  Read them from the file rather than from memory.
+'''

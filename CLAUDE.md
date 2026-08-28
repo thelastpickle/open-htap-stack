@@ -161,7 +161,7 @@ Editing `podman-compose.yml`: the Spark `command` is one single-quoted shell str
 - **Avoid Rule of threes:** "Innovative, transformative, and groundbreaking." &emsp;Avoid defaulting to triplets when listing anything: adjectives, benefits, takeaways.
 - **Avoid False ranges:** "From intimate gatherings to global movements." &emsp;"From technical expertise to creative vision." &emsp;The structure implies a spectrum, but there's no actual spectrum. &emsp;These are just loosely related things dressed up to sound comprehensive.
 - **Avoid Compulsive summaries:** "Overall," "In conclusion". I.e, the tendency to restate what was just said, even when the passage is too short to require it. &emsp;Human writers sometimes do this in long documents, its use should be rare.
-- **Use terminology accurately.**  Follow the ASD-STE100 Standard for Technical Documentation.  All terminology terms that has appeared with a specific technical meaning and context should thereafter not be borrowed. Avoid AI typical vocabulary: delve, intricate, tapestry, pivotal, underscore, landscape, foster, testament, enhance, crucial.
+- **Use terminology accurately.**  Follow the ASD-STE100 Standard for Technical Documentation.  All terminology terms that has appeared with a specific technical meaning and context should thereafter not be borrowed. Avoid AI typical vocabulary: delve, intricate, tapestry, pivotal, underscore, landscape, foster, testament, enhance, crucial, seamless, robust, holistic, leverage as a verb, unlock, empower.
 
 ## House writing style
 

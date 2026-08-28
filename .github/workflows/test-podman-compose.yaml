@@ -615,10 +615,21 @@ jobs:
           # Two runners crossing that same boundary failed together, the second reporting
           # 83,118, 85,200 and 86,227, which is what places the cause in the model rather
           # than in one stack.
-          # "settled" is the backend reporting that the sink has moved on.  On a runner
-          # it usually has not, the sink being the slower of the two, so this assertion
-          # usually does not run here; the row-for-row check in the next step is what
-          # holds the paths to the same rows on a stack whose window is still growing.
+          # "settled" is the backend reporting that the sink has consumed, on every
+          # partition, past the end of this window; it reads the sink's own committed
+          # offsets from Kafka.  An earlier version asked Cassandra whether the window
+          # now filling held a row, which is one partition's progress standing for the
+          # topic's twelve, and it read true on a runner whose closed window then grew
+          # by 3,673 rows over the next 70 s.  Measured on a laptop stack four minutes
+          # old, the sink's lag ran from 560 records on one partition to 29,718 on
+          # another, and that window read settled.
+          # On a runner the sink is the slower of the two, so
+          # this assertion usually does not run here; the row-for-row check in the next
+          # step is what holds the paths to the same rows on a growing window.
+          #
+          # The flag is read before the comparison and used after it, which is sound
+          # because it only ever moves one way: a sink that has consumed past a window's
+          # end can never write into that window again.
           if window["settled"]:
               if len(set(totals.values())) > 1:
                   problems.append(f"a settled window gave different totals per path: {totals}")
@@ -643,8 +654,9 @@ jobs:
           if window["settled"]:
               print(f"  window {window['bucket']} has closed and the sink has moved past it, and every path reading through the coordinator agreed to the row: {sorted(set(totals.values()))[0]:,} events across the five types the preset returns")
           elif window["closed"]:
-              print(f"  window {window['bucket']} has closed, but the sink has not been shown to have"
-                    f" moved past it, so the totals are only required to be non-empty: {totals}")
+              print(f"  window {window['bucket']} has closed, but the sink is still writing into it,"
+                    f" so the totals are only required to be non-empty: {totals}")
+              print(f"  the sink's position: {window.get('settled_detail')}")
           else:
               print(f"  window {window['bucket']} is still filling — nothing has closed since ingest began —"
                     f" so the totals are only required to be non-empty: {totals}")

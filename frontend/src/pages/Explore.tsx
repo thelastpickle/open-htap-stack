@@ -162,6 +162,10 @@ const ENGINES: { key: Engine; label: string; role: string; colour: string }[] = 
  * files an event under the event's own timestamp, so a sink behind the topic keeps
  * writing into windows the clock has already passed.  A closed window is therefore
  * not necessarily a finished one, and only a finished one obliges the paths to agree.
+ * The backend reads it from the sink's committed Kafka offsets, and
+ * `settled_detail` is the evidence: which partition is short, and by how many
+ * records.  Shown rather than kept, because a window that will not settle is the
+ * thing an attendee is most likely to ask about.
  */
 interface EventWindow {
   bucket_minutes: number
@@ -170,6 +174,7 @@ interface EventWindow {
   bucket: string
   closed: boolean
   settled: boolean
+  settled_detail?: string
 }
 
 /** `0,1,2,…,n-1`, the shards of one window, for an IN list. */
@@ -975,7 +980,8 @@ function ComparePanel() {
                   ? ' · still filling, because none has closed since ingest began, so the totals will differ by whatever arrives in between'
                   : eventWindow.settled
                     ? ' · closed, and the sink has moved past it, so the paths that can answer it must agree exactly'
-                    : ' · closed, but the sink has not been shown to have moved past it, so the totals may differ by whatever it is still writing into it')
+                    : ' · closed, but the sink is still writing into it, so the totals may differ by whatever arrives: ' +
+                      (eventWindow.settled_detail ?? 'its position is unknown'))
               : ''}
           </span>
         </div>

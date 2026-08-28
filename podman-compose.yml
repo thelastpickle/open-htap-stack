@@ -516,6 +516,13 @@ services:
       SPARK_THRIFT_PORT: "10000"
       KAFKA_HOST: "kafka"
       KAFKA_PORT: "19092"
+      # The same topic and group the sink above is given.  The window's settled flag
+      # reads the sink's committed offsets under this group: whether a closed window
+      # can still grow is a question about the writer's position, and Kafka is where
+      # that position is recorded.  Naming a different group would read no offsets
+      # and report every window unsettled.
+      EVENTS_TOPIC: "${DEMO_TOPIC:-demo-events}"
+      SINK_GROUP_ID: "${DEMO_GROUP_ID:-demo-cassandra-sink}"
       # The CDC topic the Sidecar publishes to, and the registry that holds the Avro schema
       # each record names.  The Streaming page tails the topic through the backend; the buffer
       # is bounded, so a page nobody is watching costs one consumer and a fixed slice of

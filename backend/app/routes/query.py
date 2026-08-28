@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from kafka import KafkaAdminClient, KafkaConsumer, TopicPartition
 
 from app.config import settings
 from app.db import spark_ui
@@ -811,8 +812,8 @@ def _render_hint(prompt: str) -> str:
 # ──────────────────── Which window to ask about ────────────────────
 
 
-def _bucket_for(moment: datetime) -> str:
-    """The event bucket a moment falls in, spelled as the sink spells it.
+def _bucket_start(moment: datetime) -> datetime:
+    """The instant the event bucket holding this moment began.
 
     The same arithmetic as event_bucket() in ingress/consumer/consumer.py, which is
     the writer.  Two copies because they are separate services; the two values it
@@ -820,8 +821,12 @@ def _bucket_for(moment: datetime) -> str:
     """
     minutes = max(1, settings.event_bucket_minutes)
     utc = moment.astimezone(timezone.utc)
-    floored = utc.replace(minute=(utc.minute // minutes) * minutes, second=0, microsecond=0)
-    return floored.strftime("%Y-%m-%dT%H:%M")
+    return utc.replace(minute=(utc.minute // minutes) * minutes, second=0, microsecond=0)
+
+
+def _bucket_for(moment: datetime) -> str:
+    """The event bucket a moment falls in, spelled as the sink spells it."""
+    return _bucket_start(moment).strftime("%Y-%m-%dT%H:%M")
 
 
 # How far back to look for a window holding events.  Bounded because the search is
@@ -829,6 +834,136 @@ def _bucket_for(moment: datetime) -> str:
 # more than a demo that has been ingesting needs, and a demo that has not been
 # ingesting for two hours has nothing to show anyway.
 WINDOW_LOOKBACK = 8
+
+
+# Seconds added to a window's end before asking Kafka which record first lies past
+# it.  Kafka's record timestamp is the producer's clock at send(); the sink's
+# event_time comes from the event_id timeuuid the same producer stamped a moment
+# earlier in the same loop.  One clock, so the two differ only by the construction
+# of one batch: BATCH_PERIOD_MS, 50 by default, plus the Python send loop over it.
+# A minute is far more margin than that needs, and it costs a fifteen-minute window
+# nothing; the flag turns true a minute later than it strictly could.
+SETTLED_MARGIN_S = 60
+
+
+def _sink_consumed_past(window_end: datetime) -> Tuple[bool, str]:
+    """Whether the sink has consumed every record that could still land in a window.
+
+    The question the compare page needs answered is about the writer, and Kafka is
+    where the writer's progress is recorded.  For each partition of the events
+    topic, take the offset of the first record stamped at or after the window's end
+    and compare it with the offset the sink has committed: the sink commits a batch
+    only once every write in it is acknowledged, so a committed offset at or past
+    that one means nothing left to consume on that partition can be filed under
+    this window.  A partition holding no record that late is settled when the sink
+    has consumed all of it.
+
+    Every partition must pass.  Testing one is what failed twice on CI: the sink
+    polls with max_poll_records across the topic's twelve partitions, so under a
+    backlog their positions diverge widely and one reaching the current window says
+    nothing about the other eleven.  Measured on a stack four minutes old, the lag
+    ran from 560 records on partition 0 to 29,718 on partition 5, 130,173 in all,
+    and the old test called that window settled.
+
+    Returns the verdict and the evidence for it, so a page and a CI failure can each
+    say which partition was short and by how many records.  Kafka not answering is
+    reported as not settled, since an unknown writer position licenses no claim.
+
+    It costs about 520 ms, and all of it is opening the two clients: measured at 109
+    ms for the consumer and 310 ms for the admin client, against 1 ms for the
+    partition list and 3 ms for the offsets.  Two ways of lowering it were measured
+    and neither taken.  Pinning ``api_version`` takes the consumer to 0 ms but moves
+    the cost into its first call and leaves the admin client at 213 ms, and it would
+    have this module assert a broker version the sink and the CDC tail do not.
+    Holding both clients open across calls would remove the whole 520 ms, and it
+    would have the backend keep two Kafka connections alive for a page that may never
+    be opened, plus a reconnect path of their own after a broker restart.  The
+    endpoint is read once per page load, beside comparisons that take 8 to 40 s.
+    """
+    bootstrap = f"{settings.kafka_host}:{settings.kafka_port}"
+    timeout_ms = int(max(1.0, settings.kafka_offsets_timeout_s) * 1000)
+    target = window_end + timedelta(seconds=SETTLED_MARGIN_S)
+    target_ms = int(target.timestamp() * 1000)
+    topic = settings.events_topic
+    consumer = None
+    admin = None
+    try:
+        consumer = KafkaConsumer(
+            bootstrap_servers=bootstrap,
+            enable_auto_commit=False,
+            request_timeout_ms=timeout_ms,
+            api_version_auto_timeout_ms=timeout_ms,
+            consumer_timeout_ms=timeout_ms,
+        )
+        partitions = consumer.partitions_for_topic(topic)
+        if not partitions:
+            return False, f"Kafka reported no partitions for {topic}"
+        assignment = [TopicPartition(topic, p) for p in sorted(partitions)]
+        # The committed offsets are read through the admin client rather than through
+        # a KafkaConsumer carrying the sink's group_id, because the admin client has
+        # no way to *write* one.  A consumer in that group could commit over the
+        # sink's own progress, which would rewind or skip live ingest; nothing here
+        # should be one keystroke away from that.
+        admin = KafkaAdminClient(
+            bootstrap_servers=bootstrap,
+            request_timeout_ms=timeout_ms,
+            api_version_auto_timeout_ms=timeout_ms,
+        )
+        committed = {
+            topic_partition: meta.offset
+            for topic_partition, meta in
+            admin.list_consumer_group_offsets(settings.sink_group_id).items()
+        }
+        first_beyond = consumer.offsets_for_times({tp: target_ms for tp in assignment})
+        ends = consumer.end_offsets(assignment)
+        short: Dict[int, int] = {}
+        for topic_partition in assignment:
+            at = committed.get(topic_partition)
+            if at is None or at < 0:
+                return False, (
+                    f"the sink has committed no offset on partition"
+                    f" {topic_partition.partition} of {topic}"
+                )
+            beyond = first_beyond.get(topic_partition)
+            if beyond is not None:
+                needed = beyond.offset
+            elif topic_partition in ends:
+                # No record stamped that late on this partition, so everything on it
+                # belongs to this window or an earlier one and all of it must be read.
+                needed = ends[topic_partition]
+            else:
+                # Defaulting to the committed offset here would pass the partition on
+                # the strength of an answer Kafka did not give.
+                return False, (
+                    f"Kafka reported no end offset for partition"
+                    f" {topic_partition.partition} of {topic}"
+                )
+            if at < needed:
+                short[topic_partition.partition] = needed - at
+        if short:
+            # Summarised rather than listed: twelve partitions each named is a wall of
+            # text in a CI failure, and the count, the total and the worst one are what
+            # a reader does anything with.
+            worst = max(short.items(), key=lambda item: item[1])
+            return False, (
+                f"the sink has not consumed past {target:%Y-%m-%dT%H:%M:%S}Z:"
+                f" {len(short)} of {len(assignment)} partitions are short,"
+                f" {sum(short.values()):,} records in all,"
+                f" the worst partition {worst[0]} by {worst[1]:,}"
+            )
+        return True, (
+            f"all {len(assignment)} partitions of {topic} are consumed past"
+            f" {target:%Y-%m-%dT%H:%M:%S}Z"
+        )
+    except Exception as e:
+        return False, f"Kafka could not say where the sink is: {e}"
+    finally:
+        for client in (consumer, admin):
+            if client is not None:
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
 
 def _holds_events(bucket: str) -> bool:
@@ -873,28 +1008,29 @@ def get_window() -> Dict[str, Any]:
     81,697 and 82,869 rows, while the sink ran some 645,900 records behind a producer
     at 1,899/s against its own 712/s.
 
-    The test for it is whether the window now filling holds a row.  The sink consumes
-    each partition in offset order and the producer appends in time order, so a
-    partition that has yielded an event of the current window has no earlier event
-    left on it.  Across twelve partitions that is necessary and not sufficient, since
-    one caught up does not prove twelve are; it does rule out the case measured, a
-    sink a whole window behind on all of them.  It also reads false for the moment
-    after a boundary, before the first event of the new window is written, so treat a
-    false as "not shown to have moved past" rather than as "still writing".
+    It comes from Kafka, where the sink's progress is recorded; see
+    ``_sink_consumed_past``.  Asking Cassandra instead, whether the window now
+    filling holds a row, is what failed: that is one partition's progress standing
+    for the topic's twelve, and a run reported settled while the closed window grew
+    by 3,673 rows over the next 70 s.  ``settled_detail`` carries the evidence either way, so a
+    false says which partition is short and by how many records.
     """
     now = datetime.now(timezone.utc)
     minutes = max(1, settings.event_bucket_minutes)
     current = _bucket_for(now)
     for step in range(1, WINDOW_LOOKBACK + 1):
-        candidate = _bucket_for(now - timedelta(minutes=minutes * step))
+        start = _bucket_start(now - timedelta(minutes=minutes * step))
+        candidate = start.strftime("%Y-%m-%dT%H:%M")
         if _holds_events(candidate):
+            settled, detail = _sink_consumed_past(start + timedelta(minutes=minutes))
             return {
                 "bucket_minutes": minutes,
                 "shards": settings.event_shards,
                 "current": current,
                 "bucket": candidate,
                 "closed": True,
-                "settled": _holds_events(current),
+                "settled": settled,
+                "settled_detail": detail,
             }
     return {
         "bucket_minutes": minutes,
@@ -904,6 +1040,7 @@ def get_window() -> Dict[str, Any]:
         "closed": False,
         # The window still filling is by definition still being written to.
         "settled": False,
+        "settled_detail": "the window is still filling",
     }
 
 

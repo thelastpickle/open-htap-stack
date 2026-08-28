@@ -98,6 +98,18 @@ class Settings(BaseSettings):
     kafka_host: str = "kafka"
     kafka_port: int = 19092
 
+    # The topic the producer writes and the group the sink consumes it under.  The
+    # window's "settled" flag reads both: whether the sink has consumed everything
+    # that could still land in a closed window is a question only Kafka can answer,
+    # since the sink files each event under the event's own timestamp.  Declared in
+    # compose beside the sink that uses them, so the two cannot name different ones.
+    events_topic: str = "demo-events"
+    sink_group_id: str = "demo-cassandra-sink"
+    # How long the settled check waits on Kafka before it gives up and reports that
+    # it could not tell.  The compare page blocks on this while it loads, so a
+    # broker that has stopped answering must cost a second and not a page.
+    kafka_offsets_timeout_s: float = 5.0
+
     # Change Data Capture.  The Sidecar publishes demo.drone_latest_status mutations
     # to this topic as Confluent-framed Avro, and the Streaming page shows what
     # arrives.  The registry is Apicurio's Confluent-compatible endpoint, and the

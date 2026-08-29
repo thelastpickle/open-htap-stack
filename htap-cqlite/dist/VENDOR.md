@@ -10,6 +10,7 @@ tl;dr: `libcqlite_datafusion_c-0.1.0-linux-*.so.gz` is the `cqlite` access path 
 - [Why it is twice the size of the Python reader's library](#why-it-is-twice-the-size-of-the-python-readers-library)
 - [What a caller needs at run time](#what-a-caller-needs-at-run-time)
 - [What the fork commits carry](#what-the-fork-commits-carry)
+- [DataFusion is not modified](#datafusion-is-not-modified)
 - [Rebuilding](#rebuilding)
 
 `914e1280` is the fourth of four commits above `2bde26a7`, and the three below it are why this library cannot come from crates.io: the provider crates, the `ea` version letter Cassandra 6.0 writes, and a query's token bound on a BTI reader. &emsp;Each is described below. &emsp;A Python wheel over the same three commits served this access path until the backend was ported; its own file went with it, and what it recorded about those three commits is here.
@@ -112,7 +113,7 @@ The library is `libcqlite_datafusion_c` because two crates in one workspace cann
 
 ### `914e1280`'s three commits below it
 
-### `4bc6b913` — apply a query's token bound on a BTI reader, which dropped it
+#### `4bc6b913` — apply a query's token bound on a BTI reader, which dropped it
 
 `ScanTokenBound::contains` was called in one place, the Summary-guided walk in `summary_scan/mod.rs`, and `stream_all_partitions_for_query` gates that walk on `bti_partitions_db.is_none()`.  Every BTI generation, `da` or `ea`, has a `Partitions.db`, so such a reader falls through to the full-ring routes, whose signatures take no bound.  The commit adds `TokenGate` at the one emit both of those routes pass through, above every format branch.
 
@@ -131,7 +132,7 @@ Peak resident without the gate reached 716 MB at seven slices, because every pro
 
 The gate does **not** make splitting pay, and the same table says why: solving N·P + R over the 2- and 4-slice points gives 71% of a slice repeated and 29% divided, in both sweeps.  Each slice re-reads and re-parses the whole data section, because this route has no partition-index seek.  The fit is a fit: it predicts 67.8 s at seven slices against the 73.01 s measured, and over-predicts the one-slice point, so read the 71% as the order of the repeated share rather than as a constant.  That is why `cqlite_splits` stays at 1.
 
-### `f8854103` — accept BTI `ea`, the Cassandra 6.0 version letter
+#### `f8854103` — accept BTI `ea`, the Cassandra 6.0 version letter
 
 Five sites, no upstream line removed.  `version_gate/bti.rs` admits `ea` beside `da`; `format_detector.rs` maps `ea` to `V5x` and lists it in `is_supported`; `reader/header_helpers.rs` adds it to the version letters generation extraction recognises.
 
@@ -148,7 +149,7 @@ Every feature gate agrees letter for letter.  `BtiVersion` in 6.0-alpha2 overrid
 
 The `header_helpers.rs` site was missed while the reader was vendored here, and the stack worked anyway by luck: the numeric fallback returns the first number in the filename inside `0 < n < 1_000_000`, so a generation of a million or more would have read as 0.  Two things hid it.  The vendored copy's `[dev-dependencies]` were removed, so no inline test module compiled; and the existing `test_extract_generation_from_path` never calls the function under test, asserting only that a temporary file exists.  The fork has both fixed, and its `version_gate/mod.rs` test that asserted `ea` must be rejected is repaired to use `fa` for the next letter Cassandra writes.
 
-### `8f179fd1` — the provider crates the boundary sits on
+#### `8f179fd1` — the provider crates the boundary sits on
 
 `cqlite-datafusion/` in the fork, a nested workspace listed in the root `exclude` so no root `cargo build` pulls DataFusion 54 in for members that do not need it.  38 unit tests and a doctest, in about a second.  `[patch.crates-io]` points `cqlite-core` at `../cqlite-core`, and a `[patch]` binds only the workspace declaring it, so `crates/cqlite-datafusion` still names plain `cqlite-core = "0.16.1"` and stays publishable.
 

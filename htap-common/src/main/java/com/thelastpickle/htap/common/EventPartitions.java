@@ -83,14 +83,14 @@ public final class EventPartitions {
      * deriving it from the asset would put every row of a one-asset demo in a single
      * partition.
      *
-     * <p>Hashed rather than taken modulo the id itself, so that the spread does not depend
-     * on which id source wrote the row, and two sources write them. Measured over 4,096 ids
-     * of each on driver 3.30.1 in the running backend: {@code uuid.uuid1()}, which the Python
-     * sink minted itself and again for an event whose id would not parse, draws one node for
-     * the host and puts all 4,096 rows in one shard
-     * under {@code id % 16}; the producer's {@code uuid_from_time} draws a node per call,
-     * 4,096 distinct ones, and spreads over all 16 either way. Under crc32 both sources
-     * spread over all 16, which is the property the schema needs and the reason to hash.
+     * <p>Hashed rather than taken modulo the id itself, so that the spread does not depend on
+     * which id source wrote the row, and two sources write them. Measured over 4,096 ids of each
+     * on driver 3.30.1 in the running backend: {@code uuid.uuid1()}, which the Python sink minted
+     * itself and again for an event whose id would not parse, draws one node for the host and puts
+     * all 4,096 rows in one shard under {@code id % 16}; the producer's {@code uuid_from_time}
+     * draws a node per call, 4,096 distinct ones, and spreads over all 16 either way. Under crc32
+     * both sources spread over all 16, which is the property the schema needs and the reason to
+     * hash.
      *
      * <p>{@link CRC32} is zlib's crc32, which is what the Python sink used, so a stack
      * whose rows were written by either one is readable by either one.

@@ -31,7 +31,8 @@ name: Publish Images
 # The Git LFS objects are cached, because they are the one cost visibility does not cover.
 # `cassandra/dist/apache-cassandra-sidecar-0.5-mck2.tar.gz` is 511 MB and the two
 # `htap-cqlite/dist` libraries are 38 MB and 40 MB, so the four jobs that need LFS objects
-# would fetch 1,120 MB per run against a repository's 1 GB monthly LFS bandwidth. The cache key is the hash of the pointer files, which name the object
+# would fetch 1,178 MB per run against a repository's 1 GB monthly LFS bandwidth: cassandra
+# and backend on two architectures each, 589 MB apiece. The cache key is the hash of the pointer files, which name the object
 # by its oid, so a run pays LFS bandwidth only when a vendored artefact changes.
 #
 # No build cache, and the reason is that interaction: a `type=gha` cache shares one 10 GB
@@ -160,7 +161,7 @@ jobs:
         service:
           # `lfs` names the Git LFS paths this context needs, and empty means none. The
           # checkout deliberately does not fetch LFS wholesale: four of the six contexts
-          # need none of it, and `lfs: true` would pull all 805.4 MB in each of twelve jobs.
+          # need none of it, and `lfs: true` would pull all 762.7 MB in each of twelve jobs.
           #
           # `dockerfile` is named for every service although three of them hold it at the root
           # of their own context: the reactor modules do not, and one form for all six keeps

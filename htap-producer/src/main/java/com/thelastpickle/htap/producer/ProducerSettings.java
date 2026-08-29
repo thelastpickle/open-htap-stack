@@ -117,7 +117,7 @@ record ProducerSettings(
      * accepts any codec name it knows and a wrong one is a start-up failure that says so.
      */
     private static String acks(UnaryOperator<String> env) {
-        String asked = text(env, "KAFKA_ACKS", "0");
+        String asked = text(env, "KAFKA_ACKS", "0").strip();
         return switch (asked) {
             case "all", "-1", "0", "1" -> asked;
             default -> "0";

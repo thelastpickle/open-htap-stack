@@ -45,28 +45,47 @@ class ProducerTest {
         assertEquals(10, settings.eventsPerBatch(2000));
         assertEquals(10, sent.keys.size());
         assertEquals(List.of("demo-events"), sent.topics.stream().distinct().toList());
+        // The record's own body, because a loop that passed the two the other way round would satisfy
+        // every count above: the JSON would arrive as the key and the key as the body.
+        String body = sent.values.getFirst();
+        assertTrue(body.contains("\"entity_id\": \"" + sent.keys.getFirst() + "\"")
+                        || body.contains("\"entity_id\":\"" + sent.keys.getFirst() + "\""),
+                body);
+        assertTrue(body.contains("event_id"), body);
     }
 
     /**
-     * A paused fleet sends nothing, and the loop keeps turning.
+     * A paused fleet sends nothing, where the same fleet unpaused sends a batch.
      *
      * <p>Pause is a control on the Settings page, so it is worth pinning: nothing else asserts it,
-     * and a pause that sent anyway would look like a producer ignoring the dashboard.  Ended by
-     * interrupting from another thread, because a paused turn never reaches the sender.
+     * and a pause that sent anyway would look like a producer ignoring the dashboard.  Driven as two
+     * turns rather than as a wait, because a thread that has not been scheduled yet records the same
+     * empty list as a correctly paused one, and an assertion that cannot fail is worth nothing.
      */
     @Test
     @Timeout(20)
-    void aPausedFleetSendsNothing() throws InterruptedException {
+    void aPausedFleetSendsNothingWhereAnUnpausedOneSends() {
         LiveSettings live = new LiveSettings(2000, 10, 5.0);
+        assertEquals(10, oneTurn(live).keys.size(), "the control turn sent nothing");
+
         live.apply(reported(OptionalInt.empty(), OptionalInt.empty(), Optional.of(true)));
-        Recorder sent = new Recorder();
 
-        Thread loop = Thread.ofPlatform().start(() -> run(sent, live));
-        Thread.sleep(60);
+        // A paused turn never reaches the sender, so the loop is ended from another thread.
+        Recorder paused = new Recorder();
+        Thread loop = Thread.ofPlatform().start(() -> run(paused, live));
+        try {
+            Thread.sleep(60);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         loop.interrupt();
-        loop.join();
+        try {
+            loop.join();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
 
-        assertEquals(List.of(), sent.keys, "a paused fleet sent records");
+        assertEquals(List.of(), paused.keys, "a paused fleet sent records");
     }
 
     /** The rate is re-read every turn, so a change from the dashboard sizes the next batch. */
@@ -93,6 +112,28 @@ class ProducerTest {
         Recorder sent = oneTurn(new LiveSettings(2000, 10, 5.0));
 
         assertEquals(10, sent.keys.stream().distinct().count(), sent.keys.toString());
+    }
+
+    /**
+     * A fleet the dashboard shrinks is the fleet reported on, not the one the process started with.
+     *
+     * <p>The other cases all run at a live size equal to the startup size, so a loop that read
+     * {@code settings.nEntities()} instead of the snapshot would pass every one of them.  Four assets
+     * and a batch of ten is what separates the two: the batch covers the fleet twice and no fifth
+     * asset appears.
+     */
+    @Test
+    @Timeout(20)
+    void aFleetTheDashboardShrinksIsTheFleetReportedOn() {
+        LiveSettings live = new LiveSettings(2000, 10, 5.0);
+        live.apply(reported(OptionalInt.empty(), OptionalInt.of(4), Optional.empty()));
+
+        Recorder sent = oneTurn(live);
+
+        assertEquals(10, sent.keys.size(), "the batch is still sized from the rate");
+        assertEquals(
+                List.of("asset-000000", "asset-000001", "asset-000002", "asset-000003"),
+                sent.keys.stream().distinct().sorted().toList());
     }
 
     /** A fleet larger than the ceiling is capped rather than indexing past the fleet's arrays. */
@@ -137,6 +178,7 @@ class ProducerTest {
 
         private final List<String> topics = new ArrayList<>();
         private final List<String> keys = new ArrayList<>();
+        private final List<String> values = new ArrayList<>();
 
         private boolean stopAfterTheFirstSend;
 
@@ -144,6 +186,7 @@ class ProducerTest {
         public synchronized void send(String topic, byte[] key, byte[] value) {
             topics.add(topic);
             keys.add(new String(key, StandardCharsets.UTF_8));
+            values.add(new String(value, StandardCharsets.UTF_8));
             if (stopAfterTheFirstSend) {
                 // The loop finishes the batch it is in and then answers this in its sleep, so a
                 // turn is exactly one batch however long the batch is.

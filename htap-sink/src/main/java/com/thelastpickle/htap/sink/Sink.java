@@ -40,10 +40,11 @@ import org.apache.kafka.common.serialization.ByteArrayDeserializer;
  * dependency injection, and neither is missed at this size: {@link SinkSettings} is one record read
  * once, and the wiring below is a dozen lines in one place.
  *
- * <p><b>The offsets are committed after the batch is acknowledged, never before.</b> Every write is
- * an idempotent upsert, so a redelivered batch costs duplicate work and no duplicate data; a commit
- * before the acknowledgement would silently drop a failed batch, because the offsets would already
- * say it had been handled.
+ * <p><b>The offsets are committed after the batch is acknowledged, never before.</b> The three event
+ * writes are idempotent upserts, so a redelivered batch costs duplicate work and no duplicate row; a
+ * commit before the acknowledgement would silently drop a failed batch, because the offsets would
+ * already say it had been handled. Two writes a replay does duplicate, and {@link CassandraWrites}
+ * names them: the counter adds, and an alert carries an id minted per call.
  */
 public final class Sink {
 
@@ -69,6 +70,7 @@ public final class Sink {
     private final ObjectMapper json;
     private final Supplier<Instant> clock;
     private final LongSupplier nanoClock;
+    private final Duration retryDelay;
 
     private long totalInserted;
     private long windowInserted;
@@ -83,6 +85,20 @@ public final class Sink {
             Alerts alerts,
             Supplier<Instant> clock,
             LongSupplier nanoClock) {
+        this(settings, writes, alerts, clock, nanoClock, RETRY_DELAY);
+    }
+
+    /**
+     * @param retryDelay how long the loop waits after a batch it could not write, which a test
+     *     shortens so that driving the failure path costs no wall clock
+     */
+    Sink(
+            SinkSettings settings,
+            Writes writes,
+            Alerts alerts,
+            Supplier<Instant> clock,
+            LongSupplier nanoClock,
+            Duration retryDelay) {
         this.settings = settings;
         this.writes = writes;
         this.alerts = alerts;
@@ -90,6 +106,7 @@ public final class Sink {
         this.json = new ObjectMapper();
         this.clock = clock;
         this.nanoClock = nanoClock;
+        this.retryDelay = retryDelay;
     }
 
     public static void main(String[] args) {
@@ -140,6 +157,15 @@ public final class Sink {
                 // never written: the events would be lost with nothing saying so.  The Python
                 // had that defect; the guarantee this class documents needs the seek.
                 rewind(consumer, polled);
+                // And a wait, because the seek makes the replay real: a node that stays down
+                // would otherwise have this loop poll, derive, fail and seek as fast as the
+                // broker answers a re-fetch.  The same delay the connect loop below uses.
+                //
+                // What a replay costs, beyond the work: the tracker's previous reading for each
+                // asset becomes the replayed batch's own, so the attempt that finally succeeds
+                // derives no movement for the assets in it, and the alerting is re-scored with
+                // only its own 60-second cooldown to suppress a duplicate row.
+                sleep(retryDelay);
                 continue;
             }
 

@@ -523,7 +523,8 @@ services:
     # CQLITE_KEY_CHUNK is one.
     #
     # The retired Python backend, through the wheel, is where the limit comes from:
-    # before it existed the kernel killed uvicorn three times in one afternoon at
+    # before it existed the kernel killed that backend's uvicorn three times in one
+    # afternoon at
     # 11.1 to 11.9 GB anonymous resident, once mid-query, so that query never
     # answered.  The cause was cqlite's seek path holding every row of the partitions
     # a query named, which is the same reader this image loads.  It has been hit
@@ -670,7 +671,8 @@ services:
       # ran.  A scheme, host and port with no trailing slash and no path: proxy_pass
       # needs the scheme, and the template says what a path in this variable does to
       # the request URI.  An unset value is a start-up refusal, also for the reason
-      # the template gives.  A service named here has to be running: this ordering
-      # depends on `backend` alone.
+      # the template gives.  A name here that nothing is running answers each /api call
+      # with a 502 rather than failing at start, because the resolver above is asked per
+      # request; `depends_on` covers `backend` and nothing else.
       API_UPSTREAM: "${DASHBOARD_API_UPSTREAM:-http://backend:8000}"
     restart: unless-stopped

@@ -208,9 +208,11 @@ public class TransactionsResource {
      * identifier does not.
      *
      * <p>A divergence from FastAPI, which declared {@code ge=0, le=4000} and answered 422. The line
-     * this backend draws is the sentence above: a value with an obvious nearest answer is clamped and
-     * one without is refused, which is why {@code seq} and {@code session_id} are refused a few lines
-     * up while this is not.
+     * this backend draws is what the value is for: a knob that sizes a measurement is clamped, and a
+     * value that is part of the request's own data is refused. That is why {@code seq} and
+     * {@code session_id} are refused a few lines up although a negative {@code seq} has an obvious
+     * nearest answer: it names a step of the caller's own sequence, and guessing which step was meant
+     * would write a row the caller did not ask for.
      */
     private static int repeats(int asked) {
         return Math.clamp(asked, 0, MAX_REPEATS);

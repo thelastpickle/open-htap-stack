@@ -1,9 +1,8 @@
 # Applies to a build whose context is the repository root, which the three reactor services are:
-# each builds one leaf of the Maven reactor and needs the parent pom beside it.  cassandra,
-# accord-sql and frontend name their own subdirectory, and spark carries its own .dockerignore.
-# Without this file a
-# root-context build uploads the working tree: .git alone is over a gigabyte here, because the
-# Git LFS object store lives inside it.
+# each builds one leaf of the Maven reactor and needs the parent pom beside it.  The other three
+# built services, cassandra, accord-sql and frontend, name their own subdirectory, so this is the
+# only ignore file in the repository.  Without it a root-context build uploads the working tree:
+# .git alone is over a gigabyte here, because the Git LFS object store lives inside it.
 .git
 # A host build's output.  Copying it in would put a jar built against the host's JDK beside the
 # one the image builds, and Maven would then decide which of the two to use.
@@ -12,11 +11,10 @@ target
 .github
 .claude
 # Another service's vendored artefacts.  This build needs htap-cqlite/dist, which is 78.3 MB and
-# is copied in the Dockerfile; the other three are 511.2 MB of Sidecar tarball, 41.8 MB of Python
-# wheels and 176.5 MB of Ivy jars, of which 126.6 MB is one cassandra-analytics-core.  A
-# root-context build uploads all three unless they are named here, and spark/'s own .dockerignore
-# does not apply, because that one governs a build whose context is spark/.
-backend/dist
+# is copied in the Dockerfile; the other two are 511.2 MB of Sidecar tarball and 176.5 MB of Ivy
+# jars, of which 126.6 MB is one cassandra-analytics-core.  A root-context build uploads both
+# unless they are named here.  The Python reader's 41.8 MB of wheels used to be a third and are
+# deleted with that backend.
 cassandra/dist
 spark/ivy
 cassandra-data

@@ -20,13 +20,25 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 public final class Producer {
 
     /**
-     * How long {@code flush} is given at shutdown before the process leaves anyway.
+     * How long the hook waits for the send loop to return.
      *
      * <p>Reached through the shutdown hook below, which is what makes it more than a constant:
      * {@code podman stop} sends SIGTERM and runs no {@code finally}, so without the hook the client
      * would drop whatever it had buffered.
      */
-    private static final Duration FLUSH_TIMEOUT = Duration.ofSeconds(10);
+    private static final Duration LOOP_TIMEOUT = Duration.ofSeconds(2);
+
+    /**
+     * How long {@code close} is given to flush what the client still holds.
+     *
+     * <p>Under podman's own stop grace of ten seconds, and deliberately well under: a flush that
+     * took its whole bound would be SIGKILLed mid-way and the wait would have bought nothing.  The
+     * interrupt is cleared before the close for a reason measured on kafka-clients 4.2.1: with the
+     * flag set, {@code close} joins its I/O thread, is interrupted at once, force-closes and aborts
+     * every batch the accumulator holds, then rethrows.  So the flag has to go first or the flush
+     * cannot happen at all.
+     */
+    private static final Duration FLUSH_TIMEOUT = Duration.ofSeconds(3);
 
     /** Where a batch goes. An interface so the loop can be driven without a broker. */
     interface Sender {
@@ -59,7 +71,7 @@ public final class Producer {
         Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().unstarted(() -> {
             sending.interrupt();
             try {
-                sending.join(FLUSH_TIMEOUT);
+                sending.join(LOOP_TIMEOUT);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
@@ -81,13 +93,17 @@ public final class Producer {
             log.say(String.format(
                     Locale.ROOT,
                     "started bootstrap=%s topic=%s eps=%d n_entities=%d max_entities=%d"
-                            + " batch_period_ms=%d",
+                            + " batch_period_ms=%d acks=%s compression=%s",
                     settings.bootstrap(),
                     settings.topic(),
                     settings.eventsPerSec(),
                     settings.nEntities(),
                     settings.maxEntities(),
-                    settings.batchPeriod().toMillis()));
+                    settings.batchPeriod().toMillis(),
+                    // Both on the line because acks is coerced to one of four values: an unusable
+                    // KAFKA_ACKS runs at 0, and the line is where that becomes visible.
+                    settings.acks(),
+                    settings.compression()));
             KafkaProducer<byte[], byte[]> client = producer;
             sendUntilInterrupted(
                     (topic, key, value) -> client.send(new ProducerRecord<>(topic, key, value)),
@@ -97,6 +113,10 @@ public final class Producer {
         } catch (IOException e) {
             log.say("could not open the text corpus: " + e.getMessage());
         } finally {
+            // Cleared before the close, not after: the loop re-asserts the flag on its way out, and
+            // a close made with it set force-closes instead of flushing.  Nothing below this line
+            // waits on an interrupt, so clearing it costs nothing.
+            Thread.interrupted();
             poller.stop();
             if (producer != null) {
                 producer.close(FLUSH_TIMEOUT);

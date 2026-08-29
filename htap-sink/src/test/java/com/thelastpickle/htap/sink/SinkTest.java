@@ -29,9 +29,10 @@ import org.junit.jupiter.api.Test;
  * The batch: what one poll writes, and when the offsets may move.
  *
  * <p>The commit rule is the whole of the sink's delivery guarantee, and it is decidable here: every
- * write of the batch is awaited before the offsets are committed, so a failed batch is redelivered.
- * Every write is an idempotent upsert, which is what makes the redelivery cost duplicate work and no
- * duplicate data.
+ * write of the batch is awaited before the offsets are committed, and the consumer is seeked back, so
+ * a failed batch is redelivered. The three event writes are idempotent upserts, which is what makes
+ * that redelivery cost duplicate work and no duplicate row; the counter and the alert are the two it
+ * does duplicate, as {@code CassandraWrites} records.
  */
 class SinkTest {
 
@@ -41,7 +42,9 @@ class SinkTest {
     private final AtomicLong nanos = new AtomicLong();
     private final RecordingWrites writes = new RecordingWrites();
     private final Alerts alerts = new Alerts(nanos::get);
-    private final Sink sink = new Sink(SETTINGS, writes, alerts, () -> NOW, nanos::get);
+    /** A millisecond of retry delay rather than the loop's five seconds, so a failure costs no wait. */
+    private final Sink sink = new Sink(
+            SETTINGS, writes, alerts, () -> NOW, nanos::get, Duration.ofMillis(1));
 
     /** Every record of the batch is written, and the batch says how many it held. */
     @Test
@@ -211,27 +214,34 @@ class SinkTest {
     /**
      * A cadence set as a fraction of a second is the cadence honoured.
      *
-     * <p>The loop compared whole seconds, so {@code ZONE_RELOAD_S=0.5} truncated to zero and read
-     * the zone table on every batch, and {@code 1.5} rounded down to one.  Driven through the zone
-     * reload because that one is observable: the read reaches the session fake.
+     * <p>The loop compared whole seconds, so {@code ZONE_RELOAD_S=1.5} truncated to one and reloaded
+     * the zone table half a second early.  Driven through the zone reload because that one is
+     * observable: the read reaches the session fake.
+     *
+     * <p>The clock advances from the scripted poll, and the turn that separates the two forms is the
+     * one at 1.2 s: a comparison against {@code toSeconds()} reloads there, one against
+     * {@code toMillis()} does not.  Without that advance this test passed under both, which is what
+     * a review found.
      */
     @Test
     void aFractionalReloadCadenceIsHonoured() {
-        SinkSettings half = SinkSettings.from(Map.of("ZONE_RELOAD_S", "1.5")::get);
-        Sink reloading = new Sink(half, writes, alerts, () -> NOW, nanos::get);
+        SinkSettings oneAndAHalf = SinkSettings.from(Map.of("ZONE_RELOAD_S", "1.5")::get);
+        Sink reloading = new Sink(oneAndAHalf, writes, alerts, () -> NOW, nanos::get);
         SinkFakes.RecordingSession node = new SinkFakes.RecordingSession();
         List<String> calls = new ArrayList<>();
         Consumer<byte[], byte[]> broker = scripted(calls, new ArrayDeque<>(List.of(
-                records(SinkFakes.event(id(), "asset-1", 59.91, 10.75, 120.0)),
-                records(SinkFakes.event(id(), "asset-2", 59.92, 10.76, 130.0)),
-                records(SinkFakes.event(id(), "asset-3", 59.93, 10.77, 140.0)))));
+                        records(SinkFakes.event(id(), "asset-1", 59.91, 10.75, 120.0)),
+                        records(SinkFakes.event(id(), "asset-2", 59.92, 10.76, 130.0)))),
+                // 1.2 s a poll: the first turn lands inside the window on either form, the second
+                // at 2.4 s is past 1.5 s and reloads on both.  What separates them is the first.
+                Duration.ofMillis(1200));
 
-        // One second on, which a truncating comparison would have read as a second reload due.
-        nanos.set(1_000_000_000L);
         assertThrows(StopTheLoop.class,
                 () -> reloading.run(broker, new Zones(node.session(), "demo")));
 
-        assertEquals(1, node.executed.size(), "the zones were read again inside the window");
+        // Three reads on the truncating form, which would have reloaded at 1.2 s: one at loop
+        // entry, one at 1.2 s and one at 2.4 s.
+        assertEquals(2, node.executed.size(), "the zones were read again inside the window");
     }
 
     private static String id() {
@@ -264,6 +274,22 @@ class SinkTest {
      */
     private static Consumer<byte[], byte[]> scripted(
             List<String> calls, Deque<ConsumerRecords<byte[], byte[]>> answers) {
+        return scripted(calls, answers, Duration.ZERO, null);
+    }
+
+    /** The same, with the clock advanced by {@code perPoll} on every poll. */
+    private Consumer<byte[], byte[]> scripted(
+            List<String> calls,
+            Deque<ConsumerRecords<byte[], byte[]>> answers,
+            Duration perPoll) {
+        return scripted(calls, answers, perPoll, nanos);
+    }
+
+    private static Consumer<byte[], byte[]> scripted(
+            List<String> calls,
+            Deque<ConsumerRecords<byte[], byte[]>> answers,
+            Duration perPoll,
+            AtomicLong clock) {
         @SuppressWarnings("unchecked")
         Consumer<byte[], byte[]> consumer = (Consumer<byte[], byte[]>) Proxy.newProxyInstance(
                 SinkTest.class.getClassLoader(),
@@ -272,6 +298,9 @@ class SinkTest {
                     calls.add(method.getName());
                     return switch (method.getName()) {
                         case "poll" -> {
+                            if (clock != null) {
+                                clock.addAndGet(perPoll.toNanos());
+                            }
                             ConsumerRecords<byte[], byte[]> next = answers.poll();
                             if (next == null) {
                                 throw new StopTheLoop();

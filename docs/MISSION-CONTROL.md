@@ -90,7 +90,7 @@ The paths are not interchangeable, and that is the point:
 | **Presto** | CQL request path | Full SQL, distributed scan. Shares the coordinator with live ingest. |
 | **Spark SQL** | CQL request path, via spark-cassandra-connector | Full SQL in a Spark job. Per-partition work, and anything you want to hand to Spark afterwards. |
 | **Spark bulk reader** | SSTable files, via the Sidecar | Reads a coordinated snapshot straight off disk. Never enters the request path, so a scan here cannot contend with transactional latency. |
-| **cqlite** | The live SSTable files, in the dashboard's own process | Full SQL, planned and executed by DataFusion over files cqlite parses in place. No snapshot, no Sidecar and no second container: the parse and the SQL run inside the dashboard, so the whole path is one library it loads. Answers as of the last flush. |
+| **cqlite** | The live SSTable files, in the dashboard's own process | Full SQL, planned and executed by DataFusion over files cqlite parses in place. No snapshot, no Sidecar and no second service: the parse and the SQL run inside the dashboard, so the whole path is one library it loads. Answers as of the last flush. |
 
 Four presets of deliberately different size, because one query cannot show what five paths are for, and because the size of the question is most of the answer:
 

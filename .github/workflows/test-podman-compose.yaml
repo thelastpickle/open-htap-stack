@@ -57,7 +57,9 @@ jobs:
           done < <(git lfs ls-files -n -I "${PATTERNS}")
           [ "$POINTERS" = 0 ] || exit 1
 
-          UNFETCHED=$(git lfs ls-files -n -X "${PATTERNS}" || true)
+          # No `|| true`: this assertion is what two documents rest on, and a swallowed failure
+          # of the command it reads would pass the step for the wrong reason.
+          UNFETCHED=$(git lfs ls-files -n -X "${PATTERNS}")
           if [ -n "$UNFETCHED" ]; then
             echo "::error::these LFS objects are not named by the pull above:"
             echo "$UNFETCHED"
@@ -1423,8 +1425,12 @@ jobs:
                   severities = {row["severity"] for row in json.loads(raw).get("alerts", [])}
                   if severities - {"critical"}:
                       problems.append(f"/api/alerts?severity=critical returned {severities}")
-                  else:
+                  elif severities:
                       print(f"ok /api/alerts: {len(alerts)} rows, filter honoured")
+                  else:
+                      # An empty filtered list is the usual case on a stack this young, and it
+                      # evidences nothing about the filter: say so rather than claiming a pass.
+                      print(f"ok /api/alerts: {len(alerts)} rows, no critical alert to filter yet")
 
           # Half-hourly buckets over the window asked for, oldest first, whatever the data.
           for hours in (1, 2):
@@ -1449,7 +1455,10 @@ jobs:
 
           # Two refusals, because a backend that answers 200 to everything has lost the
           # distinction the pages read: `detail` is the field the frontend shows.
-          for path, body, expected in (("/api/map/drone/no-such-asset/", None, 404),
+          # No trailing slash: the route declares none, and a 404 from the router rather than from
+          # the handler would carry no `detail`.  Both forms answer the handler here, checked
+          # against the running backend, but the declared path is what this asserts.
+          for path, body, expected in (("/api/map/drone/no-such-asset", None, 404),
                                        ("/api/zones/what-if",
                                         {"polygon_wkt": "CIRCLE(13.4 52.5, 500)"}, 400)):
               status, raw, _ = get(path, body)

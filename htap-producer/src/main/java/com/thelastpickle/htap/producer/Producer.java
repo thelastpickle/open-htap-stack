@@ -19,8 +19,20 @@ import org.apache.kafka.clients.producer.ProducerRecord;
  */
 public final class Producer {
 
-    /** How long {@code flush} is given at shutdown before the process leaves anyway. */
+    /**
+     * How long {@code flush} is given at shutdown before the process leaves anyway.
+     *
+     * <p>Reached through the shutdown hook below, which is what makes it more than a constant:
+     * {@code podman stop} sends SIGTERM and runs no {@code finally}, so without the hook the client
+     * would drop whatever it had buffered.
+     */
     private static final Duration FLUSH_TIMEOUT = Duration.ofSeconds(10);
+
+    /** Where a batch goes. An interface so the loop can be driven without a broker. */
+    interface Sender {
+
+        void send(String topic, byte[] key, byte[] value);
+    }
 
     private final ProducerSettings settings;
     private final Log log;
@@ -41,6 +53,17 @@ public final class Producer {
         Fleet fleet = new Fleet(new FleetState(settings.fleet(), startedAt), settings.maxEntities());
 
         SettingsPoller poller = startPolling(live);
+        Thread sending = Thread.currentThread();
+        // SIGTERM runs no finally block, so the stop has to reach the loop through a hook: it
+        // interrupts the send thread and waits for it, which is what lets the flush below happen.
+        Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().unstarted(() -> {
+            sending.interrupt();
+            try {
+                sending.join(FLUSH_TIMEOUT);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }));
         // The producer is closed with a bound rather than in a try-with-resources, because
         // close() with no argument waits for every outstanding send however long that takes, and
         // a shutdown of a lossy telemetry producer should not.
@@ -65,7 +88,12 @@ public final class Producer {
                     settings.nEntities(),
                     settings.maxEntities(),
                     settings.batchPeriod().toMillis()));
-            sendUntilInterrupted(producer, fleet, live, text);
+            KafkaProducer<byte[], byte[]> client = producer;
+            sendUntilInterrupted(
+                    (topic, key, value) -> client.send(new ProducerRecord<>(topic, key, value)),
+                    fleet,
+                    live,
+                    text);
         } catch (IOException e) {
             log.say("could not open the text corpus: " + e.getMessage());
         } finally {
@@ -82,8 +110,7 @@ public final class Producer {
      * <p>Every turn re-reads the controls, so a rate or fleet change from the Settings page takes
      * effect on the next batch rather than on a restart.
      */
-    private void sendUntilInterrupted(
-            KafkaProducer<byte[], byte[]> producer, Fleet fleet, LiveSettings live, TextSource text) {
+    void sendUntilInterrupted(Sender sender, Fleet fleet, LiveSettings live, TextSource text) {
         double periodSeconds = settings.batchPeriod().toMillis() / 1000.0;
         long reportEveryNanos = settings.reportEvery().toNanos();
         long lastReport = System.nanoTime();
@@ -108,7 +135,7 @@ public final class Producer {
                         settings.textRefreshMinS(),
                         settings.textRefreshMaxS(),
                         now.outlierPercent() / 100.0)) {
-                    producer.send(new ProducerRecord<>(settings.topic(), event.key(), event.value()));
+                    sender.send(settings.topic(), event.key(), event.value());
                 }
                 windowSent += ids.length;
             }

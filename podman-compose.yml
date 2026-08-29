@@ -414,8 +414,10 @@ services:
       BATCH_PERIOD_MS: "${DEMO_BATCH_PERIOD_MS:-50}"
       # The broker settings this demo wants and a durable pipeline would not.  acks=0
       # because a lost telemetry reading costs nothing here and waiting for one costs the
-      # rate; lz4 because the text payload is most of each record.  Declared here rather
-      # than in the image so a run can be given the durable settings without a rebuild.
+      # rate.  lz4 because the text field is about half of a record: measured over twenty
+      # records off the topic, 5,239 bytes of 11,444, at a mean record of 572 bytes.
+      # Declared here rather than in the image so a run can be given the durable settings
+      # without a rebuild.
       KAFKA_ACKS: "${DEMO_KAFKA_ACKS:-0}"
       KAFKA_LINGER_MS: "${DEMO_KAFKA_LINGER_MS:-20}"
       KAFKA_BATCH_SIZE: "${DEMO_KAFKA_BATCH_SIZE:-65536}"

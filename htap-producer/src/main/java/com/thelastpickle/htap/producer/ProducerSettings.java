@@ -69,7 +69,7 @@ record ProducerSettings(
                 Duration.ofMillis(Math.max(MIN_BATCH_PERIOD_MS, integer(env, "BATCH_PERIOD_MS", 50))),
                 // acks as text, because the client takes "0", "1" or "all" and the Python's
                 // integer default of 0 is the same value spelled differently.
-                text(env, "KAFKA_ACKS", "0"),
+                acks(env),
                 integer(env, "KAFKA_LINGER_MS", 20),
                 integer(env, "KAFKA_BATCH_SIZE", 32768),
                 // Empty means none, as an unset KAFKA_COMPRESSION did in the Python.
@@ -105,6 +105,23 @@ record ProducerSettings(
      */
     int eventsPerBatch(int eventsPerSec) {
         return Math.max(1, (int) (eventsPerSec * batchPeriod.toMillis() / 1000.0));
+    }
+
+    /**
+     * The acknowledgement setting, held to the four values the client takes.
+     *
+     * <p>Validated here because {@code ProducerConfig} raises on anything else, and that raise is
+     * inside the constructor: {@code KAFKA_ACKS=true} would have killed the process at start and
+     * left the restart policy looping it, where the Python read the same variable as an integer and
+     * fell back to 0.  {@code KAFKA_COMPRESSION} is not validated the same way, because the client
+     * accepts any codec name it knows and a wrong one is a start-up failure that says so.
+     */
+    private static String acks(UnaryOperator<String> env) {
+        String asked = text(env, "KAFKA_ACKS", "0");
+        return switch (asked) {
+            case "all", "-1", "0", "1" -> asked;
+            default -> "0";
+        };
     }
 
     private static String text(UnaryOperator<String> env, String name, String fallback) {

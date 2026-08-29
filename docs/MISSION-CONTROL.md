@@ -182,7 +182,7 @@ cqlite is listed too, and for the opposite reason: it runs in this backend rathe
 
 ## Vector search
 
-Each asset carries a snippet of prose on some unrelated subject, sampled by the producer from `ingress/producer/wikipedia.txt`. Explore → **Vector search** embeds your phrase, asks Cassandra's Storage-Attached Index for the nearest neighbours from `drone_text_embeddings`, scores each with `similarity_cosine`, then point-reads each matching asset for its live position. &emsp;One search therefore exercises the analytical index and the transactional path together.
+Each asset carries a snippet of prose on some unrelated subject, sampled by the producer from `htap-producer/wikipedia.txt`. Explore → **Vector search** embeds your phrase, asks Cassandra's Storage-Attached Index for the nearest neighbours from `drone_text_embeddings`, scores each with `similarity_cosine`, then point-reads each matching asset for its live position. &emsp;One search therefore exercises the analytical index and the transactional path together.
 
 Press **Build embeddings** once to populate the table; nothing is indexed until then.
 

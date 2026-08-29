@@ -10,68 +10,21 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
 
 /**
- * The identifiers the fleet mints, which the events table is keyed on.
+ * The identifiers the fleet mints, stamped from the producer's own clock arithmetic.
  *
  * <p>{@code demo.events} is keyed on {@code ((event_bucket, shard), event_id)} and the sink derives
- * {@code event_time} from the identifier, so two events sharing one are not a duplicate row but a
- * lost one. That makes distinctness the property this whole file exists for.
+ * {@code event_time} from the identifier, so what matters here is that a batch's worth of stamps
+ * taken through {@link Fleet#instantOf} rise.  Distinctness itself belongs to {@code TimeUuids} and
+ * is asserted beside it, in {@code htap-common}, including the eight-thread case; {@code FleetTest}
+ * covers this module's own use of it.
  */
 class EventIdsTest {
 
     /** A fleet's worth: the largest the dashboard may ask for, and a batch at the demo's rate. */
     private static final int FLEET = 2000;
-
-    private static final int THREADS = 8;
-
-    /**
-     * Sixteen thousand identifiers minted at once are all distinct.
-     *
-     * <p>Eight threads of a fleet each, every one of them stamped at the same instant, which is the
-     * case the driver's own {@code Uuids.startOf} fails: it fixes the clock sequence and the node,
-     * so every mint within one millisecond is identical. Here the two are drawn per call, which
-     * leaves 62 bits of difference between two events of the same microsecond.
-     */
-    @Test
-    @Timeout(30)
-    void everyIdentifierIsDistinctAcrossThreads() throws InterruptedException {
-        Instant sameInstant = Instant.parse("2026-08-27T15:55:33.000500Z");
-        ConcurrentLinkedQueue<UUID> minted = new ConcurrentLinkedQueue<>();
-        CountDownLatch ready = new CountDownLatch(THREADS);
-        CountDownLatch go = new CountDownLatch(1);
-        CountDownLatch done = new CountDownLatch(THREADS);
-
-        for (int thread = 0; thread < THREADS; thread++) {
-            Thread.ofPlatform().start(() -> {
-                ready.countDown();
-                try {
-                    go.await();
-                    for (int i = 0; i < FLEET; i++) {
-                        minted.add(TimeUuids.timeUuid(sameInstant));
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } finally {
-                    done.countDown();
-                }
-            });
-        }
-        assertTrue(ready.await(10, TimeUnit.SECONDS));
-        go.countDown();
-        assertTrue(done.await(20, TimeUnit.SECONDS));
-
-        assertEquals(THREADS * FLEET, minted.size());
-        assertEquals(
-                THREADS * FLEET,
-                new HashSet<>(minted).size(),
-                "two of " + THREADS * FLEET + " identifiers were the same");
-    }
 
     /**
      * Identifiers minted at rising instants read back in that order.
@@ -103,21 +56,4 @@ class EventIdsTest {
         assertEquals(FLEET, new HashSet<>(ids).size());
     }
 
-    /**
-     * Two events of the same microsecond are still distinct, and their order is then undefined.
-     *
-     * <p>Recorded rather than asserted away: above about two million events a second the stamp step
-     * falls below a microsecond, and what the demo needs there is that no row is lost. The sink
-     * stores both, and which of the two a reader sees first is not a claim the demo makes.
-     */
-    @Test
-    void twoEventsOfOneMicrosecondAreDistinctButUnordered() {
-        Instant same = Instant.parse("2026-08-27T15:55:33.000500Z");
-
-        UUID first = TimeUuids.timeUuid(same);
-        UUID second = TimeUuids.timeUuid(same);
-
-        assertTrue(!first.equals(second));
-        assertEquals(TimeUuids.instantOf(first), TimeUuids.instantOf(second));
-    }
 }

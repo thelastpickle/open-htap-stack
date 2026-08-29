@@ -118,6 +118,22 @@ class ProducerSettingsTest {
                 "lz4", ProducerSettings.from(env(Map.of("KAFKA_COMPRESSION", "lz4"))).compression());
     }
 
+    /**
+     * An unusable {@code KAFKA_ACKS} falls back rather than killing the process.
+     *
+     * <p>The client validates this one against four values and raises inside its own constructor, so
+     * a mistyped value would have failed the start and left the restart policy looping it.  The
+     * Python read the same variable as an integer and fell back to 0.
+     */
+    @Test
+    void anUnusableAcknowledgementSettingFallsBackToNone() {
+        assertEquals("0", ProducerSettings.from(env(Map.of("KAFKA_ACKS", "true"))).acks());
+        assertEquals("0", ProducerSettings.from(env(Map.of("KAFKA_ACKS", "2"))).acks());
+        assertEquals("all", ProducerSettings.from(env(Map.of("KAFKA_ACKS", "all"))).acks());
+        assertEquals("-1", ProducerSettings.from(env(Map.of("KAFKA_ACKS", "-1"))).acks());
+        assertEquals("1", ProducerSettings.from(env(Map.of("KAFKA_ACKS", "1"))).acks());
+    }
+
     private static UnaryOperator<String> env(Map<String, String> values) {
         return values::get;
     }

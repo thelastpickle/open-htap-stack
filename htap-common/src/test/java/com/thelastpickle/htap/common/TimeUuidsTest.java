@@ -3,13 +3,18 @@ package com.thelastpickle.htap.common;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
 import java.util.HashSet;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 /**
  * The five expected UUIDs were produced by the driver the Python services actually run,
@@ -18,6 +23,11 @@ import org.junit.jupiter.api.Test;
  * makes the interval arithmetic checkable rather than merely plausible.
  */
 class TimeUuidsTest {
+
+    /** A fleet's worth: the largest the dashboard may ask for, and a batch at the demo's rate. */
+    private static final int A_FLEET = 2000;
+
+    private static final int THREADS = 8;
 
     private static final int CLOCK_SEQ = 0x0abc;
     private static final long NODE = 0x010203040506L;
@@ -204,6 +214,49 @@ class TimeUuidsTest {
             seen.add((TimeUuids.timeUuid(Instant.EPOCH).getLeastSignificantBits() & 1L << 40) != 0);
         }
         assertEquals(Set.of(true, false), seen);
+    }
+
+    /**
+     * Sixteen thousand identifiers minted at once are all distinct.
+     *
+     * <p>Eight threads of a fleet each, every one of them stamped at the same instant, which is the
+     * case the driver's own {@code Uuids.startOf} fails: it fixes the clock sequence and the node,
+     * so every mint within one millisecond is identical. Here the two are drawn per call, which
+     * leaves 62 bits of difference between two events of the same microsecond.
+     */
+    @Test
+    @Timeout(30)
+    void everyIdentifierIsDistinctAcrossThreads() throws InterruptedException {
+        Instant sameInstant = Instant.parse("2026-08-27T15:55:33.000500Z");
+        ConcurrentLinkedQueue<UUID> minted = new ConcurrentLinkedQueue<>();
+        CountDownLatch ready = new CountDownLatch(THREADS);
+        CountDownLatch go = new CountDownLatch(1);
+        CountDownLatch done = new CountDownLatch(THREADS);
+
+        for (int thread = 0; thread < THREADS; thread++) {
+            Thread.ofPlatform().start(() -> {
+                ready.countDown();
+                try {
+                    go.await();
+                    for (int i = 0; i < A_FLEET; i++) {
+                        minted.add(TimeUuids.timeUuid(sameInstant));
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+        assertTrue(ready.await(10, TimeUnit.SECONDS));
+        go.countDown();
+        assertTrue(done.await(20, TimeUnit.SECONDS));
+
+        assertEquals(THREADS * A_FLEET, minted.size());
+        assertEquals(
+                THREADS * A_FLEET,
+                new HashSet<>(minted).size(),
+                "two of " + THREADS * A_FLEET + " identifiers were the same");
     }
 
     private static Set<UUID> mintedAt(Instant start, long stepMicros, int count) {

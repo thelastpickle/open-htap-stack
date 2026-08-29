@@ -1,6 +1,7 @@
-# Applies to a build whose context is the repository root, which backend-java is: it builds one
-# leaf of the Maven reactor and needs the parent pom beside it.  Every other service names its
-# own subdirectory, and backend/ and spark/ carry their own .dockerignore.  Without this file a
+# Applies to a build whose context is the repository root, which the three reactor services are:
+# each builds one leaf of the Maven reactor and needs the parent pom beside it.  cassandra,
+# accord-sql and frontend name their own subdirectory, and spark carries its own .dockerignore.
+# Without this file a
 # root-context build uploads the working tree: .git alone is over a gigabyte here, because the
 # Git LFS object store lives inside it.
 .git

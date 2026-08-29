@@ -106,7 +106,7 @@ jobs:
           # fetch that succeeds with the wrong bytes commits its layer, and all three
           # attempts then reuse it: enwik9.zip failed this way, and the retries could only
           # repeat the same "unzip: cannot find zipfile directory".  See
-          # ingress/producer/Dockerfile.
+          # htap-producer/Dockerfile, which carries that fetch and its checksum.
           for attempt in 1 2 3; do
             no_cache=""
             if [ "$attempt" = 1 ]; then no_cache="--no-cache"; fi

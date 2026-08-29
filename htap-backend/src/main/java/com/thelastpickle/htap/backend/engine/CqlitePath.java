@@ -38,7 +38,7 @@ import org.jboss.logging.Logger;
  * SQL over the live SSTable files, in this process: the fifth access path.
  *
  * <p>The only path that reads Cassandra's data files where they lie. There is no snapshot, no
- * Sidecar and no second JVM: the reader opens the {@code Data.db} files a flush or a compaction has
+ * Sidecar and no second service: the reader opens the {@code Data.db} files a flush or a compaction has
  * already written, merges the generations so each row is resolved once, and DataFusion plans and
  * executes the SQL over them.
  *

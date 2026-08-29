@@ -71,6 +71,7 @@ public final class Sink {
     private final Supplier<Instant> clock;
     private final LongSupplier nanoClock;
     private final Duration retryDelay;
+    private final Wait wait;
 
     private long totalInserted;
     private long windowInserted;
@@ -85,12 +86,14 @@ public final class Sink {
             Alerts alerts,
             Supplier<Instant> clock,
             LongSupplier nanoClock) {
-        this(settings, writes, alerts, clock, nanoClock, RETRY_DELAY);
+        this(settings, writes, alerts, clock, nanoClock, RETRY_DELAY, Sink::sleep);
     }
 
     /**
-     * @param retryDelay how long the loop waits after a batch it could not write, which a test
-     *     shortens so that driving the failure path costs no wall clock
+     * @param retryDelay how long the loop waits after a batch it could not write
+     * @param wait what performs that wait, so a test can record that it happened rather than
+     *     spending the delay: whether the loop waits after a failure and not after a success is the
+     *     invariant, and it is decidable without a clock
      */
     Sink(
             SinkSettings settings,
@@ -98,7 +101,8 @@ public final class Sink {
             Alerts alerts,
             Supplier<Instant> clock,
             LongSupplier nanoClock,
-            Duration retryDelay) {
+            Duration retryDelay,
+            Wait wait) {
         this.settings = settings;
         this.writes = writes;
         this.alerts = alerts;
@@ -107,6 +111,7 @@ public final class Sink {
         this.clock = clock;
         this.nanoClock = nanoClock;
         this.retryDelay = retryDelay;
+        this.wait = wait;
     }
 
     public static void main(String[] args) {
@@ -165,7 +170,7 @@ public final class Sink {
                 // asset becomes the replayed batch's own, so the attempt that finally succeeds
                 // derives no movement for the assets in it, and the alerting is re-scored with
                 // only its own 60-second cooldown to suppress a duplicate row.
-                sleep(retryDelay);
+                wait.of(retryDelay);
                 continue;
             }
 
@@ -232,6 +237,17 @@ public final class Sink {
 
     /** What one batch did: whether every write was acknowledged, and how many readings it held. */
     record Batch(boolean acknowledged, int buffered) {}
+
+    /**
+     * What the loop waits with.
+     *
+     * <p>A type of its own rather than a {@code Consumer<Duration>}, because this file already holds
+     * Kafka's own {@code Consumer} and two types of that name in one file read as one.
+     */
+    interface Wait {
+
+        void of(Duration delay);
+    }
 
     /**
      * Reads the zones, keeping the ones already loaded if the read fails.
@@ -337,12 +353,18 @@ public final class Sink {
         return properties;
     }
 
+    /**
+     * The wait itself, used for the connect retry and, through the seam above, for a failed batch.
+     *
+     * <p>An interrupt ends the process rather than the wait: this is a service loop with nothing to
+     * unwind, so the message names what was being waited for and the caller says which.
+     */
     private static void sleep(Duration delay) {
         try {
             Thread.sleep(delay);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("interrupted while waiting for a service", e);
+            throw new IllegalStateException("interrupted while waiting to retry", e);
         }
     }
 }

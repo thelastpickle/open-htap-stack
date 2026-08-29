@@ -31,8 +31,8 @@ name: Publish Images
 # The Git LFS objects are cached, because they are the one cost visibility does not cover.
 # `cassandra/dist/apache-cassandra-sidecar-0.5-mck2.tar.gz` is 511 MB and the two
 # `htap-cqlite/dist` libraries are 38 MB and 40 MB, so the four jobs that need LFS objects
-# would fetch 1,178 MB per run against a repository's 1 GB monthly LFS bandwidth: cassandra
-# and backend on two architectures each, 589 MB apiece. The cache key is the hash of the pointer files, which name the object
+# would fetch 1,178 MB per run against a repository's 1 GB monthly LFS bandwidth: 589 MB per
+# architecture, cassandra's 511 MB plus backend's 78 MB, and both architectures are built. The cache key is the hash of the pointer files, which name the object
 # by its oid, so a run pays LFS bandwidth only when a vendored artefact changes.
 #
 # No build cache, and the reason is that interaction: a `type=gha` cache shares one 10 GB

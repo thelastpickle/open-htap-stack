@@ -55,37 +55,37 @@ class ProducerTest {
     }
 
     /**
-     * A paused fleet sends nothing, where the same fleet unpaused sends a batch.
+     * A paused fleet sends nothing, and the loop that sent nothing was running.
      *
-     * <p>Pause is a control on the Settings page, so it is worth pinning: nothing else asserts it,
-     * and a pause that sent anyway would look like a producer ignoring the dashboard.  Driven as two
-     * turns rather than as a wait, because a thread that has not been scheduled yet records the same
-     * empty list as a correctly paused one, and an assertion that cannot fail is worth nothing.
+     * <p>Pause is a control on the Settings page and nothing else asserts it.  The wait alone would
+     * not do: a thread that has not been scheduled records the same empty list as a correctly paused
+     * one.  So the pause is lifted while that same thread is still in its loop, and what proves the
+     * loop was turning throughout is that it then sends without being restarted.
      */
     @Test
     @Timeout(20)
-    void aPausedFleetSendsNothingWhereAnUnpausedOneSends() {
+    void aPausedFleetSendsNothingAndThenSendsWhenUnpaused() throws InterruptedException {
         LiveSettings live = new LiveSettings(2000, 10, 5.0);
-        assertEquals(10, oneTurn(live).keys.size(), "the control turn sent nothing");
-
         live.apply(reported(OptionalInt.empty(), OptionalInt.empty(), Optional.of(true)));
+        Recorder sent = new Recorder();
 
-        // A paused turn never reaches the sender, so the loop is ended from another thread.
-        Recorder paused = new Recorder();
-        Thread loop = Thread.ofPlatform().start(() -> run(paused, live));
+        Thread loop = Thread.ofPlatform().start(() -> run(sent, live));
         try {
             Thread.sleep(60);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-        loop.interrupt();
-        try {
-            loop.join();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+            assertEquals(List.of(), sent.keys, "a paused fleet sent records");
 
-        assertEquals(List.of(), paused.keys, "a paused fleet sent records");
+            live.apply(reported(OptionalInt.empty(), OptionalInt.empty(), Optional.of(false)));
+            for (int at = 0; at < 200 && sent.keys.isEmpty(); at++) {
+                Thread.sleep(10);
+            }
+            // At least one batch, and a whole number of them: the period is 5 ms, so how many
+            // turns land before this reads is the scheduler's business and not the assertion's.
+            assertTrue(sent.keys.size() >= 10, "the loop was not turning while it was paused");
+            assertEquals(0, sent.keys.size() % 10, "a batch arrived part-sent: " + sent.keys.size());
+        } finally {
+            loop.interrupt();
+            loop.join();
+        }
     }
 
     /** The rate is re-read every turn, so a change from the dashboard sizes the next batch. */

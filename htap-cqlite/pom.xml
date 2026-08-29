@@ -14,7 +14,7 @@
   <name>Open HTAP stack: the cqlite reader's Java binding</name>
   <description>
     SQL over Cassandra's live SSTable files, in this process, over the C boundary
-    dist/ holds. No Cassandra, no snapshot and no second process: the library owns
+    dist/ holds. No snapshot, no Sidecar and no second service: the library owns
     a DataFusion session and returns rows over the Arrow C Data Interface.
   </description>
 

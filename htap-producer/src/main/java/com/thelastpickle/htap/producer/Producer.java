@@ -20,13 +20,15 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 public final class Producer {
 
     /**
-     * How long the hook waits for the send loop to return.
+     * How long the hook waits for the send thread to finish, loop and close together.
      *
-     * <p>Reached through the shutdown hook below, which is what makes it more than a constant:
-     * {@code podman stop} sends SIGTERM and runs no {@code finally}, so without the hook the client
-     * would drop whatever it had buffered.
+     * <p>Both, and not the loop alone: the thread the hook joins is the one running {@code run}, so
+     * it terminates after the {@code finally} has closed the client. Once the hooks return the JVM
+     * halts, and a non-daemon thread does not delay that, so this bound has to cover the flush
+     * below or the flush is cut off. Six seconds against a three-second flush, which leaves the
+     * loop its own exit and still returns well inside podman's ten-second stop grace.
      */
-    private static final Duration LOOP_TIMEOUT = Duration.ofSeconds(2);
+    private static final Duration SHUTDOWN_TIMEOUT = Duration.ofSeconds(6);
 
     /**
      * How long {@code close} is given to flush what the client still holds.
@@ -71,7 +73,7 @@ public final class Producer {
         Runtime.getRuntime().addShutdownHook(Thread.ofPlatform().unstarted(() -> {
             sending.interrupt();
             try {
-                sending.join(LOOP_TIMEOUT);
+                sending.join(SHUTDOWN_TIMEOUT);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }

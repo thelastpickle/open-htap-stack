@@ -37,14 +37,19 @@ import org.junit.jupiter.api.Test;
 class SinkTest {
 
     private static final Instant NOW = Instant.parse("2026-08-29T12:34:56Z");
+
+    /** What the loop is told to wait after a batch it could not write. */
+    private static final Duration RETRY = Duration.ofSeconds(5);
     private static final SinkSettings SETTINGS = SinkSettings.from(name -> null);
 
     private final AtomicLong nanos = new AtomicLong();
     private final RecordingWrites writes = new RecordingWrites();
     private final Alerts alerts = new Alerts(nanos::get);
-    /** A millisecond of retry delay rather than the loop's five seconds, so a failure costs no wait. */
+    /** Every wait the loop makes, recorded rather than spent. */
+    private final List<Duration> waited = new ArrayList<>();
+
     private final Sink sink = new Sink(
-            SETTINGS, writes, alerts, () -> NOW, nanos::get, Duration.ofMillis(1));
+            SETTINGS, writes, alerts, () -> NOW, nanos::get, RETRY, waited::add);
 
     /** Every record of the batch is written, and the batch says how many it held. */
     @Test
@@ -153,6 +158,7 @@ class SinkTest {
         assertEquals(List.of("poll", "commitSync", "poll"), calls);
         assertEquals(List.of("2026-08-29T12:30"), writes.counted);
         assertEquals(List.of(1), writes.countedRecords);
+        assertEquals(List.of(), waited, "a batch that was written waited for nothing");
     }
 
     /**
@@ -175,6 +181,9 @@ class SinkTest {
 
         assertEquals(List.of("poll", "seek demo-events-0@0", "poll"), calls);
         assertEquals(List.of(), writes.counted);
+        // And it waits before going back, so a node that stays down cannot have this loop poll,
+        // derive, fail and seek as fast as the broker answers a re-fetch.
+        assertEquals(List.of(RETRY), waited);
     }
 
     /** An empty poll costs nothing: no commit, no counter, no report. */
@@ -195,7 +204,8 @@ class SinkTest {
     void theCounterBucketIsTheHalfHourOfTheCommit() {
         List<String> calls = new ArrayList<>();
         Sink onTheHalfHour = new Sink(
-                SETTINGS, writes, alerts, () -> Instant.parse("2026-08-29T12:59:59Z"), nanos::get);
+                SETTINGS, writes, alerts, () -> Instant.parse("2026-08-29T12:59:59Z"), nanos::get,
+                RETRY, waited::add);
         Consumer<byte[], byte[]> broker = scripted(calls, new ArrayDeque<>(List.of(
                 records(SinkFakes.event(id(), "asset-1", 59.91, 10.75, 120.0)))));
 
@@ -226,7 +236,8 @@ class SinkTest {
     @Test
     void aFractionalReloadCadenceIsHonoured() {
         SinkSettings oneAndAHalf = SinkSettings.from(Map.of("ZONE_RELOAD_S", "1.5")::get);
-        Sink reloading = new Sink(oneAndAHalf, writes, alerts, () -> NOW, nanos::get);
+        Sink reloading = new Sink(
+                oneAndAHalf, writes, alerts, () -> NOW, nanos::get, RETRY, waited::add);
         SinkFakes.RecordingSession node = new SinkFakes.RecordingSession();
         List<String> calls = new ArrayList<>();
         Consumer<byte[], byte[]> broker = scripted(calls, new ArrayDeque<>(List.of(

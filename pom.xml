@@ -18,6 +18,7 @@
   <modules>
     <module>htap-common</module>
     <module>htap-cqlite</module>
+    <module>htap-backend</module>
   </modules>
 
   <properties>
@@ -25,6 +26,15 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
     <junit.version>6.1.3</junit.version>
+    <quarkus.version>3.39.1</quarkus.version>
+    <!--
+      The Cassandra driver under its Apache coordinates, which is where 4.18 and
+      everything after it is published; `com.datastax.oss:java-driver-core` stops at
+      4.17.0. Not the Quarkus Cassandra extension: this backend connects lazily, throttles
+      its retries and rebuilds a session on demand, and an extension that owns the session
+      lifecycle would have to be worked around at each of those three points.
+    -->
+    <cassandra-driver.version>4.19.3</cassandra-driver.version>
     <!--
       Arrow Java, for the C Data Interface only: the cqlite library hands rows over
       that specification, and re-deriving the format grammar, validity bitmaps,
@@ -78,6 +88,24 @@
         <version>${arrow.version}</version>
         <type>pom</type>
         <scope>import</scope>
+      </dependency>
+      <!--
+        Third of the three, and last on purpose: the first declaration of an artifact wins,
+        so junit and Arrow keep the versions above and Quarkus decides everything else,
+        Jackson and Netty included. The two junit versions agree today, and the parent's
+        note beside junit.version says how to check that they still do.
+      -->
+      <dependency>
+        <groupId>io.quarkus</groupId>
+        <artifactId>quarkus-bom</artifactId>
+        <version>${quarkus.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.cassandra</groupId>
+        <artifactId>java-driver-core</artifactId>
+        <version>${cassandra-driver.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>

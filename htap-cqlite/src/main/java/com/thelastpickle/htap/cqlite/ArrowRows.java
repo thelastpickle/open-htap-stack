@@ -1,10 +1,9 @@
 package com.thelastpickle.htap.cqlite;
 
+import com.thelastpickle.htap.common.Timestamps;
+import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.LocalTime;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
@@ -28,6 +27,10 @@ import org.apache.arrow.vector.VectorSchemaRoot;
  * a nanosecond or millisecond count rather than a time. The paths are compared row for
  * row, so a difference in spelling reads as a difference in the data.
  *
+ * <p>A timestamp is spelled by {@link Timestamps}, in {@code htap-common}, because the CQL
+ * path has to give the same answer for the same stored value and it reads that value
+ * through a different driver.
+ *
  * <p>Two spellings here are deliberately not the Python's, and the Java CQL path has to
  * take the same two for a comparison to stay honest. A blob becomes {@code 0x} hex, where
  * the Python passed the raw bytes on; and a {@code time} keeps its nanoseconds, where
@@ -37,16 +40,6 @@ import org.apache.arrow.vector.VectorSchemaRoot;
  * this file's doing rather than the data's.
  */
 final class ArrowRows {
-
-    /**
-     * Seconds precision, with the fraction appended separately.
-     *
-     * <p>Not {@link LocalDateTime#toString()}, which gives three fractional digits for a
-     * millisecond timestamp and none for a whole second. Python's {@code isoformat} gives
-     * six digits or none, and the other paths' timestamps are that spelling.
-     */
-    private static final DateTimeFormatter TO_SECONDS =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss");
 
     private ArrowRows() {
     }
@@ -77,7 +70,8 @@ final class ArrowRows {
             case VARBINARY -> "0x" + HexFormat.of().formatHex(((VarBinaryVector) vector).get(row));
             // get() is a count of days since the epoch, not a date.
             case DATEDAY -> LocalDate.ofEpochDay(((DateDayVector) vector).get(row)).toString();
-            case TIMESTAMPMILLI -> timestamp(((TimeStampMilliVector) vector).get(row));
+            case TIMESTAMPMILLI ->
+                    Timestamps.iso(Instant.ofEpochMilli(((TimeStampMilliVector) vector).get(row)));
             // Nanoseconds, where Python truncated to microseconds; Cassandra's `time` is
             // nanosecond-precision, so this is the more faithful of the two.
             case TIMENANO -> LocalTime.ofNanoOfDay(((TimeNanoVector) vector).get(row)).toString();
@@ -98,13 +92,4 @@ final class ArrowRows {
         };
     }
 
-    private static String timestamp(long epochMillis) {
-        LocalDateTime at = LocalDateTime.ofEpochSecond(
-                Math.floorDiv(epochMillis, 1000L),
-                (int) Math.floorMod(epochMillis, 1000L) * 1_000_000,
-                ZoneOffset.UTC);
-        String text = at.format(TO_SECONDS);
-        int micros = at.getNano() / 1000;
-        return micros == 0 ? text : text + "." + "%06d".formatted(micros);
-    }
 }

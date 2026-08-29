@@ -601,6 +601,58 @@ services:
       retries: 12
     restart: unless-stopped
 
+  # The same API, ported to Java, on its own port while the two are compared.  It answers a
+  # subset for now: the CQL read path and the pages built on it.  The switchover moves it to
+  # 8000 and retires the service above; until then nothing depends on this one, and stopping
+  # it changes nothing a browser sees.
+  backend-java:
+    build:
+      # The repository root, because the module is one leaf of a Maven reactor and the build
+      # needs the parent pom and htap-common beside it.  .dockerignore at the root is what
+      # keeps cassandra-data and .git out of the context.
+      context: .
+      dockerfile: htap-backend/Dockerfile
+    container_name: backend-java
+    networks: [htap-net]
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    ports:
+      # 8001 so both APIs answer at once and a field-name diff between them is one curl each.
+      - "${BACKEND_JAVA_PORT:-8001}:8001"
+    volumes:
+      # Read-only, for the same reason the Python backend's mount is: a reader must never be
+      # able to corrupt the dataset the other paths read.  Not used until the cqlite path
+      # arrives; declared now so the two services differ in code rather than in what they see.
+      - ./cassandra-data:/var/lib/cassandra:ro
+    mem_limit: "${BACKEND_JAVA_MEM_LIMIT:-2g}"
+    memswap_limit: "${BACKEND_JAVA_MEM_LIMIT:-2g}"
+    environment:
+      # Each name is the environment spelling of one MicroProfile property, so the two
+      # backends take their addresses from the same variables.
+      CASSANDRA_HOST: "cassandra"
+      CASSANDRA_PORT: "9042"
+      CASSANDRA_KEYSPACE: "${DEMO_KEYSPACE:-demo}"
+      CASSANDRA_DATACENTER: "${CASSANDRA_DATACENTER:-datacenter1}"
+      CONTAINER_CLI: "${CONTAINER_CLI:-podman}"
+      PRESTO_HOST: "presto"
+      PRESTO_PORT: "8080"
+      SPARK_UI_HOST: "spark"
+      SPARK_UI_PORT: "8080"
+      KAFKA_HOST: "kafka"
+      KAFKA_PORT: "19092"
+      ACCORD_SQL_HOST: "accord-sql"
+      ACCORD_SQL_PORT: "5432"
+    healthcheck:
+      # The JRE image carries no curl, and the liveness route needs no body read: a TCP
+      # connect through bash's /dev/tcp says the server is listening, which is what the
+      # ordering below the compose file needs.
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/8001'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
   frontend:
     build:
       context: ./frontend

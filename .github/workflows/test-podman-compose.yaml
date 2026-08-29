@@ -177,7 +177,9 @@ jobs:
           # a first start after its image was built, which is the case a runner is
           # always in.  Starting it now spends that time in parallel with the waits
           # that follow.
-          podman start spark presto data-producer data-cassandra-sink backend frontend accord-sql
+          # backend-java is the port in progress, on 8001.  Nothing depends on it, so it
+          # starts here beside the backend it is compared against and its own step waits on it.
+          podman start spark presto data-producer data-cassandra-sink backend backend-java frontend accord-sql
 
           echo -e "\n=== Waiting for Spark to be ready ==="
           timeout 120 bash -c 'until curl -sf http://localhost:8080 >/dev/null 2>&1; do echo "Waiting for Spark..."; sleep 5; done'
@@ -1455,6 +1457,191 @@ jobs:
         # budget outlives the step again, which is the failure that printed no reason
         # at all.
         timeout-minutes: 20
+
+      - name: Test the Java backend's read paths
+        run: |
+          TMP_DIR="${TMP_DIR:-.ci-tmp}"
+          mkdir -p "$TMP_DIR"
+
+          echo -e "\n=== The ported API answers the same field names as the one it replaces ==="
+          # The port runs beside the Python backend rather than in place of it, so this step
+          # asks the question a port has to answer: do the two agree?  Field names are what
+          # is compared, because the frontend reads names and because two reads of a fleet
+          # moving at 2,000 events a second legitimately differ in every value.
+          #
+          # Only the CQL read path is ported so far.  The four analytical paths, the
+          # comparison, the transactions and the streaming pages are still the Python's
+          # alone, so this step covers the routes listed below and no others.
+          timeout 180 bash -c 'until curl -sf -m 5 http://localhost:8001/api/health >/dev/null; do echo "Waiting for backend-java..."; sleep 5; done'
+          echo "✓ backend-java is answering"
+
+          python3 - "$TMP_DIR" << 'PY'
+          import json, sys, urllib.error, urllib.request
+          from pathlib import Path
+
+          tmp = Path(sys.argv[1])
+          PY_BASE, JV_BASE = "http://localhost:8000", "http://localhost:8001"
+          problems = []
+
+          def get(base, path, body=None):
+              """The status and the parsed body, with a refusal read rather than raised."""
+              data = json.dumps(body).encode() if body is not None else None
+              headers = {"content-type": "application/json"} if data else {}
+              request = urllib.request.Request(base + path, data=data, headers=headers)
+              try:
+                  with urllib.request.urlopen(request, timeout=60) as answer:
+                      return answer.status, answer.read(), dict(answer.headers)
+              except urllib.error.HTTPError as refusal:
+                  return refusal.code, refusal.read(), dict(refusal.headers)
+
+          def names(raw):
+              """Every scalar's dotted path, with list indices dropped and nulls skipped."""
+              found = set()
+
+              def walk(node, prefix):
+                  if isinstance(node, dict):
+                      for key, value in node.items():
+                          walk(value, f"{prefix}.{key}" if prefix else key)
+                  elif isinstance(node, list):
+                      for item in node:
+                          walk(item, prefix)
+                  elif node is not None:
+                      found.add(prefix)
+
+              walk(json.loads(raw), "")
+              return found
+
+          # One asset that is flying, and one that has a neighbour within the 5 km ceiling
+          # /nearby clamps to.  The demo spreads 100 assets over Berlin, so most have none,
+          # and probing for one beats computing the closest pair from a position list: that
+          # list is stale by the time the route reads it.
+          status, raw, _ = get(PY_BASE, "/api/map/live")
+          flying = [d["entity_id"] for d in json.loads(raw)["drones"] if d.get("is_flying")]
+          if not flying:
+              print("::error::no flying asset on /api/map/live")
+              sys.exit(1)
+          entity = flying[0]
+          neighbourly = entity
+          for candidate in flying[:30]:
+              _, answer, _ = get(PY_BASE, f"/api/map/drone/{candidate}/nearby?meters=5000")
+              if json.loads(answer)["drones"]:
+                  neighbourly = candidate
+                  break
+          print(f"comparing on {entity}, with {neighbourly} for /nearby")
+
+          ROUTES = [
+              ("/api/health", None),
+              ("/api/platform/health", None),
+              ("/api/overview/kpis", None),
+              ("/api/overview/ingestion-history?hours=2", None),
+              ("/api/map/live", None),
+              (f"/api/map/drone/{entity}", None),
+              (f"/api/map/drone/{entity}/trail?points=10", None),
+              (f"/api/map/drone/{neighbourly}/nearby?meters=5000", None),
+              ("/api/alerts?limit=5", None),
+              ("/api/zones", None),
+              ("/api/map/polygon-stats", {"polygon_wkt": "POLYGON((13.0 52.4, 13.6 52.4, 13.6 52.6, 13.0 52.6, 13.0 52.4))"}),
+              ("/api/zones/what-if", {"polygon_wkt": "POLYGON((13.0 52.4, 13.6 52.4, 13.6 52.6, 13.0 52.6, 13.0 52.4))"}),
+          ]
+
+          for path, body in ROUTES:
+              py_status, py_raw, _ = get(PY_BASE, path, body)
+              jv_status, jv_raw, _ = get(JV_BASE, path, body)
+              if py_status != 200 or jv_status != 200:
+                  problems.append(f"{path}: python {py_status}, java {jv_status}")
+                  continue
+              py_names, jv_names = names(py_raw), names(jv_raw)
+              # An empty list names no field, so two empty answers agree on nothing.  Nor is
+              # one side empty a difference: the fleet moves while the two are read.
+              if not py_names or not jv_names:
+                  print(f".. {path}: no rows one side or both, shape unexercised")
+                  continue
+              if py_names != jv_names:
+                  missing = sorted(py_names - jv_names)
+                  extra = sorted(jv_names - py_names)
+                  problems.append(f"{path}: java is missing {missing}, and adds {extra}")
+              else:
+                  print(f"ok {path}: {len(jv_names)} fields")
+
+          # The zones are seeded rows that nothing writes to, so here the values must agree
+          # too, which no moving-fleet route can be asked for.
+          _, py_raw, _ = get(PY_BASE, "/api/zones")
+          _, jv_raw, _ = get(JV_BASE, "/api/zones")
+          if json.loads(py_raw) != json.loads(jv_raw):
+              problems.append("/api/zones: the two backends disagree on the seeded zones")
+              (tmp / "zones-python.json").write_bytes(py_raw)
+              (tmp / "zones-java.json").write_bytes(jv_raw)
+          else:
+              print(f"ok /api/zones: {len(json.loads(jv_raw)['zones'])} zones, value for value")
+
+          # The Java backend probes five services where the Python probes six: the cqlite
+          # reader is not ported yet.  So the five are named rather than counted, and
+          # Cassandra reading up is what says the probe is doing its job.
+          _, raw, _ = get(JV_BASE, "/api/platform/health")
+          health = json.loads(raw)
+          probed = {service["name"]: service["status"] for service in health["services"]}
+          for name in ("Cassandra", "Kafka", "Presto", "Spark", "cassandra-sql"):
+              if name not in probed:
+                  problems.append(f"/api/platform/health: {name} is not probed")
+          if probed.get("Cassandra") != "up":
+              problems.append(f"/api/platform/health: Cassandra reads {probed.get('Cassandra')}")
+          print(f"ok /api/platform/health: {probed}, score {health['overall_health_score']}")
+
+          # The fleet counts have to add up in the answer they were read from, which is a
+          # question about one read rather than about two.
+          _, raw, _ = get(JV_BASE, "/api/overview/kpis")
+          kpis = json.loads(raw)
+          if kpis["total_drones"] < 1:
+              problems.append("/api/overview/kpis: no assets in the fleet table")
+          if kpis["active_flying_drones"] + kpis["grounded_drones"] != kpis["total_drones"]:
+              problems.append(f"/api/overview/kpis: {kpis['active_flying_drones']} flying plus "
+                              f"{kpis['grounded_drones']} grounded is not {kpis['total_drones']}")
+          print(f"ok /api/overview/kpis: {kpis['total_drones']} assets, "
+                f"{kpis['ingestion_rate_per_sec']}/s, score {kpis['platform_health_score']}")
+
+          # Two keys an hour, oldest first, the last being the window now filling.  Compared
+          # as an overlap and not as equality, because a read either side of a half-hour
+          # boundary shifts every key by one.
+          _, py_raw, _ = get(PY_BASE, "/api/overview/ingestion-history?hours=4")
+          _, jv_raw, _ = get(JV_BASE, "/api/overview/ingestion-history?hours=4")
+          py_keys = [b["timestamp"] for b in json.loads(py_raw)["buckets"]]
+          jv_keys = [b["timestamp"] for b in json.loads(jv_raw)["buckets"]]
+          if len(jv_keys) != 8 or jv_keys != sorted(jv_keys):
+              problems.append(f"/api/overview/ingestion-history: 4 hours gave {jv_keys}")
+          if len(set(py_keys) & set(jv_keys)) < 7:
+              problems.append(f"/api/overview/ingestion-history: {py_keys} against {jv_keys}")
+          else:
+              print(f"ok /api/overview/ingestion-history: {jv_keys[0]} to {jv_keys[-1]}")
+
+          # A download, so the header and the filename are the contract rather than a body.
+          status, raw, headers = get(JV_BASE, "/api/overview/ingestion-history/csv?hours=3")
+          first = raw.decode().splitlines()[0] if raw else ""
+          if first != "time,timestamp,count":
+              problems.append(f"the CSV header reads {first!r}")
+          if headers.get("Content-Disposition") != 'attachment; filename="ingestion_log_3h.csv"':
+              problems.append(f"the CSV filename reads {headers.get('Content-Disposition')!r}")
+          else:
+              print(f"ok /api/overview/ingestion-history/csv: {len(raw.splitlines()) - 1} rows")
+
+          # Two refusals, because a port that answers 200 to everything has lost the
+          # distinction the pages read: `detail` is the field the frontend shows.
+          for path, expected in ((f"/api/map/drone/no-such-asset-{entity}", 404),
+                                 ("/api/zones/what-if", 400)):
+              body = {"polygon_wkt": "CIRCLE(13.4 52.5, 500)"} if expected == 400 else None
+              status, raw, _ = get(JV_BASE, path, body)
+              detail = json.loads(raw).get("detail") if raw else None
+              if status != expected or not detail:
+                  problems.append(f"{path}: {status} with detail {detail!r}, wanted {expected}")
+              else:
+                  print(f"ok {path}: {status} {detail!r}")
+
+          if problems:
+              for problem in problems:
+                  print(f"::error::{problem}")
+              sys.exit(1)
+          print("✓ The Java backend's read paths match the Python's, field for field")
+          PY
+        timeout-minutes: 10
 
       - name: Test Accord transactions
         run: |

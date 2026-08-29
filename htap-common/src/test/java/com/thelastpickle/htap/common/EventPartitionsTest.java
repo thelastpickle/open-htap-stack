@@ -114,6 +114,11 @@ class EventPartitionsTest {
         assertEquals("fa-IR", lines.get("locale"), printed);
         assertEquals(String.valueOf(0x06F0), lines.get("zeroDigit"), printed);
         assertEquals("2026-01-01T12:45", lines.get("bucket"), printed);
+        // Timestamps and BucketKeys load in the same JVM and each holds its own formatter, so
+        // both are probed here rather than in two more forks.
+        assertEquals("2026-01-01T12:45:00.789000", lines.get("stamp"), printed);
+        assertEquals("2026-01-01T12:30", lines.get("thirtyMinute"), printed);
+        assertEquals("2026-01-01T12", lines.get("hour"), printed);
     }
 
     @Test

@@ -1,0 +1,134 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.thelastpickle.htap</groupId>
+    <artifactId>htap-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>htap-backend</artifactId>
+  <name>Open HTAP stack: the Mission Control API</name>
+  <description>
+    The dashboard's API. Every endpoint reports which of the five access paths
+    answered it, because showing that is the point of the demo.
+  </description>
+
+  <properties>
+    <!--
+      Quarkus records a method's parameter names for the extensions that read them, and
+      the recommended setting is on regardless of whether a given class needs it: the
+      failure it prevents is a parameter resolving by position instead of by name, which
+      compiles and then answers the wrong thing.
+    -->
+    <maven.compiler.parameters>true</maven.compiler.parameters>
+  </properties>
+
+  <dependencies>
+    <!--
+      quarkus-rest is the blocking-by-default REST layer, and blocking is what this
+      backend wants: every read here is a driver call, and a reactive signature would
+      buy nothing while adding a way to run one on the event loop by mistake.
+      DispatchThreadTest is what says the default is in force.
+    -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-rest</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-rest-jackson</artifactId>
+    </dependency>
+    <!-- The OpenAPI document and the Swagger UI the Python served at /docs. -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-smallrye-openapi</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.cassandra</groupId>
+      <artifactId>java-driver-core</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>com.thelastpickle.htap</groupId>
+      <artifactId>htap-common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.rest-assured</groupId>
+      <artifactId>rest-assured</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>io.quarkus</groupId>
+        <artifactId>quarkus-maven-plugin</artifactId>
+        <version>${quarkus.version}</version>
+        <extensions>true</extensions>
+        <executions>
+          <execution>
+            <goals>
+              <goal>build</goal>
+              <goal>generate-code</goal>
+              <goal>generate-code-tests</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <!--
+            The parent's two arguments, restated because a child's compilerArgs replaces
+            the parent's list rather than adding to it, with one lint switched off.
+
+            classfile is off for the reason htap-cqlite switches it off: the Cassandra
+            driver's classes carry annotations from artifacts it does not publish to a
+            consumer, so javac reports "Cannot find annotation method 'value()' in type
+            edu.umd.cs.findbugs.annotations.SuppressFBWarnings" against every class that
+            loads one, and -Werror then fails the build. The alternative is a
+            spotbugs-annotations dependency at a version nothing here manages.
+          -->
+          <compilerArgs>
+            <arg>-Xlint:all,-classfile</arg>
+            <arg>-Werror</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <systemPropertyVariables>
+            <!--
+              Quarkus installs the JBoss log manager, and a test JVM that has already
+              initialised java.util.logging cannot be given one afterwards: without this
+              the boot logging is lost and a startup failure is reported as silence.
+            -->
+            <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+            <maven.home>${maven.home}</maven.home>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

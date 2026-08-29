@@ -40,6 +40,16 @@
 
   <dependencies>
     <!--
+      For the timestamp spelling, and for that alone: the five access paths are compared
+      row for row, so the one that reads SSTable files and the one that reads through the
+      CQL driver must render a stored instant identically.
+    -->
+    <dependency>
+      <groupId>com.thelastpickle.htap</groupId>
+      <artifactId>htap-common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <!--
       arrow-vector for the schema and the vectors, arrow-c-data for the import of
       the stream the library populates, and arrow-memory-unsafe as the allocator.
       Unsafe rather than netty: netty is a second dependency tree for the same job,

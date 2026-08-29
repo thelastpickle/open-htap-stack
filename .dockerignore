@@ -1,8 +1,13 @@
-# Applies to a build whose context is the repository root.  No service has one today: each
-# names its own subdirectory, and backend/ and spark/ carry their own .dockerignore.  This
-# file is here so that adding a root-context build cannot silently upload the working tree:
-# .git alone is over a gigabyte here, because the Git LFS object store lives inside it.
+# Applies to a build whose context is the repository root, which backend-java is: it builds one
+# leaf of the Maven reactor and needs the parent pom beside it.  Every other service names its
+# own subdirectory, and backend/ and spark/ carry their own .dockerignore.  Without this file a
+# root-context build uploads the working tree: .git alone is over a gigabyte here, because the
+# Git LFS object store lives inside it.
 .git
+# A host build's output.  Copying it in would put a jar built against the host's JDK beside the
+# one the image builds, and Maven would then decide which of the two to use.
+target
+**/target
 .github
 .claude
 cassandra-data

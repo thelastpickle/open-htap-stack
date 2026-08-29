@@ -3,16 +3,16 @@
 tl;dr: `libcqlite_datafusion_c-0.1.0-linux-*.so.gz` is the `cqlite` access path with a C boundary in front of it, so the Java backend can drive it over Panama. &emsp;One library per architecture, gzipped, in Git LFS, with a checksum beside it. &emsp;It is built from a commit in the cqlite fork by `../../scripts/build-cqlite-so.sh`, and the whole of its version coupling is one number: `cqlite_abi_version()`.
 
 - [What was built](#what-was-built)
-- [Why a C ABI and not the DataFusion capsule the wheel uses](#why-a-c-abi-and-not-the-datafusion-capsule-the-wheel-uses)
+- [Why a C ABI and not the DataFusion capsule the Python reader used](#why-a-c-abi-and-not-the-datafusion-capsule-the-python-reader-used)
 - [Why the source is not here](#why-the-source-is-not-here)
 - [Why the artefact is committed](#why-the-artefact-is-committed)
 - [Why it is gzipped](#why-it-is-gzipped)
-- [Why it is twice the wheel's library](#why-it-is-twice-the-wheels-library)
+- [Why it is twice the size of the Python reader's library](#why-it-is-twice-the-size-of-the-python-readers-library)
 - [What a caller needs at run time](#what-a-caller-needs-at-run-time)
-- [What the fork commit carries](#what-the-fork-commit-carries)
+- [What the fork commits carry](#what-the-fork-commits-carry)
 - [Rebuilding](#rebuilding)
 
-The Python wheel that serves the same access path from `backend/` is documented in [`../../backend/dist/VENDOR.md`](../../backend/dist/VENDOR.md), and the two artefacts come from the same fork branch. &emsp;Read that file for the token bound and the `ea` version letter, which both libraries carry: from `914e1280` the provider crates are one commit below, `f8854103` and its `ea` letter two, and `4bc6b913` and its token bound three.
+`914e1280` is the fourth of four commits above `2bde26a7`, and the three below it are why this library cannot come from crates.io: the provider crates, the `ea` version letter Cassandra 6.0 writes, and a query's token bound on a BTI reader. &emsp;Each is described below. &emsp;A Python wheel over the same three commits served this access path until the backend was ported; its own file went with it, and what it recorded about those three commits is here.
 
 ## What was built
 
@@ -40,17 +40,17 @@ The `.sha256` beside each covers the compressed file, because that is what the i
 | `…-linux-aarch64.so` | 114,818,408 bytes | `e4c0609461467fd253c3f93a99ccb8dc2c578af9c4f8c28cc729a2415c90b899` |
 | `…-linux-x86_64.so` | 123,869,440 bytes | `9a31262a5fbe9e4a731659e4006e08ff0a1759e38532bdeaad800d745f524f43` |
 
-Both compressed files are stored in Git LFS; `.gitattributes` tracks `*.so.gz` and `*.so` alike, and `.gitignore` keeps a raw library out of a commit altogether. &emsp;They take the repository's LFS total from 726.2 MB to 804.5 MB, measured over the 74 tracked files. &emsp;Two more rebuilds of the pair and GitHub's free 1 GB is gone: LFS never replaces an object, so a rebuild adds 78.3 MB beside the old one rather than over it, giving 882.8 MB and then 961.1 MB. &emsp;So rebuild for a reason, and read the [Rebuilding](#rebuilding) section's "a rebuild for a comment" line as arithmetic rather than as taste.
+Both compressed files are stored in Git LFS; `.gitattributes` tracks `*.so.gz` and `*.so` alike, and `.gitignore` keeps a raw library out of a commit altogether. &emsp;They are 78.3 MB of the repository's 762.7 MB of LFS objects, over the 72 tracked files that remain now that the Python reader's two wheels are deleted. &emsp;Two more rebuilds of the pair and GitHub's free 1 GB a month is gone: LFS never replaces an object, so a rebuild adds 78.3 MB beside the old one rather than over it, giving 841.0 MB and then 919.3 MB. &emsp;So rebuild for a reason, and read the [Rebuilding](#rebuilding) section's "a rebuild for a comment" line as arithmetic rather than as taste.
 
-**No CI job reads them yet, and none pays for them either.** &emsp;`test-podman-compose.yaml` checked out with `lfs: true`, which fetched the pair on every run without opening it; it now checks out with `lfs: false` and pulls `cassandra/dist/**`, `backend/dist/**` and `spark/ivy/**` by name, the 72 objects its images and mounts read. &emsp;`java-tests.yaml` sets no `lfs` at all, deliberately, because the reactor's tests need no artefact; and `publish-images.yaml` fetches per-service paths, none of which names `htap-cqlite/dist/**`. &emsp;That last one is what has to change when the Java backend image arrives, and until then the only thing loading these libraries is the build script's own check and a developer's machine.
+**Both CI workflows that build an image now read them.** &emsp;`test-podman-compose.yaml` checks out with `lfs: false` and pulls `cassandra/dist/**`, `htap-cqlite/dist/**` and `spark/ivy/**` by name, because the backend image copies one of these libraries and verifies its checksum; `publish-images.yaml` names `htap-cqlite/dist/**` on its `backend` entry for the same reason. &emsp;A pull that did not name this path left the build copying a 130-byte pointer and dying at the checksum, which is the failure the compose workflow's second assertion now catches: it fails if any LFS object is left unnamed. &emsp;`java-tests.yaml` sets no `lfs` at all, deliberately, because the reactor's tests need no artefact.
 
 **`914e1280` is not pushed yet.** &emsp;The tip of `thelastpickle/mck/open-htap-stack` is `8f179fd1`, the commit below it, so the commit these libraries name can be read only in a local clone until someone pushes it. &emsp;`cqlite_build_info()` will report it either way, which is the hazard: the string looks traceable and is not. &emsp;The build script warns when the commit it is given is on no remote branch, and this line is that warning recorded rather than dismissed.
 
 `cqlite_datafusion.h` is committed beside them and is not the fork's file by reference but a copy of it. &emsp;It is what a reader of the Java binding compares against, and the `_Static_assert` lines in it are the struct-layout check a C caller gets at compile time and a Panama caller does not.
 
-## Why a C ABI and not the DataFusion capsule the wheel uses
+## Why a C ABI and not the DataFusion capsule the Python reader used
 
-The wheel hands Python an `FFI_TableProvider` capsule and lets Python own the DataFusion session. &emsp;That makes three things one pin: the `datafusion` crate the library was built against, `datafusion-ffi`, and the `datafusion` wheel the host installs. &emsp;`FFI_TableProvider` is a `#[repr(C)]` struct rather than a published specification, so raising any one of the three is a segfault rather than a build failure, and `../../backend/dist/VENDOR.md` exists in part to hold that pin by hand.
+That reader handed Python an `FFI_TableProvider` capsule and let Python own the DataFusion session. &emsp;That makes three things one pin: the `datafusion` crate the library was built against, `datafusion-ffi`, and the `datafusion` wheel the host installs. &emsp;`FFI_TableProvider` is a `#[repr(C)]` struct rather than a published specification, so raising any one of the three was a segfault rather than a build failure, and that reader's own vendor file existed in part to hold the pin by hand.
 
 This library owns the session instead. &emsp;It parses and plans the SQL itself and hands rows back over the Arrow C Data Interface, which is a published specification with a stable layout, so the caller's Arrow version and this library's need not match at all. &emsp;What is left to check is one integer at load, and a caller that finds a number it does not know registers nothing.
 
@@ -78,7 +78,7 @@ Measured on this pair: `gzip -9` gives 78.3 MB, `zstd -19` 44.1 MB and `xz -9` 3
 
 The image build decompresses, not the running process. &emsp;A library must be a real path for `SymbolLookup.libraryLookup`, and unpacking at startup would want a writable directory and would put 114 MB of I/O in front of the first request; the container image is the same size either way.
 
-## Why it is twice the wheel's library
+## Why it is twice the size of the Python reader's library
 
 114,818,408 bytes against the wheel's inner `cqlite_datafusion.abi3.so` at 58,018,632, and both are stripped: `.text` is 82,678,144 bytes here against 40,611,780 there, with no debug section in either.
 
@@ -94,7 +94,7 @@ A Java caller should pass `--enable-native-access=ALL-UNNAMED`: every call into 
 
 The library reads `cassandra-data/` where it lies and needs it mounted read-only, exactly as the wheel did. &emsp;It never writes.
 
-## What the fork commit carries
+## What the fork commits carry
 
 `914e1280` adds `crates/cqlite-datafusion-cabi`, 2,517 lines over 12 files, and changes `cqlite-datafusion` in two places to give a statement its own scope. &emsp;47 unit tests drive the exports as C drives them, and the crate builds with no change to the two commits below it.
 
@@ -109,6 +109,52 @@ Three of its decisions are worth knowing before changing the boundary.
 The library is `libcqlite_datafusion_c` because two crates in one workspace cannot both emit `libcqlite_datafusion`, and the Python crate already holds that name.
 
 **Three things the header does not say, and they are the fork's to correct rather than this copy's.** &emsp;Editing the copy here would make it stop describing the commit the libraries came from, and a rebuild for a comment costs half an hour and a second pair of LFS objects, so these arrive with the next rebuild that has another reason. &emsp;All three answers are read from `crates/cqlite-datafusion-cabi/src/lib.rs` at `914e1280`. &emsp;`cqlite_query` checks both out-parameters for null before it does any work and writes neither unless the query succeeded, so on a negative return `*out_stream` is untouched and a caller that zeroed the struct may test `release == NULL`; the header documents only the success case. &emsp;`cqlite_stmt_scan` declares `int` and says nothing about which codes it returns, where `cqlite_cancel` beside it does: the answer is `CQLITE_ERROR_BAD_ARGUMENT` for a null `stmt` or a null `out`, and `CQLITE_ERROR_PANIC` if a panic crossed the boundary, which `guard` gives every export. &emsp;And the file's second line separates its name from its description with an em-dash, where the style this repository writes to takes a colon.
+
+### `914e1280`'s three commits below it
+
+### `4bc6b913` — apply a query's token bound on a BTI reader, which dropped it
+
+`ScanTokenBound::contains` was called in one place, the Summary-guided walk in `summary_scan/mod.rs`, and `stream_all_partitions_for_query` gates that walk on `bti_partitions_db.is_none()`.  Every BTI generation, `da` or `ea`, has a `Partitions.db`, so such a reader falls through to the full-ring routes, whose signatures take no bound.  The commit adds `TokenGate` at the one emit both of those routes pass through, above every format branch.
+
+The provider tests the same bound again in `scan.rs::in_slice`, because the bound is documented as a hint the consumer must enforce and the crate is published against a registry `cqlite-core` that has no gate.  Without that second test, four slices over a 100-row table returned 400 rows.
+
+What filtering inside the reader saves, measured on one 203.7 MB `da` generation holding 1,102,576 rows of `demo.events`, median of three interleaved rounds of CPU time (user+sys, because the host's load average made a wall clock unusable), with an equivalent gate one layer above `TokenGate`'s:
+
+| Slices | CPU without the gate | CPU with the gate | Peak resident with the gate |
+| --- | --- | --- | --- |
+| 1 | 16.45 s | 11.79 s | 35 MB |
+| 2 | 38.88 s | 22.05 s | 36 MB |
+| 4 | 71.16 s | 40.33 s | 36 MB |
+| 7 | 127.73 s | 73.01 s | 38 MB |
+
+Peak resident without the gate reached 716 MB at seven slices, because every producer converted every partition and the out-of-slice rows queued in the merge before the consumer discarded them.  The gate holds it at 35 to 39 MB whatever the slice count.  `TokenGate` filters earlier than the gate those figures were taken with, so read them as the floor of what it saves.
+
+The gate does **not** make splitting pay, and the same table says why: solving N·P + R over the 2- and 4-slice points gives 71% of a slice repeated and 29% divided, in both sweeps.  Each slice re-reads and re-parses the whole data section, because this route has no partition-index seek.  The fit is a fit: it predicts 67.8 s at seven slices against the 73.01 s measured, and over-predicts the one-slice point, so read the 71% as the order of the repeated share rather than as a constant.  That is why `cqlite_splits` stays at 1.
+
+### `f8854103` — accept BTI `ea`, the Cassandra 6.0 version letter
+
+Five sites, no upstream line removed.  `version_gate/bti.rs` admits `ea` beside `da`; `format_detector.rs` maps `ea` to `V5x` and lists it in `is_supported`; `reader/header_helpers.rs` adds it to the version letters generation extraction recognises.
+
+The letters are layout-identical for a table on the default compressor, and 6.0's own source says so.  `BtiFormat.java:296-297` in 6.0-alpha2 reads:
+
+```java
+// da (5.0): initial version of the BTI format
+// ea (6.0): compression dictionary metadata in CompressionInfo component
+```
+
+Two facts make that section harmless here.  `CompressionMetadata.doPrepare()` writes the header, then the chunk offsets, then calls `writeCompressionDictionary` **last**, and that method is `if (compressionDictionary == null) return;`.  So a table with no dictionary writes no section at all, and `compression_info.rs` stops reading after the chunk offsets, which means a table that *does* carry one is not mis-parsed either; it is refused by `zstd_dictionary_option()`, which fails closed on any option key naming a dictionary.
+
+Every feature gate agrees letter for letter.  `BtiVersion` in 6.0-alpha2 overrides each `has*()` with a constant, identical to 5.0.8's, and reads the version string only in `isLatestVersion`, `isCompatible` and `isCompatibleForStreaming`, none of which this crate calls.  6.0 adds no new `has*()` method to `Version`.  The error's `floor` stays `"da"`, which is still 6.0's own `earliest_supported_version`.
+
+The `header_helpers.rs` site was missed while the reader was vendored here, and the stack worked anyway by luck: the numeric fallback returns the first number in the filename inside `0 < n < 1_000_000`, so a generation of a million or more would have read as 0.  Two things hid it.  The vendored copy's `[dev-dependencies]` were removed, so no inline test module compiled; and the existing `test_extract_generation_from_path` never calls the function under test, asserting only that a temporary file exists.  The fork has both fixed, and its `version_gate/mod.rs` test that asserted `ea` must be rejected is repaired to use `fa` for the next letter Cassandra writes.
+
+### `8f179fd1` — the provider crates the boundary sits on
+
+`cqlite-datafusion/` in the fork, a nested workspace listed in the root `exclude` so no root `cargo build` pulls DataFusion 54 in for members that do not need it.  38 unit tests and a doctest, in about a second.  `[patch.crates-io]` points `cqlite-core` at `../cqlite-core`, and a `[patch]` binds only the workspace declaring it, so `crates/cqlite-datafusion` still names plain `cqlite-core = "0.16.1"` and stays publishable.
+
+## DataFusion is not modified
+
+`thelastpickle/datafusion` has a branch `mck/open-htap-stack`, at `a6e2d3f7a` on `main`, and it carries no commit.  It exists so a future patch has a home.  DataFusion is an unmodified crates.io dependency of the provider and a statically linked dependency of this library; nothing here changes it.
 
 ## Rebuilding
 

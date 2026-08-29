@@ -9,10 +9,10 @@ import java.time.format.DecimalStyle;
  * The partition keys of the two demo tables that the sink writes and the dashboard reads.
  *
  * <p>{@code ingestion_counts} is keyed by a 30-minute window and {@code alerts_by_bucket} by
- * an hour, and each key was computed in two places in the Python: the 30-minute one at
- * {@code ingress/consumer/consumer.py:588} and {@code backend/app/db/cassandra_client.py:347},
- * the hour one at {@code consumer.py:908}, {@code cassandra_client.py:338} and
- * {@code backend/app/routes/demo.py:59}. A writer and a reader that spell a key differently
+ * an hour, and in the Python each key was computed in more than one place: the 30-minute one
+ * in the sink and again in the backend's Cassandra client, the hour one in the sink, in that
+ * client and once more in its demo route, five copies of two functions. A writer and a reader
+ * that spell a key differently
  * agree on nothing and report no error, so the throughput chart or the alert list simply reads
  * empty. One copy here is what removes that.
  *

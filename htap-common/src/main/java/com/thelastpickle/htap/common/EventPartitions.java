@@ -51,12 +51,11 @@ public final class EventPartitions {
      *
      * <p>The refusal also replaces the backend's {@code max(1, settings.event_bucket_minutes)},
      * deliberately, so a width of 0 fails at the caller rather than answering with a
-     * one-minute window nobody asked for. The clamp is written twice, at
-     * {@code backend/app/routes/query.py:822} in {@code _bucket_start} and at {@code :1019}
-     * in {@code get_window}, which steps back over closed windows; both are gone rather than
-     * one. The sink's copy divides by the width and so already raises, which makes the clamp
-     * the outlier of the three, and whoever ports either site would otherwise read it as a
-     * tolerance to keep.
+     * one-minute window nobody asked for. The clamp was written twice in the Python
+     * backend's query route, once where a bucket started and once where the window stepped
+     * back over closed ones; both are gone rather than one. The sink's copy divides by the
+     * width and so already raises, which makes the clamp the outlier of the three, and
+     * whoever ports either site would otherwise read it as a tolerance to keep.
      */
     public static String bucket(Instant eventTime, int bucketMinutes) {
         // No separate upper bound: a width above 60 leaves a remainder of 60, so the
@@ -66,8 +65,8 @@ public final class EventPartitions {
                     "bucketMinutes must be a divisor of 60, got " + bucketMinutes);
         }
         // The Instant parameter is what removes the hazard, and it is a deliberate
-        // narrowing of the Python's signature: consumer.py:event_bucket takes an aware
-        // datetime, so a caller there can hand it +05:30 and have the local minute floored.
+        // narrowing of the Python's signature: the sink's own event_bucket took an aware
+        // datetime, so a caller there could hand it +05:30 and have the local minute floored.
         // An Instant carries no offset to floor by, so this conversion cannot pick the
         // wrong one; ZoneOffset.UTC is the schema's window boundary rather than a defence.
         OffsetDateTime utc = OffsetDateTime.ofInstant(eventTime, ZoneOffset.UTC);
@@ -86,9 +85,9 @@ public final class EventPartitions {
      *
      * <p>Hashed rather than taken modulo the id itself, so that the spread does not depend
      * on which id source wrote the row, and two sources write them. Measured over 4,096 ids
-     * of each on driver 3.30.1 in the running backend: {@code uuid.uuid1()}, which the sink
-     * mints itself at {@code consumer.py:911} and again at {@code :1052} for an event whose
-     * id will not parse, draws one node for the host and puts all 4,096 rows in one shard
+     * of each on driver 3.30.1 in the running backend: {@code uuid.uuid1()}, which the Python
+     * sink minted itself and again for an event whose id would not parse, draws one node for
+     * the host and puts all 4,096 rows in one shard
      * under {@code id % 16}; the producer's {@code uuid_from_time} draws a node per call,
      * 4,096 distinct ones, and spreads over all 16 either way. Under crc32 both sources
      * spread over all 16, which is the property the schema needs and the reason to hash.

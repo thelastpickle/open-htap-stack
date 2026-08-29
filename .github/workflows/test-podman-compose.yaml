@@ -32,9 +32,8 @@ jobs:
 
       # What the images and the mounts read: the Sidecar tarball, the cqlite library the
       # backend image loads through Panama, and the ivy jars podman-compose.yml bind-mounts
-      # into the Spark container.  `backend/dist/**` leaves both the list and the tree in this
-      # commit: no compose service builds `./backend` any more, and that pull was 41.8 MB a run
-      # for nothing.  Adding a service that reads an LFS path means adding it here.
+      # into the Spark container.  Adding a service that reads an LFS path means adding it
+      # here, and the second assertion below is what fails the day one is not added.
       - name: Fetch the LFS objects this stack is built from
         run: |
           PATTERNS="cassandra/dist/**,htap-cqlite/dist/**,spark/ivy/**"

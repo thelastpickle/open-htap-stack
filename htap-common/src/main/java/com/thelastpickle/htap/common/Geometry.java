@@ -32,16 +32,15 @@ public final class Geometry {
      * Measured on {@code POLYGON((0 0,10 0,10 10,0 10,0 0),(2 2,3 2,3 3,2 3,2 2))}: eight
      * vertices of the ten survive and a point inside the hole answers inside. Both Python
      * copies answer the same eight, vertex for vertex, so this is the behaviour carried
-     * over rather than one the port introduced, and the three zones the sink seeds at
-     * {@code consumer.py:164,171,178} are simple rings that never reach it. Refusing the
+     * over rather than one the port introduced, and the three zones the sink seeds are
+     * simple rings that never reach it. Refusing the
      * input instead would trade a wrong shape for no shape, which for a breach check is
      * not obviously the better answer, so the behaviour stays and the claim is corrected.
      *
      * <p>The two Python copies disagreed about null and the sink's behaviour is the one
-     * kept: {@code ingress/consumer/consumer.py:608} strips {@code (wkt or "")} where
-     * {@code backend/app/utils/geometry.py:19} strips the argument itself and raises. The
-     * sink is the copy that needs it, because {@code consumer.py:811} passes
-     * {@code r.polygon_wkt} straight from a Cassandra row and that column is nullable, so
+     * kept: the sink stripped {@code (wkt or "")} where the backend's own helper stripped the
+     * argument itself and raised. The sink is the copy that needed it, because it passed
+     * {@code polygon_wkt} straight from a Cassandra row and that column is nullable, so
      * refusing here would move a zone with no polygon from an empty ring to an exception
      * inside the write path.
      *

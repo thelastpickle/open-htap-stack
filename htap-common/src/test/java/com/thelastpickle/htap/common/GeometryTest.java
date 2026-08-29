@@ -11,9 +11,9 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
 
 /**
- * Every expected value here was produced by running the Python this class replaces,
- * {@code backend/app/utils/geometry.py}, rather than derived again from the formula.
- * That is one of two copies, and {@code ingress/consumer/consumer.py:608} is the other;
+ * Every expected value here was produced by running the Python this class replaces, the
+ * backend's own geometry helper, rather than derived again from the formula.
+ * That was one of two copies, the Python sink's being the other;
  * they agree on every value and differ only on a null argument, which the sink accepts
  * and the backend does not, so the null case below is asserted against the sink.
  * The tolerances are there because {@link Math#sin} and its neighbours are specified to
@@ -117,8 +117,8 @@ class GeometryTest {
     @Test
     @DisplayName("a null polygon is an empty ring, as it is in the sink the class replaces")
     void parseAnswersAnEmptyRingForNull() {
-        // consumer.py:811 reads a nullable Cassandra column into this call, so a zone row
-        // with no polygon must answer an empty ring rather than raising in the write path.
+        // The sink reads a nullable Cassandra column into this call, so a zone row with no
+        // polygon must answer an empty ring rather than raising in the write path.
         assertEquals(List.of(), Geometry.parseWktPolygon(null));
     }
 

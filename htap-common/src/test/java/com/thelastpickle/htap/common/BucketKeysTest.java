@@ -8,9 +8,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * The keys here were produced by running the Python this class replaces:
- * {@code _thirty_min_bucket} at {@code ingress/consumer/consumer.py:588} and the
- * {@code strftime("%Y-%m-%dT%H")} at {@code consumer.py:908}. They are exact, because a
+ * The keys here were produced by running the Python this class replaces: the sink's own
+ * {@code _thirty_min_bucket} and its {@code strftime("%Y-%m-%dT%H")}. They are exact, because a
  * reader that spells a key differently from the writer reads an empty chart and reports
  * nothing wrong.
  */

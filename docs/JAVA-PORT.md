@@ -1,6 +1,8 @@
 # Porting the Python services to Java
 
-tl;dr: three of this stack's ten services are Python: the dashboard backend, the synthetic producer and the Kafka sink. &emsp;9,851 lines in all. &emsp;They are being rewritten in Java 25, the backend on Quarkus, on the `main-java` branch. &emsp;This document is the review that preceded the rewrite: fifteen findings about the design as `trunk` leaves it, and which commit answers each. &emsp;The findings are ordered by what a miss costs, not by where the code lives.
+tl;dr: three of this stack's ten services were Python: the dashboard backend, the synthetic producer and the Kafka sink. &emsp;9,851 lines in all. &emsp;They are now Java 25, the backend on Quarkus, as `htap-backend`, `htap-producer` and `htap-sink` in one Maven reactor beside `htap-common` and `htap-cqlite`; no Python remains in the services, and the tree they occupied is gone. &emsp;This document is the review that preceded the rewrite: fifteen findings about the design as `trunk` left it, and which commit answers each. &emsp;The findings are ordered by what a miss costs, not by where the code lives.
+
+The review's citations are line numbers in files this branch has since deleted. &emsp;They are kept as they were, because they are the evidence each finding rests on and `trunk` at `e17ad33` is where a reader can still see them. &emsp;Where a finding has been answered, the answer names the Java class.
 
 ## Contents
 
@@ -29,11 +31,11 @@ tl;dr: three of this stack's ten services are Python: the dashboard backend, the
 
 `trunk` at `e17ad33`, 55 commits, and the Python it contains:
 
-| Service | Files | Lines |
-| --- | --- | --- |
-| `backend/app` | 27 | 7,949 |
-| `ingress/consumer/consumer.py` | 1 | 1,123 |
-| `ingress/producer/producer.py` | 1 | 779 |
+| Service | Files | Lines | What replaced it |
+| --- | --- | --- | --- |
+| `backend/app` | 27 | 7,949 | `htap-backend`, on Quarkus |
+| `ingress/consumer/consumer.py` | 1 | 1,123 | `htap-sink`, a plain JVM application |
+| `ingress/producer/producer.py` | 1 | 779 | `htap-producer`, a plain JVM application |
 
 Repository tooling stays Python and is out of scope: `scripts/*.py`, the workflow's inline `python3 -` blocks, and `cassandra/` shell.
 
@@ -74,6 +76,8 @@ What the path demonstrates is unchanged: no snapshot, no Sidecar, no coordinator
 
 `README.md:152` is not one of the ten and must not be swept with them: it says the connector's reads and writes go through Cassandra's own JVM, which the port does not touch.
 
+Where the ten stand now. &emsp;Two went with the code: `cqlite_client.py:4` and `models.py:254` no longer exist, and the classes that replaced them were written without the claim rather than translating it. &emsp;`docs/MISSION-CONTROL.md`'s path table is restated here, in the words the finding asks for: no snapshot, no Sidecar and no second container. &emsp;Four are still to change and each is named so the sweep is a list rather than a search: `README.md:332`, `CLAUDE.md:19`, `frontend/src/pages/Explore.tsx:148` and `frontend/src/pages/Health.tsx:135`, with the three "JVM paths" groupings at `Explore.tsx:198`, `:272` and `.claude/skills/measure/SKILL.md:78` beside them.
+
 ### F3: the access-path list is a dict literal, and the frontend declares it a second time
 
 `query.py:135`'s `ENGINES` decides which path ids exist and which client and SQL dialect each one maps to. &emsp;`health.py:29` imports it and `health.py:150` rebuilds a second dict from it. &emsp;Seven sites in `query.py` read it, at `:147, 216, 330, 331, 342, 499, 1049`.
@@ -84,7 +88,7 @@ So the coupling with nothing to enforce it is the TypeScript list, and the port 
 
 ### F4: there is no test suite
 
-`CLAUDE.md` states it plainly: "Backend: no test suite", and correctness is verified by running queries against the stack. &emsp;That is the right primary check for this repository and it is not sufficient, because a good deal of the Python is pure logic that needs no stack at all: WKT parsing and polygon distance, the bucket and shard arithmetic, the SQL rewriting, percentiles, the Confluent five-byte Avro framing, the nested-prefix error tidying, the anomaly-rate solution.
+`CLAUDE.md` stated it plainly at `e17ad33`: "Backend: no test suite", and correctness was verified by running queries against the stack. &emsp;That is the right primary check for this repository and it is not sufficient, because a good deal of the Python is pure logic that needs no stack at all: WKT parsing and polygon distance, the bucket and shard arithmetic, the SQL rewriting, percentiles, the Confluent five-byte Avro framing, the nested-prefix error tidying, the anomaly-rate solution.
 
 The port introduces JUnit 6, and one standing rule governs it. &emsp;**Every commit that adds a Java class adds that class's tests in the same commit.** &emsp;No commit is exempt and no test is deferred, because a commit is the review unit here and an untested class reviewed alone gives a reviewer nothing to check the behaviour against. &emsp;Where behaviour genuinely needs a running stack, a real Presto cancel or a snapshot expiring mid-scan, the commit still tests what is testable without one and its message names the CI step that covers the rest.
 
@@ -123,7 +127,9 @@ So on `new ReentrantLock()` the two behave alike, and the argument for the no-ar
 
 `backend/dist/VENDOR.md`'s *The three-way pin* records it: the `datafusion` crate the wheel was compiled against, `datafusion-ffi`, and the `datafusion` wheel in `requirements.txt` must all be 54, because `FFI_TableProvider` is `#[repr(C)]` and each side reads the capsule as the struct its own build declared. &emsp;Raising one is not a type error; it is a segfault. &emsp;The pin exists only because Python owns the DataFusion `SessionContext`, and that same section says outright that a prebuilt wheel has no lockfile here to hold the Rust side.
 
-Moving the boundary removes the class of failure rather than restating it. &emsp;The Arrow C Data Interface **is** a stable specification with a documented struct layout and a versioning rule, where `FFI_TableProvider` is an internal type that happens to be `repr(C)`. &emsp;With rows crossing as `ArrowArrayStream`, the crate's Arrow version and Arrow Java's need not match, and the three-way pin becomes one runtime assertion: `cqlite_abi_version()` checked at library load, with registration refused on a mismatch. &emsp;That is a stronger guarantee than the wheel had, and the new `VENDOR.md` should say so in those words.
+Moving the boundary removes the class of failure rather than restating it. &emsp;The Arrow C Data Interface **is** a stable specification with a documented struct layout and a versioning rule, where `FFI_TableProvider` is an internal type that happens to be `repr(C)`. &emsp;With rows crossing as `ArrowArrayStream`, the crate's Arrow version and Arrow Java's need not match, and the three-way pin becomes one runtime assertion: `cqlite_abi_version()` checked at library load, with registration refused on a mismatch. &emsp;That is a stronger guarantee than the wheel had, and `htap-cqlite/dist/VENDOR.md` says so in those words.
+
+The three-way pin is now gone rather than merely superseded: the wheel, its checksums and its `VENDOR.md` left the tree with the Python backend, so one boundary exists and it is the safe one.
 
 ### F8: the sink duplicates the backend's geometry, and the duplication is undefended
 
@@ -131,7 +137,7 @@ Five functions exist twice, identically named: `parse_wkt_polygon`, `haversine_d
 
 The duplication is deliberate and it protects two things worth protecting: the sink's image does not carry the backend's package, and a change made for the dashboard does not silently change what the sink writes. &emsp;What it does not protect against is the two drifting, and they have already drifted once: `parse_wkt_polygon` strips `(wkt or "")` in the sink and `wkt` in the backend, so a null answers an empty ring on one side and raises on the other. &emsp;The sink is where that matters, because `consumer.py:811` passes a nullable `polygon_wkt` column straight into it. &emsp;If they drift again then live alerts and the dashboard's what-if page disagree with nothing to notice it.
 
-A zero-dependency `htap-common` module keeps both properties and removes the drift, because the sink depends on the library and not on the backend. &emsp;One rule holds it, enforced in the POM rather than asked for in a comment: **the module may declare no dependency outside test scope, transitively included.** &emsp;Stated as an allowlist because that is how the enforcer states it: naming the scopes to ban lets `system` through, and a rule short of one scope is a rule that passes the case it was written for. &emsp;Test scope holds `junit-jupiter` and reaches neither the sink's image nor the backend's. &emsp;`java.lang.Math`, `java.time` and `java.util.zip.CRC32` are enough, and `CRC32` is zlib's crc32, so `event_shard` ports exactly. &emsp;The moment that module wants Jackson or a driver, the coupling the duplication avoided has come back.
+A zero-dependency `htap-common` module keeps both properties and removes the drift, because the sink depends on the library and not on the backend. &emsp;Both now do: `htap-sink`'s `DroneTracker` derives a heading through `Geometry.initialHeadingDegrees` and its `DemoSchema` files a row through `EventPartitions`, and the backend reads the same two, so the five functions and the bucket arithmetic exist once. &emsp;One rule holds it, enforced in the POM rather than asked for in a comment: **the module may declare no dependency outside test scope, transitively included.** &emsp;Stated as an allowlist because that is how the enforcer states it: naming the scopes to ban lets `system` through, and a rule short of one scope is a rule that passes the case it was written for. &emsp;Test scope holds `junit-jupiter` and reaches neither the sink's image nor the backend's. &emsp;`java.lang.Math`, `java.time` and `java.util.zip.CRC32` are enough, and `CRC32` is zlib's crc32, so `event_shard` ports exactly. &emsp;The moment that module wants Jackson or a driver, the coupling the duplication avoided has come back.
 
 ### F9: query.py is 1,054 lines holding four separable concerns
 
@@ -181,7 +187,9 @@ Under F8 it moves to `htap-common`, where the sink's caller keeps it live. &emsp
 
 ### F14: the backend's healthcheck is a Python one-liner
 
-`services.backend.healthcheck.test` in `podman-compose.yml` runs `python -c "import urllib.request; …"`. &emsp;The key path rather than a line number, because this branch moves that line and a stale number sends a reader to the wrong service. &emsp;A temurin base carries no HTTP client at all, so the runtime stage must install one and the check must change in the same commit as the image. &emsp;Probed rather than assumed, on 2026-08-28: `podman run --rm docker.io/library/eclipse-temurin:25-jre sh -c 'for b in curl wget python3; do command -v $b || echo absent; done'` answers `absent` three times, and `:25-jdk` answers the same; both are Ubuntu 26.04. &emsp;Worth naming separately because it is the one part of the port that fails as a healthcheck timeout rather than as an error, and a timeout is the least informative failure this stack produces.
+`services.backend.healthcheck.test` in `podman-compose.yml` ran `python -c "import urllib.request; …"`. &emsp;The key path rather than a line number, because this branch moves that line and a stale number sends a reader to the wrong service. &emsp;A temurin base carries no HTTP client at all, so the runtime stage must install one and the check must change in the same commit as the image. &emsp;Probed rather than assumed, on 2026-08-28: `podman run --rm docker.io/library/eclipse-temurin:25-jre sh -c 'for b in curl wget python3; do command -v $b || echo absent; done'` answers `absent` three times, and `:25-jdk` answers the same; both are Ubuntu 26.04. &emsp;Worth naming separately because it is the one part of the port that fails as a healthcheck timeout rather than as an error, and a timeout is the least informative failure this stack produces.
+
+Answered without installing anything: the check is a TCP connect through bash's `/dev/tcp`, `timeout 2 bash -c '</dev/tcp/localhost/8000'`, which the JRE image's own shell provides. &emsp;What it gives up against the Python one is the body: it says the port is listening and not that a route answered, which is what the compose file's ordering needs and no more.
 
 ### F15: the window endpoint opens two Kafka clients per request
 
@@ -215,11 +223,15 @@ Every number this repository states is a measurement from a real run, and the po
 | the Accord medians | they depend on the driver |
 | the producer's sustained rate | 2,000 events a second is what `producer.py`'s send loop reached, and that loop is per-event Python around a vectorised numpy batch: one dict, one timeuuid, one `orjson.dumps` and one `send` for each event of a 50 ms window. &emsp;A Java loop is not that loop, and the requested rate was never the achieved one: `CLAUDE.md` records a runner producing 1,899/s of the 2,000 asked for |
 
+Where those stand now. &emsp;The producer's rate is measured: the Java loop held 1,971 to 1,991 records a second against its target of 2,000, and the broker's own end offsets grew by 243,000 in 127 s, which is 1,913 a second measured without asking the producer. &emsp;The sink's is measured too, draining a backlog rather than keeping up: 1,180,641 rows in 180 s, 6,559 writes a second, on a node simultaneously serving the Python sink's 1,064 to 1,438 and a whole-history comparison. &emsp;The cqlite timings, the memory figures, the CDC delay and the Accord medians are **not** re-measured, and `CLAUDE.md` still carries the Python's; each is quoted there with the process it was measured on rather than silently reattributed.
+
 Three things the port might get wrong in a way no existing assertion would catch, so each needs its own measurement:
 
 - **The v1 timeuuid.** &emsp;`Uuids.startOf(millis)` fixes clock_seq and node to constants, so two events in the same millisecond mint the *same* UUID. &emsp;The primary key is `((event_bucket, shard), event_id)`, so that is a silently overwritten row, and at 2,000 events a second the producer stamps them 0.5 ms apart. &emsp;`htap-common` mints its own, matching `cassandra.util.uuid_from_time`: a 60-bit count of 100 ns intervals since 1582-10-15, the version and variant bits, and a **random** 14-bit clock_seq and 48-bit node. &emsp;The node's multicast bit is left as drawn, which RFC 9562 would have set, for the one reason that `uuid_from_time` leaves it as drawn: it forces no bit, measured on driver 3.30.1 in the running backend as 1,994 of 4,000 draws with bit 40 of the node set, that bit being the least significant of the node's first octet and so the one the RFC names. &emsp;Every reference assertion binds the node explicitly, six of them over five distinct UUIDs, so none of those would have caught a Java that forced the bit; `theMulticastBitIsLeftAsDrawn` is the assertion that does, requiring both values of the bit over a thousand draws. &emsp;Assert a million distinct UUIDs at the producer's cadence, and assert the intended millisecond round-trips, since the sink derives `event_time` from `event_id`.
 - **BLAKE2b.** &emsp;`vector.py` uses `hashlib.blake2b(digest_size=8)`, which the JDK does not have. &emsp;A different function turns cosine similarity into noise, and the CI vector assertion then passes or fails arbitrarily. &emsp;Check a fixed corpus and its Python-produced vectors into a test resource and assert byte equality.
 - **Cross-path value spelling.** &emsp;The workflow asserts the five paths agree value for value. &emsp;A JDBC driver returning `java.sql.Timestamp` and `BigDecimal` where the Python client returned natives will spell those differently in JSON. &emsp;Run one row through all five Java paths and assert the JSON strings are identical.
+
+All three are answered. &emsp;`TimeUuids` mints its own v1 and `TimeUuidsTest` holds the distinctness at the producer's cadence, the millisecond round trip and the multicast bit; `Blake2b` is checked against digests `hashlib.blake2b` produced, the RFC 7693 vector among them, so a vector written by the Python and one written by the Java hash a token to the same dimension; and the spelling is one class, `Cells`, with the dashboard step's five-path comparison as the assertion that it holds.
 
 Three places Java offers a better mechanism than the Python had. &emsp;Each is an improvement to measure, not to assume:
 
@@ -231,20 +243,20 @@ Three places Java offers a better mechanism than the Python had. &emsp;Each is a
 
 | Finding | Answered by |
 | --- | --- |
-| F1 one process | |
-| F2 the no-JVM claim | |
-| F3 the engine list | |
-| F4 no test suite | every commit that adds a class, by the standing rule. &emsp;`Add a Maven reactor, a zero-dependency common module, and its tests` is where the first suite exists and where `.github/workflows/java-tests.yaml` starts running it on every push, so a later commit's tests fail a build rather than waiting for someone to run them |
-| F5 six clients | |
-| F6 the one-run idiom | |
-| F7 the version pin | `Expose the cqlite reader over a C ABI`, which builds the boundary: `htap-cqlite/dist/VENDOR.md` records one integer, `cqlite_abi_version()`, where `backend/dist/VENDOR.md`'s *The three-way pin* records a three-way agreement, and the library's own load check reads it. &emsp;Open until the wheel leaves the tree with the Python backend, since until then both boundaries exist and only one of them is safe to raise |
-| F8 duplicated geometry | `Add a Maven reactor, a zero-dependency common module, and its tests`, in part: `htap-common` holds the five geometry functions and the bucket and shard arithmetic, and its POM refuses any dependency outside test scope, by an allowlist rather than by naming scopes, so the module stays reachable from every service. &emsp;Open until the sink and the backend each read them from it instead of from a copy |
-| F9 query.py | |
+| F1 one process | `Serve the dashboard's read paths from Quarkus, on a second port` and the three router commits after it. &emsp;The nineteen module-level names are `@ApplicationScoped` beans, 43 of them in the backend, and no mutable static remains outside a method; Quarkus adds no worker fork, so the requirement a Dockerfile comment held is now the container name and the port binding |
+| F2 the no-JVM claim | `Describe the stack the docs now document` restates the path table in `docs/MISSION-CONTROL.md`, and the two Python sites went with the code. &emsp;Open for the four places F2 names above: two prose files and two frontend pages, with the three "JVM paths" groupings beside them |
+| F3 the engine list | `Compare the five paths from Quarkus, and stream the comparison as NDJSON`. &emsp;`QueryPaths` is one bean holding a `SequencedMap` in its constructor's order, and every read of the list goes through it, so the order a comparison reports in and the order a sequential run uses are one declaration. &emsp;Not the `EnginePathId` enum this review proposed: the id is each path's own `name()` and the order is the constructor's, so a sixth path is a constructor parameter rather than an enum constant, and the compiler still cannot see the TypeScript list |
+| F4 no test suite | every commit that adds a class, by the standing rule. &emsp;`Add a Maven reactor, a zero-dependency common module, and its tests` is where the first suite exists and where `.github/workflows/java-tests.yaml` starts running it on every push, so a later commit's tests fail a build rather than waiting for someone to run them. &emsp;868 tests at `7d8fb7c`: 60 in `htap-common`, 38 in `htap-cqlite`, 632 in `htap-backend`, 72 in `htap-sink` and 66 in `htap-producer` |
+| F5 six clients | `Serve the dashboard's read paths from Quarkus, on a second port` for Cassandra and `Read the same rows down the other four paths` for the rest. &emsp;One `ConnectionGate` holds the connect lock and the retry throttle for all of them, and the throttle is no longer Cassandra's alone. &emsp;Not the `GatePolicy` record this review proposed: `busy` and the four aborts stayed with each path, because the finding's own table is what argued against inventing a value for the two that have no abort |
+| F6 the one-run idiom | `Compare the five paths from Quarkus, and stream the comparison as NDJSON`, `Run the remaining routers from Quarkus` and the review fixes after them. &emsp;Three gates and not one, `SingleRunGate`, `TransactionGate` and `ConsoleGate`, because sharing one would have a console statement refuse an Accord demonstration and the two touch no common table. &emsp;And a `Semaphore(1)` rather than the `tryLock()` this review proposed: the stream route releases its run from whichever worker Quarkus gave the body, where a `Lock` raises `IllegalMonitorStateException` and leaves the gate held for the life of the process. &emsp;`SingleRunGateTest` fails under a `ReentrantLock` substituted for the semaphore, which is what makes that a tested reason rather than a stated one |
+| F7 the version pin | `Expose the cqlite reader over a C ABI`, which builds the boundary: `htap-cqlite/dist/VENDOR.md` records one integer, `cqlite_abi_version()`, where the deleted `backend/dist/VENDOR.md`'s *The three-way pin* recorded a three-way agreement, and the library's own load check reads it. &emsp;Closed by `Remove the Python backend and ingress`: the wheel and its pin have left the tree, so one boundary exists and it is the safe one |
+| F8 duplicated geometry | `Add a Maven reactor, a zero-dependency common module, and its tests`, then `Port the sink, and keep it the owner of the schema`. &emsp;`htap-common` holds the five geometry functions and the bucket and shard arithmetic, its POM refuses any dependency outside test scope by an allowlist, and both services now read it: the sink's `DroneTracker` and `DemoSchema` against the backend's read layer. &emsp;The five functions and the bucket arithmetic exist once |
+| F9 query.py | `Compare the five paths from Quarkus, and stream the comparison as NDJSON`. &emsp;The four concerns are separate classes in one package: `Statements` and `Dialects` validate and rewrite, `QueryPaths` is the registry, `Comparison` with `Run`, `ComparisonRun` and `Cancellation` is the orchestrator, and `Translator` with `NaturalLanguage` is the translator. &emsp;The orchestrator has the tests, as the finding asked |
 | F10 CI reading the process | `Read the backend's two settings from its environment, not its internals`, which also fixed a guard in those lines that could not fire: `ls "$DIR" \| head -5 \|\| exit 1` takes its status from `head`, so the step printed "cannot access" and reported PASS. &emsp;Verified both ways on the running stack |
-| F11 flat settings | |
-| F12 models.py | |
-| F13 the dead helper | |
-| F14 the healthcheck | |
-| F15 two Kafka clients per request | copied as it stands; the measurement that would justify sharing them is not done |
+| F11 flat settings | `Serve the dashboard's read paths from Quarkus, on a second port` and the commits after it: twelve `@ConfigMapping` interfaces with explicit names, grouped by what they configure. &emsp;The measurement the finding asked for is **not done**: nobody has set `SPARK_QUERY_TIMOUT_S` against the Quarkus backend to see whether the container refuses to start, so whether a typo is caught here or ignored as it was before is still unestablished |
+| F12 models.py | `Serve the dashboard's read paths from Quarkus, on a second port` and the three commits after it: 73 records in `api/dto`, one file each, and `SqlConsoleRequest` is among them rather than beside its route. &emsp;The fifteen shapes F12 tabulates were compared field by field against the running Python by a CI step that existed while both backends did; that step went with the Python, and `Serve the dashboard from the Quarkus backend` records what replaced it |
+| F13 the dead helper | `Add a Maven reactor, a zero-dependency common module, and its tests` moved it and `Port the sink, and keep it the owner of the schema` gave it its caller: `Geometry.initialHeadingDegrees` is called by the sink's `DroneTracker` and by nothing else, which is where the Python's live copy was |
+| F14 the healthcheck | `Serve the dashboard from the Quarkus backend`: a TCP connect through the JRE image's own bash, `timeout 2 bash -c '</dev/tcp/localhost/8000'`, so nothing is installed and nothing is downloaded. &emsp;It reports a listening port rather than an answering route, which is what the compose ordering needs |
+| F15 two Kafka clients per request | `Compare the five paths from Quarkus, and stream the comparison as NDJSON`, in part. &emsp;`SinkProgress` opens one `Admin` where the Python needed a consumer beside it, because Java's `Admin` reads committed offsets and offsets by timestamp alike and can commit neither, so the second client and its hazard of committing over the sink's progress are both gone. &emsp;Still opened per check: the measurement that would justify a long-lived client is not done |
 
-The table is filled in as the branch lands, and the last commit closes it.
+Every row is filled. &emsp;Two are open and say what remains: F2's four prose and frontend places, and F11's typo measurement. &emsp;F15 is answered as far as a measurement licenses and no further.

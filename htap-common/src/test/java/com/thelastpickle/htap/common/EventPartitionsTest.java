@@ -23,8 +23,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The bucket strings and shard numbers here were produced by running the Python this
- * class replaces: {@code event_bucket} and {@code event_shard} in
- * {@code ingress/consumer/consumer.py}. They are exact, not approximate, because a
+ * class replaces: {@code event_bucket} and {@code event_shard} in the Python sink. They are
+ * exact, not approximate, because a
  * disagreement of one shard is a query that matches nothing.
  */
 class EventPartitionsTest {
@@ -179,8 +179,9 @@ class EventPartitionsTest {
     @DisplayName("the id is hashed rather than taken modulo, which measured as one shard")
     void hashingIsWhatSpreadsVersionOneUuids() {
         // The low bits of a version-1 UUID are the node field, and one id source draws one
-        // node for the host: `uuid.uuid1()`, which the sink mints at consumer.py:911 and
-        // :1052, put all 4,096 of a measured batch in one shard under `id % 16`. A fixed
+        // node for the host: `uuid.uuid1()`, which the Python sink minted in both of the
+        // places it needed one, put all 4,096 of a measured batch in one shard under
+        // `id % 16`. A fixed
         // node here is what reproduces that source; the producer's `uuid_from_time` draws a
         // node per call and would have spread on its own, so the modulo's answer depends on
         // which source wrote the row and the hash is what removes the dependency.

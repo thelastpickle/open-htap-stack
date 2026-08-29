@@ -145,7 +145,7 @@ const ENGINES: { key: Engine; label: string; role: string; colour: string }[] = 
   {
     key: 'cqlite',
     label: 'cqlite SQL',
-    role: 'Analytical · DataFusion over the live SSTable files, parsed by cqlite in this process. No snapshot, no Sidecar and no JVM, so it cannot contend with OLTP latency. Rows are as of the last flush.',
+    role: 'Analytical · DataFusion over the live SSTable files, parsed by cqlite in this process. No snapshot, no Sidecar and no second service, so it cannot contend with OLTP latency. Rows are as of the last flush.',
     colour: 'var(--color-pink)',
   },
 ]
@@ -195,7 +195,7 @@ function shardList(shards: number): string {
  * two conditions decide what the figures mean.  A first run after a restart charges
  * Presto and the Thrift Server a warm-up that no later run pays, so the order
  * follows the warm run.  And the sink draining a Kafka backlog at 3,000 rows a
- * second takes the CPU that the JVM paths want, which is enough to reorder the two
+ * second takes the CPU that Presto and Spark want, which is enough to reorder the two
  * slowest on one window; every figure below is from a drained sink.
  *
  * Cassandra is first in all four, because it either answers from one partition in
@@ -269,7 +269,7 @@ const COMPARE_PRESETS = [
     // to 1,161 MB: spark 7.23, 15.15, 15.84 and 16.80 s; the bulk reader 7.88, 9.65,
     // 11.85, 13.95 and 15.80 s plus a 1.1 to 3.6 s snapshot; cqlite 13.24, 13.26 and
     // 24.80 s.  Two conditions move them.  Draining a Kafka backlog at 3,000 rows a
-    // second takes the CPU the two JVM paths want, and while it drained the bulk
+    // second takes the CPU the two Spark paths want, and while it drained the bulk
     // reader read one window in 14.7 and 16.0 s against cqlite's 10.9 and 11.6 s,
     // which two later pairs on an idle sink reversed.  And the window itself grows,
     // so no two of these figures are over the same rows.

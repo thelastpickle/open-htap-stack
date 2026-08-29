@@ -6,4 +6,6 @@
 *.so filter=lfs diff=lfs merge=lfs -text
 *.so.gz filter=lfs diff=lfs merge=lfs -text
 *.tar.gz filter=lfs diff=lfs merge=lfs -text
+# No .whl is committed now that the Python reader is gone; the line stays so that one added
+# later is never a blob.
 *.whl filter=lfs diff=lfs merge=lfs -text

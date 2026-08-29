@@ -1,10 +1,11 @@
 name: Java unit tests
 
-# The Maven reactor's own suite, which needs no stack: pure arithmetic and geometry that
-# the sink, the producer and the backend must all agree on. Separate from Test Podman
-# Compose because that workflow builds the six images podman-compose.yml declares a
-# `build:` for, brings up all ten of its services and takes 22 to 24 minutes; a wrong
-# shard number should not wait on any of it.
+# The Maven reactor's own suite, which needs no stack. It now covers the three services
+# themselves, the backend, the sink and the producer, as well as the arithmetic in
+# htap-common that all three must agree on, and nothing in it starts a container. Separate
+# from Test Podman Compose because that workflow builds the six images
+# podman-compose.yml declares a `build:` for, brings up all ten of its services and takes
+# 22 to 24 minutes; a wrong shard number should not wait on any of it.
 #
 # No `paths` filter, and the reason is this job's own: a filter is how a suite silently
 # stops running when a path moves. The whole job is a checkout, a JDK and one `mvn

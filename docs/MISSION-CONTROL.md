@@ -9,7 +9,7 @@ Everything on every page is a query against the running stack. &emsp;There are n
                               │
                          nginx │ serves the bundle, proxies /api
                               ▼
-                     FastAPI backend :8000
+                     Quarkus backend :8000
               CQL ──────┬──────┬────── HiveServer2
                         │  Presto HTTP        │
                         ▼      ▼              ▼
@@ -26,7 +26,7 @@ Everything on every page is a query against the running stack. &emsp;There are n
 The fifth path is inside the box the dashboard already occupies, which is why it does not appear above:
 
 ```
-                     FastAPI backend :8000
+                     Quarkus backend :8000
                         │  cqlite + DataFusion, in this process
                         ▼
                      cassandra-data/, mounted read-only
@@ -90,7 +90,7 @@ The paths are not interchangeable, and that is the point:
 | **Presto** | CQL request path | Full SQL, distributed scan. Shares the coordinator with live ingest. |
 | **Spark SQL** | CQL request path, via spark-cassandra-connector | Full SQL in a Spark job. Per-partition work, and anything you want to hand to Spark afterwards. |
 | **Spark bulk reader** | SSTable files, via the Sidecar | Reads a coordinated snapshot straight off disk. Never enters the request path, so a scan here cannot contend with transactional latency. |
-| **cqlite** | The live SSTable files, in the dashboard's own process | Full SQL, planned and executed by DataFusion over files cqlite parses in place. No snapshot, no Sidecar and no JVM, so the whole path is one library. Answers as of the last flush. |
+| **cqlite** | The live SSTable files, in the dashboard's own process | Full SQL, planned and executed by DataFusion over files cqlite parses in place. No snapshot, no Sidecar and no second container: the parse and the SQL run inside the dashboard, so the whole path is one library it loads. Answers as of the last flush. |
 
 Four presets of deliberately different size, because one query cannot show what five paths are for, and because the size of the question is most of the answer:
 
@@ -258,15 +258,18 @@ Nothing here is persisted. &emsp;Restarting the backend returns the demo to the 
 The compose file builds and serves both halves, so this is only for working on them.
 
 ```shell
-# Backend.  Reaching Cassandra from the host means the driver discovers the node's
+# Backend.  Built by the reactor and run from the packaged output; measured at 0.980 s to
+# listening.  Reaching Cassandra from the host means the driver discovers the node's
 # in-network broadcast address, so tell it to use the published port instead.
-cd backend
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+mvn -B -ntp -pl htap-backend -am package -DskipTests
 CASSANDRA_HOST=localhost CASSANDRA_TRANSLATE_ADDRESSES_TO=127.0.0.1 \
   PRESTO_HOST=localhost PRESTO_PORT=8088 \
   SPARK_THRIFT_HOST=localhost KAFKA_HOST=localhost KAFKA_PORT=9092 SPARK_UI_HOST=localhost \
-  .venv/bin/uvicorn app.main:app --reload --port 8000
+  ACCORD_SQL_HOST=localhost \
+  java -jar htap-backend/target/quarkus-app/quarkus-run.jar
 ```
+
+The cqlite path declines under that command, and two settings are why: `CQLITE_LIBRARY` defaults to the path inside the image and `htap-cqlite/dist/` holds Linux libraries only, so a host outside Linux has none to load; and `CQLITE_DATA_DIR` defaults to the container's mount rather than `./cassandra-data/data`. &emsp;`scripts/build-cqlite-so.sh` builds a library. &emsp;The Python backend declined that path from the host for the same reason, so nothing is lost here that was available before.
 
 ```shell
 # Frontend.  Vite proxies /api to localhost:8000, so no CORS and no compiled-in host.

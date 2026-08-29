@@ -15,7 +15,7 @@ interface PlatformHealth {
   total_drones: number
   // Which container command this stack runs under, so the commands below name one the
   // operator has: podman here, docker at the workshop.  The backend reads it from a
-  // setting compose passes; see backend/app/config.py.
+  // setting compose passes; see ContainerSettings in htap-backend.
   container_cli?: string
 }
 
@@ -132,7 +132,7 @@ const SERVICE_ROLES: Record<string, string> = {
   Presto: 'Analytical SQL over the same Cassandra rows, with no copy in between',
   Spark: 'Batch analytics and bulk reads, over the same rows again',
   'cqlite reader':
-    "Reads Cassandra's live SSTable files in this backend's own process, with no snapshot and no JVM",
+    "Reads Cassandra's live SSTable files in this backend's own process, with no snapshot and no second service",
 }
 
 /**

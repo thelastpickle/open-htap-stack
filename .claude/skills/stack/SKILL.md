@@ -1,6 +1,6 @@
 ---
 name: stack
-description: Run the demo stack under podman-compose — bring it up, get a code change into a running service, reconnect the dashboard after a restart, or wipe data. Use when a container is unhealthy, when an edit to backend/ or frontend/ needs to reach the running stack, when queries fail with connection errors, or when every container has died at once.
+description: Run the demo stack under podman-compose — bring it up, get a code change into a running service, reconnect the dashboard after a restart, or wipe data. Use when a container is unhealthy, when an edit to a Maven module or to frontend/ needs to reach the running stack, when queries fail with connection errors, or when every container has died at once.
 user-invocable: true
 allowed-tools:
   - Bash
@@ -9,7 +9,7 @@ allowed-tools:
 
 # Running the stack
 
-Eight containers: `cassandra`, `kafka`, `presto`, `spark`, `backend`, `frontend`, `data-producer`, `data-cassandra-sink`.  `compose.yml` is a symlink to `podman-compose.yml`; edit the latter.
+Ten containers: `cassandra`, `kafka`, `apicurio`, `presto`, `spark`, `accord-sql`, `backend`, `frontend`, `data-producer`, `data-cassandra-sink`.  Six are built here and four are upstream images.  `compose.yml` is a symlink to `podman-compose.yml`; edit the latter.
 
 ## Up
 
@@ -28,9 +28,18 @@ podman compose -f podman-compose.yml up -d --no-deps backend frontend
 
 `up -d` on its own recreates the container from the **old image**; it looks like your change had no effect.  Always build first.  `--no-deps` keeps compose from restarting Cassandra and Kafka underneath you.
 
-Nothing in the `backend` image compiles.  The cqlite reader arrives as a prebuilt wheel from `backend/dist/`, so the context is `./backend` like every other service.  Measured on darwin/arm64: 33.1 s with `--no-cache`, 4.9 s after a new wheel, 2.9 s for a Python-only change, and 1.6 s with nothing changed.  The cold figure was 9 min 25 s while the Rust was compiled here, and CI paid it on every run because a runner keeps no cargo cache mount.
+**`backend`, `data-cassandra-sink` and `data-producer` are Maven modules, so their images compile and their context is the repository root.**  Each Dockerfile copies every module's pom before any source, which buys the layer that matters: the dependency resolution.  Measured on darwin/arm64 with the stack running beside the build, `backend` first, then each change in turn:
 
-A reader change now costs more than a build here, not less: a commit in the cqlite fork, then `scripts/build-cqlite-wheel.sh` once per architecture, then a commit of `backend/dist/`.  `backend/dist/VENDOR.md` names the fork commit each wheel came from.
+| What changed | `backend` | `data-cassandra-sink` |
+| --- | --- | --- |
+| nothing | 14 s | — |
+| one Java file | 41 s | 24 s |
+| a `pom.xml` | 2 min 59 s | — |
+| `--no-cache` | 3 min 26 s | 2 min 2 s |
+
+Read the pom row as the one to plan around: it costs nearly what a cold build does, because `dependency:go-offline` re-resolves the whole slice of the reactor, where a change under `src/` re-runs the compile alone.  The Rust the cqlite reader is built from compiles nowhere here; when it did, the cold figure was 9 min 25 s and CI paid it on every run, because a runner keeps no cargo cache mount.
+
+A reader change costs more than a build here, not less: a commit in the cqlite fork, then `scripts/build-cqlite-so.sh` once per architecture, then a commit of `htap-cqlite/dist/`.  `htap-cqlite/dist/VENDOR.md` names the fork commit each library came from.
 
 `frontend` serves a build baked into the image, so a change under `frontend/src/` needs the build.  For iteration, `cd frontend && npm run dev` proxies `/api` to `localhost:8000` and reloads.
 
@@ -42,7 +51,7 @@ Poll; do not sleep.
 until curl -sf -m 5 localhost:8000/api/health > /dev/null; do sleep 5; done
 ```
 
-The backend has taken **290 s** to report healthy when Cassandra was starting beside it, because it retries the driver's contact points rather than failing.  A `sleep 60` that usually works is how a check becomes flaky.
+The backend has taken **290 s** to report healthy when Cassandra was starting beside it, because it retries the driver's contact points rather than failing.  That figure was measured on the Python backend; the Java one opens its HTTP port at once and reports each path down until its own connect returns, so the wait is for a path rather than for the port.  A `sleep 60` that usually works is how a check becomes flaky.
 
 ## After restarting a service
 
@@ -74,7 +83,7 @@ Three things made this hard to see, and two of them are fixed:
 
 - The container reported `Up (starting)` with nothing listening, because the entrypoint's `until cqlsh …` loop kept polling a daemon that had died.  It now tests `kill -0` on the backgrounded pid and exits, so `podman ps` says `Exited (1)` and `podman logs cassandra` ends at the cause.
 - **`spark` never started at all**, and looked like a second, unrelated failure.  Its `depends_on` is `condition: service_healthy` on cassandra, so compose created the container and never ran it: `podman inspect` showed `State=initialized` and `StartedAt=0001-01-01`, and `podman logs spark` was empty.  An empty log and that date mean *not started*, not *crashed*.  Start it with `podman compose -f podman-compose.yml up -d spark` once cassandra is healthy.
-- **The sink does not recover.**  Ten hours after Cassandra died it was still printing `batch write failed, will retry from the last commit: ('Unable to complete the operation against any hosts', {})`, with an empty error map, meaning the driver had no host left to try.  `podman restart data-cassandra-sink` fixes it, and the sink then drains the Kafka backlog at about twice the producer's rate.  The backend needs the same treatment; `/api/platform/reconnect` above is the lighter form of it.
+- **The sink does not recover.**  Ten hours after Cassandra died it was still printing `batch write failed, will retry from the last commit`, and what follows the colon is how you tell the two implementations apart: the Python sink printed `('Unable to complete the operation against any hosts', {})`, with an empty error map, and the Java one prints `CompletionException: java.lang.IllegalStateException: no host available`.  Either way the driver has no host left to try.  `podman restart data-cassandra-sink` fixes it, and the sink then drains the Kafka backlog faster than the producer fills it: the Python sink was measured at about twice the producer's rate, and the Java one at 6,559 writes a second against a producer at 2,000.  The backend needs the same treatment; `/api/platform/reconnect` above is the lighter form of it.
 
 A drained backlog writes into **past** buckets, because `event_bucket` comes from the event's own time.  So the current window can be empty while old windows are still growing, and no window is safely closed until the lag reaches zero.  Check it before quoting any figure:
 

@@ -331,6 +331,122 @@ jobs:
           export TMP_DIR="${RUNNER_TEMP:-$PWD/.ci-tmp}"
           mkdir -p "$TMP_DIR"
 
+          # The two settings this step asserts against, read from the container's
+          # environment so they cannot drift from what the backend is running, and so
+          # these assertions say nothing about what the backend is written in.
+          #
+          # Guarded, because printenv exits 1 and prints nothing when the variable is
+          # absent, and under `bash -e` the assignment alone would end the step on a
+          # blank line with no reason.  That case is reachable rather than theoretical:
+          # a compose environment: change only reaches a container that is recreated,
+          # and a backend still running from before that change answers exit 1 here.
+          # Measured on a stack whose backend predated the change, which is also the
+          # stack the ci-step skill runs a section against.
+          # Whether the container answers at all is established first, and separately,
+          # because `podman exec` also exits non-zero for a stopped or missing
+          # container: without this the annotation below would name an unset variable
+          # for a container that is simply not there, and send a reader to the wrong
+          # fix.
+          podman exec backend true \
+            || { echo "::error::the backend container is not running, so this step cannot read its settings"; exit 1; }
+          DATA_DIR=$(podman exec backend printenv CQLITE_DATA_DIR) \
+            || { echo "::error::CQLITE_DATA_DIR is not set in the backend container; recreate it after a compose change"; exit 1; }
+          [ -n "$DATA_DIR" ] \
+            || { echo "::error::CQLITE_DATA_DIR is empty in the backend container"; exit 1; }
+          READ_LIMIT_S=$(podman exec backend printenv SPARK_QUERY_TIMEOUT_S) \
+            || { echo "::error::SPARK_QUERY_TIMEOUT_S is not set in the backend container; recreate it after a compose change"; exit 1; }
+          # A decimal integer with no leading zero, which is stricter than a `-gt 0`
+          # test and has to be.  The budgets below are arithmetic on this value, bash
+          # evaluates a non-numeric string in $(( )) as an unset name worth 0, and
+          # `curl --max-time 0` means no timeout at all, so emptiness is not the only
+          # thing to reject.  A leading zero is the case a sign test misses, because
+          # `test` reads its operand as decimal while $(( )) reads a leading zero as
+          # octal: measured under the runner's own bash 5.2, 010 passed the sign test
+          # and derived a 128s budget from 8, and 0900 passed it and then failed the
+          # arithmetic with "value too great for base", which `set -e` does not treat
+          # as fatal.  That left the budget empty and the step running, and the first
+          # derived call then died on `curl: option --max-time: expected a proper
+          # numerical parameter`, exit 2, a long way from the cause.
+          case "$READ_LIMIT_S" in
+            ''|*[!0-9]*|0*)
+              echo "::error::SPARK_QUERY_TIMEOUT_S is not a positive decimal integer: '$READ_LIMIT_S'"
+              exit 1 ;;
+          esac
+          echo "the backend parses $DATA_DIR and gives up on a Spark read after ${READ_LIMIT_S}s"
+
+          # Two client budgets, derived from that bound rather than repeating it,
+          # because the bound is now settable from the host environment and a curl
+          # cutting the request off first reports a client-side truncation instead of
+          # the path's answer.
+          #
+          # They cover the five benchmark calls whose own literal was at or above the
+          # bound, which is what says each was written to outlast a read: the windowed
+          # grouping, the two snapshot reads, and the two whole-history runs.
+          #
+          # Every other benchmark call in this step keeps its literal, and the literal
+          # is the assertion rather than an oversight: each of those calls says a path
+          # answered quickly, so a curl cut is a failure they exist to report, and
+          # raising one to the bound would let a single hang consume the whole step.
+          # Four of them do run a Spark path under a literal below this bound: the
+          # bounded read over all five paths at 600s, and the fleet grouping, the lock
+          # race that reuses its payload and the parallel run at 300s.  At the default
+          # bound each therefore cuts before the backend's own socket timeout could
+          # answer, which is what those calls mean and not a case to fix.  The two
+          # remaining literal calls touch no Spark path at all, the cqlite read of one
+          # shard of one window and the CQL point read it is compared against, so this
+          # bound does not describe them in the first place.
+          #
+          # Each wanted budget carries headroom over the bound rather than equalling it,
+          # since curl's clock starts at request start while the backend's socket
+          # timeout starts later, after the comparison lock, the snapshot and the Thrift
+          # submission, and after it fires the backend still has to compose and send
+          # its error JSON.
+          #
+          # Neither is an upper bound on a comparison: a sequential run of four paths
+          # may spend the bound on each.  What bounds that is this step's own
+          # timeout-minutes, and a budget above what is left of it is dead letter, since
+          # the runner kills the step first and prints no reason at all.  Both 1800s
+          # literals here were in that position.
+          #
+          # Clamping to the step's *total* does not fix it, which is the correction this
+          # arrangement makes: timeout-minutes starts its clock at the step and a
+          # --max-time starts one at the call, and every call below sits several hundred
+          # seconds in.  At the default bound the whole-history budget clamped to the
+          # total was 1200, the entire step, so a hang there still ended as a step
+          # killed with no message.  So budget() clamps to what is left of the step at
+          # the moment of the call: SECONDS is this shell's own clock, and one step is
+          # one shell, so it is the same clock the runner is holding the step against.
+          #
+          # A call that reaches the floor was going to be killed by the step in any
+          # case, so nothing is given up by cutting it short; what is gained is that
+          # curl exits 28, the call's own handler names it, and the log says which call
+          # it was.  STEP_MARGIN_S is what the assertions after a call need, since a
+          # curl that returns with the step already over reports nothing either.
+          #
+          # The 1200 is that timeout-minutes in seconds, restated because a shell cannot
+          # read a workflow key.  Nothing enforces the pair, so the step's own
+          # timeout-minutes carries a comment pointing back here; lower it without
+          # changing this and every budget is dead letter again.
+          STEP_LIMIT_S=1200
+          STEP_MARGIN_S=60
+          BUDGET_FLOOR_S=30
+          READ_WANT_S=$(( READ_LIMIT_S + 120 ))
+          HISTORY_WANT_S=$(( READ_LIMIT_S * 2 + 120 ))
+          budget() {
+            local want=$1
+            local left=$(( STEP_LIMIT_S - SECONDS - STEP_MARGIN_S ))
+            if [ "$left" -lt "$BUDGET_FLOOR_S" ]; then
+              left=$BUDGET_FLOOR_S
+            fi
+            if [ "$want" -le "$left" ]; then
+              echo "$want"
+            else
+              echo "$left"
+              echo "curl budget cut to ${left}s of the ${want}s wanted: ${SECONDS}s of this ${STEP_LIMIT_S}s step are spent" >&2
+            fi
+          }
+          echo "one read wants ${READ_WANT_S}s and a whole-history run ${HISTORY_WANT_S}s, each cut at the call to what is left of the ${STEP_LIMIT_S}s step"
+
           # Small helpers, so the polling loops below need no nested quoting.
           cat > "$TMP_DIR/jq-path.py" << 'PY'
           # Print one value out of a JSON document on stdin: jq-path.py total_drones
@@ -578,7 +694,7 @@ jobs:
           )
           print(json.dumps({"sql": sql, "limit": 5}))
           PY
-          curl -s --max-time 900 -X POST http://localhost:8000/api/query/benchmark \
+          curl -s --max-time "$(budget "$READ_WANT_S")" -X POST http://localhost:8000/api/query/benchmark \
             -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-window.json" \
             > "$TMP_DIR/window-result.json"
           python3 -m json.tool < "$TMP_DIR/window-result.json" | head -40
@@ -754,12 +870,24 @@ jobs:
           # The reader parses the dataset the other four paths are reading, so the
           # mount is read-only.  Asserted because a writable mount would be invisible
           # until something corrupted the files, and because the flag is one word in
-          # podman-compose.yml that a later edit could drop.
-          # Read from the running configuration, so the two cannot drift apart.
-          DATA_DIR=$(podman exec backend python -c 'from app.config import settings; print(settings.cqlite_data_dir)')
-          echo "the backend parses $DATA_DIR"
-          podman exec backend sh -c "ls '$DATA_DIR/demo' | head -5" \
+          # podman-compose.yml that a later edit could drop.  DATA_DIR comes from the
+          # container's environment, read and guarded at the top of this step.
+          # ls, then head, rather than one pipeline: a pipeline's status is its last
+          # command's, so `ls missing | head` exits 0 and the guard below could never
+          # fire.  Found by running this step against a backend whose mount really was
+          # wrong, which it passed.
+          podman exec backend sh -c "ls '$DATA_DIR/demo'" > "$TMP_DIR/data-dir.txt" \
             || { echo "::error::the backend cannot read the Cassandra data directory it parses"; exit 1; }
+          # And non-empty, because `ls` on a directory that exists and holds nothing exits
+          # 0: a mount resolving to an empty directory is a real failure of this stack and
+          # the status alone reports it as a pass.  A backend recreated from a git worktree
+          # took that worktree's own near-empty cassandra-data/ and reported every cqlite
+          # query as a decline, which is the class of failure this guards.
+          if [ ! -s "$TMP_DIR/data-dir.txt" ]; then
+            echo "::error::the backend reads $DATA_DIR/demo and finds no table directory; the mount is wrong"
+            exit 1
+          fi
+          head -5 "$TMP_DIR/data-dir.txt"
           if podman exec backend sh -c "touch '$DATA_DIR/demo/.write-probe'" 2>/dev/null; then
             podman exec backend sh -c "rm -f '$DATA_DIR/demo/.write-probe'" || true
             echo "::error::the backend can write the Cassandra data directory; the mount must be read-only"
@@ -786,10 +914,10 @@ jobs:
           body.update({"engines": ["spark_bulk"], "reuse_snapshot": True})
           print(json.dumps(body))
           PY
-          curl -s --max-time 900 -X POST http://localhost:8000/api/query/benchmark \
+          curl -s --max-time "$(budget "$READ_WANT_S")" -X POST http://localhost:8000/api/query/benchmark \
             -H 'Content-Type: application/json' --data @"$TMP_DIR/snapshot-fresh.json" \
             > "$TMP_DIR/snapshot-fresh-result.json"
-          curl -s --max-time 900 -X POST http://localhost:8000/api/query/benchmark \
+          curl -s --max-time "$(budget "$READ_WANT_S")" -X POST http://localhost:8000/api/query/benchmark \
             -H 'Content-Type: application/json' --data @"$TMP_DIR/snapshot-reuse.json" \
             > "$TMP_DIR/snapshot-reuse-result.json"
           python3 - "$TMP_DIR/snapshot-fresh-result.json" "$TMP_DIR/snapshot-reuse-result.json" << 'PY'
@@ -1064,7 +1192,7 @@ jobs:
           # from the outside and stop it.  Polling until the run appears rather than
           # sleeping a fixed time keeps this deterministic: the endpoint holds the
           # lock for at least its baseline window, so it cannot finish unseen.
-          curl -s --max-time 1800 -o "$TMP_DIR/cancelled-run.json" \
+          curl -s --max-time "$(budget "$HISTORY_WANT_S")" -o "$TMP_DIR/cancelled-run.json" \
             -X POST http://localhost:8000/api/query/benchmark \
             -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-aggregate.json" &
           CANCEL_TARGET=$!
@@ -1179,7 +1307,7 @@ jobs:
           podman exec cassandra cqlsh cassandra -e "SELECT event_id FROM demo.events LIMIT 1;" 2>&1 \
             | grep -qE "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}" \
             || { echo "::error::demo.events is empty, so the history preset has nothing to scan; this step must run before the Parquet import test truncates it"; exit 1; }
-          curl -s --max-time 1800 -X POST http://localhost:8000/api/query/benchmark \
+          curl -s --max-time "$(budget "$HISTORY_WANT_S")" -X POST http://localhost:8000/api/query/benchmark \
             -H 'Content-Type: application/json' --data @"$TMP_DIR/benchmark-aggregate.json" \
             > "$TMP_DIR/aggregate-result.json"
           python3 -m json.tool < "$TMP_DIR/aggregate-result.json"
@@ -1197,12 +1325,12 @@ jobs:
           # for, because Cassandra clears it on time whatever is still reading, and
           # the components then vanish underneath the job — "Required 1 replicas but
           # only 0 responded".  The longest a read can last is the backend's socket
-          # timeout, so that is the bound, read from the running configuration rather
-          # than repeated here where the two could drift apart.
+          # timeout, so that is the bound: READ_LIMIT_S, read from the container's
+          # environment at the top of this step rather than repeated here where the
+          # two could drift apart.
           podman exec cassandra nodetool listsnapshots 2>&1 | tail -20
           podman exec cassandra nodetool listsnapshots 2>/dev/null \
             | grep htap_dashboard > "$TMP_DIR/snapshots.txt" || true
-          READ_LIMIT_S=$(podman exec backend python -c 'from app.config import settings; print(settings.spark_query_timeout_s)')
           python3 - "$READ_LIMIT_S" "$TMP_DIR/snapshots.txt" << 'PY'
           import re, sys
           from datetime import datetime
@@ -1285,6 +1413,11 @@ jobs:
           echo "✓ The producer adopted the settings set through the dashboard"
 
           echo "✓ All Mission Control checks passed"
+        # 20 minutes is also STEP_LIMIT_S=1200 near the top of this step, against which
+        # budget() cuts every curl budget derived from SPARK_QUERY_TIMEOUT_S.  A shell
+        # cannot read this key, so change the two together: lower this alone and a
+        # budget outlives the step again, which is the failure that printed no reason
+        # at all.
         timeout-minutes: 20
 
       - name: Test Accord transactions

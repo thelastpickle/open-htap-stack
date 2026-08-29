@@ -514,6 +514,32 @@ services:
       PRESTO_PORT: "8080"
       SPARK_THRIFT_HOST: "spark"
       SPARK_THRIFT_PORT: "10000"
+      # How long either Spark path may go without answering before its socket times
+      # out, which is not how long a query may take: a scan that answered in 113s
+      # alone was still working after 180s with three other paths beside it.  Also
+      # the figure the bulk reader derives its snapshot TTL from.  Stated here rather
+      # than left to the backend's default, because the CI step that asserts a
+      # snapshot's TTL outlives the read taken over it reads the bound from this
+      # container's own environment; a figure only the backend's default knew would
+      # leave that assertion nothing to compare against.
+      #
+      # Two ceilings sit above it, and neither is enforced here.  nginx gives a
+      # dashboard request 3600s (frontend/default.conf.template), so past that a
+      # browser gives up before the backend does.  And the dashboard CI step asks for
+      # two curl budgets derived from this value, x + 120 for one read and 2x + 120 for
+      # a whole-history run, inside its own timeout-minutes of 20; each call gets the
+      # lesser of what it asked for and what is left of that step when the call is
+      # made.  So raising this bound buys a call nothing once the step is the shorter
+      # of the two, and where that happens depends on how far into the step the call
+      # sits rather than on this number alone.
+      #
+      # The 900 below is the default the stack runs, and the backend's own
+      # spark_query_timeout_s default is unreachable while this line exists, because
+      # this is the only place the variable is declared and it is always passed.  So
+      # change this one; a change to backend/app/config.py alone would leave the
+      # running backend at 900, and the CI assertion reads that container's own
+      # environment and would agree with it.
+      SPARK_QUERY_TIMEOUT_S: "${SPARK_QUERY_TIMEOUT_S:-900}"
       KAFKA_HOST: "kafka"
       KAFKA_PORT: "19092"
       # The same topic and group the sink above is given.  The window's settled flag

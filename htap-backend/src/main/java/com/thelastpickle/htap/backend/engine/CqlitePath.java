@@ -161,7 +161,7 @@ public class CqlitePath implements QueryPath {
         return Map.copyOf(declined);
     }
 
-    /** What the library reports about itself, absent until it has been loaded. */
+    /** What the library reports about itself, absent until a session has opened through it. */
     public Optional<String> buildInfo() {
         CqliteLibrary loaded = library;
         return Optional.ofNullable(loaded).map(CqliteLibrary::buildInfo);
@@ -201,14 +201,25 @@ public class CqlitePath implements QueryPath {
      *
      * <p>False when there was nothing to stop. The reader polls the flag this sets and gives up at
      * its next partition, so a scan stops in a fraction of a second with no connection torn down.
+     *
+     * <p>{@link #busy()} and not the statement is what says a scan is running, because a statement
+     * exists only once {@code query} has planned the scan and opened its files, which on a large
+     * table is seconds. Reading the statement alone made a stop pressed in that window answer false
+     * and then be discarded, so the scan ran to completion.
      */
     @Override
     public boolean abort() {
-        CqliteStatement current = running;
-        if (current == null) {
+        if (!busy()) {
             return false;
         }
         aborted = true;
+        CqliteStatement current = running;
+        if (current == null) {
+            // Nothing to cancel through the binding yet; read() tests the flag as soon as it holds
+            // a statement, which is the same stop arriving a moment later.
+            LOG.info("cqlite scan cancelled before it had a statement to cancel");
+            return true;
+        }
         boolean stopped = current.cancel();
         if (stopped) {
             LOG.info("cqlite scan cancelled");
@@ -221,11 +232,14 @@ public class CqlitePath implements QueryPath {
         ensureRegistered();
         queryLock.lock();
         try {
+            // Cleared first, so the window in which abort() reports a stop it cannot deliver is the
+            // one instruction between taking the lock and this line. Before the lock the path is
+            // not busy and abort() answers false.
+            aborted = false;
             CqliteSession current = session;
             if (current == null) {
                 throw new EngineUnavailable("cqlite reader not connected");
             }
-            aborted = false;
             return read(current, sql);
         } finally {
             queryLock.unlock();
@@ -236,6 +250,9 @@ public class CqlitePath implements QueryPath {
         try (CqliteStatement statement = current.query(sql)) {
             running = statement;
             try {
+                if (aborted) {
+                    statement.cancel();
+                }
                 List<String> columns = statement.columns();
                 return new QueryRows(columns, drain(statement, columns), figures(statement));
             } catch (CqliteException e) {
@@ -385,7 +402,6 @@ public class CqlitePath implements QueryPath {
         }
         CqliteLibrary loaded = CqliteLibrary.load(settings.library());
         LOG.infof("cqlite library loaded: %s, %s", settings.library(), loaded.buildInfo());
-        library = loaded;
         BufferAllocator opened = new RootAllocator();
         CqliteSession started;
         try {
@@ -400,6 +416,11 @@ public class CqlitePath implements QueryPath {
         }
         allocator = opened;
         session = started;
+        // Last of the three, so buildInfo() answers for a session that opened rather than for a
+        // library that merely loaded: an openSession that fails leaves nothing behind but the log
+        // line above, where a library set before it would have the Health page reporting a build
+        // string for a path that cannot read a file.
+        library = loaded;
         return started;
     }
 

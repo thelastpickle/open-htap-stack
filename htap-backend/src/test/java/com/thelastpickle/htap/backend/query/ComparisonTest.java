@@ -175,16 +175,22 @@ class ComparisonTest {
     /**
      * Every path at once, with one probe over the whole window: while they overlap the cost belongs
      * to all of them and to none in particular, so there is nothing to attribute per path.
+     *
+     * <p>The overlap is recorded from inside each leg, and it has to be: a latch read after {@code
+     * together} has joined every leg has reached zero whether the legs ran together or in turn, so
+     * a sequential implementation would pass such a check. Each leg here waits for the other two,
+     * so only a run where all three are in flight sees the latch fall.
      */
     @Test
     @Timeout(20)
-    void aParallelRunAsksEveryPathAndMeasuresOneCombinedImpact() throws InterruptedException {
+    void aParallelRunAsksEveryPathAndMeasuresOneCombinedImpact() {
         reads.subject = Optional.of("drone-1");
         CountDownLatch started = new CountDownLatch(3);
+        List<Boolean> sawTheOthers = new CopyOnWriteArrayList<>();
         for (FakePath path : List.of(cassandra, presto, cqlite)) {
             path.answering(() -> {
                 started.countDown();
-                await(started);
+                sawTheOthers.add(await(started));
                 return new QueryRows(List.of("n"), List.of(List.of(1)));
             });
         }
@@ -194,10 +200,45 @@ class ComparisonTest {
 
         OltpImpact combined = comparison.together(run).orElseThrow();
 
-        assertTrue(started.await(5, TimeUnit.SECONDS), "the three paths did not overlap");
+        assertEquals(List.of(true, true, true), sawTheOthers, "the three paths did not overlap");
         assertEquals(3, run.results().size());
         assertNotNull(combined);
         assertEquals(Map.<String, OltpImpact>of(), run.impacts());
+    }
+
+    /**
+     * An interrupt does not abandon the legs it is waiting on.
+     *
+     * <p>Returning early would have the route answer, and the gate admit the next comparison, while
+     * three legs were still writing into the run and still holding their engine connections. The
+     * interrupt is re-raised once every leg has finished, so a caller that wanted to stop still
+     * learns that it was asked to.
+     */
+    @Test
+    @Timeout(20)
+    void anInterruptWaitsForEveryLegAndIsRaisedAfterwards() {
+        Thread caller = Thread.currentThread();
+        CountDownLatch started = new CountDownLatch(3);
+        for (FakePath path : List.of(cassandra, presto, cqlite)) {
+            path.answering(() -> {
+                started.countDown();
+                await(started);
+                if (path == cassandra) {
+                    // The first leg joined, so the interrupt lands inside that join rather than
+                    // after the last one, and it sleeps so the join is genuinely still waiting.
+                    caller.interrupt();
+                    sleep(300);
+                }
+                return new QueryRows(List.of("n"), List.of(List.of(1)));
+            });
+        }
+        Run run = comparison.begin("SELECT 1", List.of("cassandra", "presto", "cqlite"),
+                RunMode.PARALLEL, 10, false);
+
+        comparison.together(run);
+
+        assertEquals(3, run.results().size());
+        assertTrue(Thread.interrupted(), "the interrupt was swallowed");
     }
 
     /** Worked out at the start, because by the time a cancel asks, the path is busy with it. */
@@ -216,11 +257,21 @@ class ComparisonTest {
         assertEquals(List.of(), run.sparkStatements());
     }
 
-    private static void await(CountDownLatch latch) {
+    private static void sleep(long millis) {
         try {
-            latch.await(5, TimeUnit.SECONDS);
+            Thread.sleep(millis);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    /** True when the latch reached zero, which is a caller's evidence that the others got here. */
+    private static boolean await(CountDownLatch latch) {
+        try {
+            return latch.await(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
         }
     }
 

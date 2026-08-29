@@ -110,9 +110,14 @@ public class Windows {
      * empty, which makes the caller fall through to the one now filling rather than fail.
      */
     boolean holdsEvents(String bucket) {
-        // No clamp on the shard count, where the Python had max(1, …): the sink refuses to write
-        // under a width or a count it cannot use, so a stack configured with neither has no row
-        // for this read to find and an empty window is the true answer.
+        // Refused rather than clamped, as EventPartitions.shard refuses the same value: a count of
+        // zero makes the shard list empty, and `shard IN ()` is a SyntaxException the catch below
+        // would swallow once per candidate window, so a misconfigured stack would report eight
+        // warnings and no window rather than the one thing wrong with it.
+        if (events.shards() < 1) {
+            throw new IllegalArgumentException(
+                    "EVENT_SHARDS must be at least 1, got " + events.shards());
+        }
         String shards = IntStream.range(0, events.shards())
                 .mapToObj(Integer::toString)
                 .collect(Collectors.joining(","));

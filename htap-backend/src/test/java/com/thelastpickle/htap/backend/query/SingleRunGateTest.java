@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 /**
  * One comparison at a time, and what the refusal tells a viewer.
@@ -101,6 +102,28 @@ class SingleRunGateTest {
 
         assertSame(second, gate.inFlight().orElseThrow());
         assertThrows(SingleRunGate.Busy.class, () -> gate.begin(ASKED, List.of()));
+    }
+
+    /**
+     * A run taken on one thread is released on another, which is why this is a semaphore.
+     *
+     * <p>The stream route writes its body from whichever worker Quarkus gives it, and its {@code
+     * finally} runs there. A {@link java.util.concurrent.locks.Lock} would raise {@code
+     * IllegalMonitorStateException} at that release and leave the gate held for the life of the
+     * process, with every later comparison refused as busy.
+     */
+    @Test
+    @Timeout(10)
+    void aRunTakenOnOneThreadCanBeReleasedOnAnother() throws InterruptedException {
+        Run first = gate.begin(ASKED, List.of());
+        Thread other = Thread.ofPlatform().start(() -> gate.end(first));
+        other.join();
+
+        assertTrue(gate.running().isEmpty());
+
+        Run second = gate.begin(ASKED, List.of());
+
+        assertSame(second, gate.inFlight().orElseThrow());
     }
 
     /** Worked out at the start, because by the time a cancel asks, the path is busy with it. */

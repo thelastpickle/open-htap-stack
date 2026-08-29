@@ -144,22 +144,20 @@ public class SparkBulkPath implements QueryPath {
         ready();
         queryLock.lock();
         try {
-            Long total = null;
             double prepareMs = 0;
             boolean allReused = true;
             List<String> tables = tablesIn(sql);
             List<Double> ages = new ArrayList<>(tables.size());
+            List<OptionalLong> measured = new ArrayList<>(tables.size());
             for (String table : tables) {
                 long started = System.nanoTime();
                 Prepared prepared = registerBulkView(table, reusePrepared);
                 prepareMs += (System.nanoTime() - started) / 1_000_000.0;
                 allReused &= prepared.reused();
                 ageOf(prepared.snapshot()).ifPresent(ages::add);
-                OptionalLong measured = sidecar.snapshotBytes(table, prepared.snapshot());
-                if (measured.isPresent()) {
-                    total = (total == null ? 0 : total) + measured.getAsLong();
-                }
+                measured.add(sidecar.snapshotBytes(table, prepared.snapshot()));
             }
+            Long total = totalBytes(measured);
             QueryRows rows = run(sql);
             // The oldest age, because that is the age of the least current thing read.
             Double oldest = ages.stream().max(Double::compare).map(Round::tenth).orElse(null);
@@ -204,6 +202,28 @@ public class SparkBulkPath implements QueryPath {
 
     /** A snapshot the view now points at, and whether it was already there. */
     private record Prepared(String snapshot, boolean reused) {}
+
+    /**
+     * How many bytes of SSTable files the snapshot holds, over the tables the statement reads.
+     *
+     * <p>Absent, and not the sum of what could be measured, when one table's size did not come back:
+     * a short sum still looks whole, and the dashboard divides this figure by the read's duration to
+     * quote a MB/s rate. Absent for a statement that reads no table, since zero bytes would read as
+     * a snapshot with nothing in it.
+     */
+    static Long totalBytes(List<OptionalLong> measured) {
+        if (measured.isEmpty()) {
+            return null;
+        }
+        long summed = 0;
+        for (OptionalLong one : measured) {
+            if (one.isEmpty()) {
+                return null;
+            }
+            summed += one.getAsLong();
+        }
+        return summed;
+    }
 
     /**
      * Which tables this statement reads.

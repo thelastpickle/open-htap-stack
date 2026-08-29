@@ -41,9 +41,10 @@ public final class Statements {
     /**
      * The statement as the engines will see it, or a refusal.
      *
-     * <p>One trailing semicolon is taken off rather than refused, because a statement pasted from
-     * {@code cqlsh} carries one and every engine here would refuse it. A second semicolon anywhere
-     * is what a caller sending two statements looks like, and that is refused.
+     * <p>Trailing semicolons are taken off rather than refused, because a statement pasted from
+     * {@code cqlsh} carries one and every engine here would refuse it; the strip is a loop, so
+     * {@code SELECT 1;;} is accepted too. What is refused is a semicolon with anything after it,
+     * which is what a caller sending two statements looks like.
      *
      * @throws Refused if the statement is empty, is more than one, does not read, or names a word
      *     that writes

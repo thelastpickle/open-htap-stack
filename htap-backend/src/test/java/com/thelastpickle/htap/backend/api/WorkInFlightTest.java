@@ -126,7 +126,7 @@ class WorkInFlightTest {
         assertEquals(40, job.tasksTotal());
     }
 
-    /** Three paths have no listing to give, and each says why rather than being omitted. */
+    /** Two paths keep no list at all, and each says why rather than being omitted. */
     @Test
     void thePathsWithNoListingSayWhy() {
         Map<String, String> unreadable = work().now().unreadable();

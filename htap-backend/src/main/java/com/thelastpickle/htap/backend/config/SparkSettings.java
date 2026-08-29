@@ -31,7 +31,9 @@ public interface SparkSettings {
      * The Thrift Server's own application UI, on the same host as the master's.
      *
      * <p>4040 is where the first application in a JVM binds, and the Thrift Server is the only
-     * application in that container. The property is the {@code SPARK_APP_UI_PORT} compose declares.
+     * application in that container, so the default is the whole answer here as it was in the
+     * Python. {@code SPARK_APP_UI_PORT} overrides it; compose declares no such variable, and a
+     * container that needs to is the one whose Spark binds elsewhere.
      */
     @WithName("app-ui-port")
     @WithDefault("4040")

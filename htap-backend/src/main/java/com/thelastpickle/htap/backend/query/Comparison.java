@@ -155,13 +155,23 @@ public class Comparison {
                     .name("compare-" + engine)
                     .start(() -> run.answered(engine, run(run, engine))));
         }
+        boolean interrupted = false;
         for (Thread leg : legs) {
-            try {
-                leg.join();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
+            while (true) {
+                try {
+                    leg.join();
+                    break;
+                } catch (InterruptedException e) {
+                    // Joined to the end even so, and the interrupt re-raised below. Returning here
+                    // would have the route serialise its answer, and the gate admit the next
+                    // comparison, while these legs were still writing results and still holding
+                    // their engine connections, which is the contention the gate exists to prevent.
+                    interrupted = true;
+                }
             }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 

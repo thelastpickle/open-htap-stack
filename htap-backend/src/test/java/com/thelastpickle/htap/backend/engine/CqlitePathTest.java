@@ -1,6 +1,7 @@
 package com.thelastpickle.htap.backend.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -121,6 +122,53 @@ class CqlitePathTest {
                 "CREATE TABLE demo.events (event_id uuid PRIMARY KEY)",
                 CqlitePath.createTableCql(
                         describedAs("  CREATE TABLE demo.events (event_id uuid PRIMARY KEY)  ")));
+    }
+
+    /** Nothing to stop is false, so the Health page does not report having stopped a scan. */
+    @Test
+    void aStopWithNoScanRunningIsRefused() {
+        assertFalse(path().abort());
+    }
+
+    /**
+     * A scan that holds the lock but has no statement yet is still stopped.
+     *
+     * <p>This is the window in which {@code query} is planning the scan and opening its files, which
+     * on a large table is seconds; the statement the binding cancels through does not exist yet, so
+     * the flag is the whole answer and the drain tests it the moment it has one. That the flag then
+     * turns the drain's error into the cancelled message needs a {@code CqliteException}, which the
+     * binding does not let a caller construct, so it is verified by stopping a real scan.
+     */
+    @Test
+    void aStopPressedBeforeTheScanHasAStatementIsStillAStop() {
+        CqlitePath scanning = new CqlitePath(cassandra(), cqlite(dataDir), null) {
+            @Override
+            public boolean busy() {
+                return true;
+            }
+        };
+
+        assertTrue(scanning.abort());
+    }
+
+    /** No session, so no library to report on: a build string here would name a path that cannot read. */
+    @Test
+    void aPathThatHasOpenedNothingReportsNoBuildInfo() {
+        assertTrue(path().buildInfo().isEmpty());
+    }
+
+    /**
+     * A statement on a path with no session is refused, and the lock is given back: the refusal is
+     * one a young stack meets, and a lock left held would make every later scan report a scan
+     * running.
+     */
+    @Test
+    void aStatementWithNoSessionIsRefusedAndLeavesNoScanRunning() {
+        CqlitePath path = path();
+
+        assertThrows(EngineUnavailable.class, () -> path.query("SELECT 1"));
+        assertFalse(path.busy());
+        assertFalse(path.abort());
     }
 
     private Path directory(String table, UUID id) throws IOException {

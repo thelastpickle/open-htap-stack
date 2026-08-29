@@ -1,12 +1,14 @@
 package com.thelastpickle.htap.backend.engine;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.thelastpickle.htap.backend.config.CassandraSettings;
 import com.thelastpickle.htap.backend.config.SparkSettings;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -76,6 +78,30 @@ class SparkBulkPathTest {
         assertEquals(
                 "SELECT * FROM bulk_events LIMIT 10",
                 path(900).dialect("SELECT * FROM events ALLOW FILTERING", 10));
+    }
+
+    /** Two tables read, both measured, so the figure is the whole snapshot. */
+    @Test
+    void theSnapshotSizeIsTheSumOverTheTablesRead() {
+        assertEquals(
+                300L,
+                SparkBulkPath.totalBytes(List.of(OptionalLong.of(100), OptionalLong.of(200))));
+    }
+
+    /**
+     * One table unmeasured makes the figure absent rather than short: a sum missing a table's files
+     * still looks whole, and the compare page divides it by the read's duration to quote MB/s.
+     */
+    @Test
+    void aTableWhoseSizeDidNotComeBackTakesTheFigureAwayRatherThanShorteningIt() {
+        assertNull(SparkBulkPath.totalBytes(List.of(OptionalLong.of(100), OptionalLong.empty())));
+        assertNull(SparkBulkPath.totalBytes(List.of(OptionalLong.empty())));
+    }
+
+    /** A statement reading no table has no snapshot, where zero would read as an empty one. */
+    @Test
+    void aStatementThatReadsNoTableHasNoSnapshotSize() {
+        assertNull(SparkBulkPath.totalBytes(List.of()));
     }
 
     private static SparkBulkPath path(int queryTimeoutSeconds) {

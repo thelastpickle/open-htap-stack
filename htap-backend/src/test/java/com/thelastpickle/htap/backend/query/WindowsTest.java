@@ -2,6 +2,7 @@ package com.thelastpickle.htap.backend.query;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.thelastpickle.htap.backend.config.EventSettings;
@@ -107,6 +108,21 @@ class WindowsTest {
     void aWindowsLabelParsesBackToTheInstantItBegan() {
         assertEquals(Instant.parse("2026-08-28T12:15:00Z"), Windows.startOf("2026-08-28T12:15"));
         assertEquals(Instant.parse("2026-01-01T00:00:00Z"), Windows.startOf("2026-01-01T00:00"));
+    }
+
+    /**
+     * A shard count of zero is refused rather than asked about.
+     *
+     * <p>Zero shards makes the shard list empty, and {@code shard IN ()} is a SyntaxException the
+     * read's own catch would swallow once per candidate window: a misconfigured stack would report
+     * eight warnings and no window rather than the one thing wrong with it.
+     */
+    @Test
+    void aShardCountOfZeroIsRefusedRatherThanAskedAbout() {
+        IllegalArgumentException refused = assertThrows(
+                IllegalArgumentException.class, () -> windows(15, 0).holdsEvents("2026-08-28T12:15"));
+
+        assertEquals("EVENT_SHARDS must be at least 1, got 0", refused.getMessage());
     }
 
     private static Windows windows(int bucketMinutes, int shards) {

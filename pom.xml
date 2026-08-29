@@ -20,6 +20,7 @@
     <module>htap-cqlite</module>
     <module>htap-backend</module>
     <module>htap-sink</module>
+    <module>htap-producer</module>
   </modules>
 
   <properties>

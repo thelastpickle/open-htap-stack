@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.thelastpickle.htap</groupId>
+    <artifactId>htap-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>htap-producer</artifactId>
+  <name>Open HTAP stack: the fleet producer</name>
+  <description>
+    The synthetic fleet: one stateful telemetry generator writing to Kafka. It is
+    what the demo's rate and cardinality claims rest on, so the send loop holds no
+    allocation it can avoid and the model advances per entity rather than per event.
+  </description>
+
+  <properties>
+    <!--
+      Pinned here rather than in the parent's pluginManagement, so that this module's
+      arrival is one line in the parent. The parent pins the lifecycle plugins for the
+      reason its own comment gives, and the same argument applies to this one: unpinned,
+      its version comes from whichever Maven the runner image ships.
+    -->
+    <maven-dependency-plugin.version>3.9.0</maven-dependency-plugin.version>
+    <main.class>com.thelastpickle.htap.producer.Producer</main.class>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.thelastpickle.htap</groupId>
+      <artifactId>htap-common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <!--
+      The broker client and Jackson, both at the version quarkus-bom manages, so the three
+      Java services agree on them without this module importing the backend's framework.
+      No Quarkus here: this process serves nothing and injects nothing, and an extension
+      would add a container to start before the first event could be sent.
+    -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-clients</artifactId>
+    </dependency>
+    <!--
+      Jackson rather than a StringBuilder. The event carries a text payload sampled from a
+      corpus that holds quotes, backslashes and non-ASCII, and hand-written escaping is the
+      one part of this loop where a bug would be silent: a malformed record is dropped by the
+      sink and shows up as a gap in a rate chart. Measured cost in ProducerThroughputTest.
+    -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-core</artifactId>
+    </dependency>
+    <!--
+      No SLF4J binding, deliberately. kafka-clients logs through SLF4J, and with no provider on
+      the classpath it prints two lines on startup, "No SLF4J providers were found" and
+      "Defaulting to no-operation (NOP) logger implementation", and then says nothing. A
+      binding would be worse than those two lines: the client logs its whole configuration at
+      INFO, some sixty lines per producer and per admin client, where kafka-python logged
+      nothing. This process reports through stdout in the [producer] lines the compose logs and
+      the workflow read, and that is the whole of its output.
+    -->
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <configuration>
+          <archive>
+            <manifest>
+              <mainClass>${main.class}</mainClass>
+              <addClasspath>true</addClasspath>
+              <!-- Beside the jar, which is where the image puts them. -->
+              <classpathPrefix>lib/</classpathPrefix>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+      <!--
+        The runtime classpath as files next to the jar, rather than a shaded jar: the
+        dependencies change with the poms and the code changes far more often, so the two
+        are separate image layers exactly as the backend's fast-jar layout is.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <version>${maven-dependency-plugin.version}</version>
+        <executions>
+          <execution>
+            <id>runtime-classpath</id>
+            <phase>package</phase>
+            <goals><goal>copy-dependencies</goal></goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/lib</outputDirectory>
+              <includeScope>runtime</includeScope>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

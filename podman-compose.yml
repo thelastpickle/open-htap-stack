@@ -385,7 +385,12 @@ services:
 
   data-producer:
     build:
-      context: ./ingress/producer
+      # The repository root, because the module is one leaf of a Maven reactor and the
+      # build needs the parent pom and htap-common beside it.  The corpus the text
+      # payload is sampled from lives beside the module and is copied in by its
+      # Dockerfile, which is also where TEXT_FILE names it.
+      context: .
+      dockerfile: htap-producer/Dockerfile
     container_name: data-producer
     networks: [htap-net]
     depends_on:
@@ -404,6 +409,22 @@ services:
       EVENTS_PER_SEC: "${DEMO_EVENTS_PER_SEC:-2000}"
       OUTLIER_PERCENT: "${DEMO_OUTLIER_PERCENT:-5.0}"
       PRODUCER_CLIENT_ID: "demo-producer"
+      # How often a batch is sent.  50 ms keeps the motion smooth on the map: the model
+      # steps once per batch, so a longer period is visible as a jump.
+      BATCH_PERIOD_MS: "${DEMO_BATCH_PERIOD_MS:-50}"
+      # The broker settings this demo wants and a durable pipeline would not.  acks=0
+      # because a lost telemetry reading costs nothing here and waiting for one costs the
+      # rate; lz4 because the text payload is most of each record.  Declared here rather
+      # than in the image so a run can be given the durable settings without a rebuild.
+      KAFKA_ACKS: "${DEMO_KAFKA_ACKS:-0}"
+      KAFKA_LINGER_MS: "${DEMO_KAFKA_LINGER_MS:-20}"
+      KAFKA_BATCH_SIZE: "${DEMO_KAFKA_BATCH_SIZE:-65536}"
+      KAFKA_COMPRESSION: "${DEMO_KAFKA_COMPRESSION:-lz4}"
+      # How long an asset keeps the same text snippet.  The window is what makes the
+      # vector index worth re-running: a snippet that never changed would be embedded once
+      # and the live embedder would have nothing to follow.
+      TEXT_REFRESH_MIN_S: "${DEMO_TEXT_REFRESH_MIN_S:-5}"
+      TEXT_REFRESH_MAX_S: "${DEMO_TEXT_REFRESH_MAX_S:-30}"
       # Live demo controls.  Unset this to ignore the dashboard entirely.
       SETTINGS_URL: "http://backend:8000/api/settings/demo"
       SETTINGS_POLL_INTERVAL_S: "${DEMO_SETTINGS_POLL_INTERVAL_S:-10}"

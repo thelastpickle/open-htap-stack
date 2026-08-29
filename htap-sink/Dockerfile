@@ -13,6 +13,7 @@ COPY htap-common/pom.xml htap-common/
 COPY htap-cqlite/pom.xml htap-cqlite/
 COPY htap-backend/pom.xml htap-backend/
 COPY htap-sink/pom.xml htap-sink/
+COPY htap-producer/pom.xml htap-producer/
 
 # -C as the reactor and CI use, so a dependency checksum mismatch fails rather than warning
 # and carrying on with the bytes it got.

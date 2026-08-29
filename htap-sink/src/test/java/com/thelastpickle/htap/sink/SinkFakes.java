@@ -121,6 +121,9 @@ final class SinkFakes {
     static final class RecordingWrites implements Writes {
 
         final List<Event> events = new ArrayList<>();
+        /** What the tracker and the scorer handed the write, so the wiring is assertable. */
+        final List<Derived> derived = new ArrayList<>();
+        final List<Proximity> proximity = new ArrayList<>();
         final List<AlertRow> alerts = new ArrayList<>();
         final List<String> counted = new ArrayList<>();
         final List<Integer> countedRecords = new ArrayList<>();
@@ -132,6 +135,8 @@ final class SinkFakes {
         public List<CompletionStage<?>> event(
                 Event event, Derived derived, Proximity proximity, Instant now) {
             events.add(event);
+            this.derived.add(derived);
+            this.proximity.add(proximity);
             return failure == null
                     ? List.of(CompletableFuture.completedFuture(null))
                     : List.of(CompletableFuture.failedFuture(failure));

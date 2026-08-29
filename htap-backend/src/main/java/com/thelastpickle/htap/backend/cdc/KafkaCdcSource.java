@@ -37,7 +37,11 @@ public class KafkaCdcSource implements CdcSource {
     private final CdcSettings settings;
     private final KafkaSettings kafka;
 
-    private KafkaConsumer<byte[], byte[]> consumer;
+    /**
+     * Volatile because {@code wakeup} reads it from the shutdown thread while the loop thread
+     * writes it in {@code attach} and {@code close}; the loop remains its only writer.
+     */
+    private volatile KafkaConsumer<byte[], byte[]> consumer;
 
     KafkaCdcSource(CdcSettings settings, KafkaSettings kafka) {
         this.settings = settings;

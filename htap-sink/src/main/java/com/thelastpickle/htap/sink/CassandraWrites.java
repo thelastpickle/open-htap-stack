@@ -14,10 +14,13 @@ import java.util.List;
 import java.util.concurrent.CompletionStage;
 
 /**
- * The four statements the sink writes, prepared once.
+ * The five statements the sink writes, prepared once.
  *
- * <p>Every write is an idempotent upsert, which is what makes a redelivered batch cost duplicate
- * work and no duplicate data. Nothing here is conditional, and nothing reads before writing.
+ * <p>The three event writes are idempotent upserts, which is what makes a redelivered batch cost
+ * duplicate work and no duplicate data. Nothing here is conditional, and nothing reads before
+ * writing. Two are not idempotent and a replay does duplicate them: the counter update adds to
+ * {@code record_count}, and an alert is written with an id minted per call, so a replay after a
+ * restart -- where the cooldown map is gone -- writes a second row for the same proximity.
  *
  * <p>The three event writes carry QUORUM explicitly, where the driver's default is LOCAL_ONE. At
  * replication factor 1 the two are the same node and the same acknowledgement, so this buys nothing

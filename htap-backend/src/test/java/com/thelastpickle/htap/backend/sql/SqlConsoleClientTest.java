@@ -89,6 +89,10 @@ class SqlConsoleClientTest {
         assertFalse(SqlConsoleClient.connectionLost(new SQLException("invalid input", "22P02")));
         assertTrue(SqlConsoleClient.connectionLost(new SQLException("An I/O error", "08006")));
         assertTrue(SqlConsoleClient.connectionLost(new SQLException("closed", "08003")));
+        // The shape pgjdbc actually produces when it got no answer: PSQLState.UNKNOWN_STATE is
+        // constructed with "", not null, so testing for null alone would have kept a dead
+        // connection.  Both are treated as unknown.
+        assertTrue(SqlConsoleClient.connectionLost(new SQLException("no answer", "")));
         assertTrue(SqlConsoleClient.connectionLost(new SQLException("no state at all")));
     }
 

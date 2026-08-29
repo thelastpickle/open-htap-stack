@@ -4,6 +4,7 @@ import static io.restassured.RestAssured.given;
 import static io.restassured.RestAssured.when;
 import static org.hamcrest.Matchers.aMapWithSize;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.emptyOrNullString;
 import static org.hamcrest.Matchers.not;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -133,6 +134,11 @@ class TransactionsApiTest {
                 .when()
                 .post("/api/transactions/session/step")
                 .then()
-                .statusCode(503);
+                .statusCode(503)
+                // The detail is the defect, not the status: `unavailable` builds it from the
+                // failure's message, so a 503 carrying nothing or the string "null" would be the
+                // detail-less answer this test exists to rule out.
+                .body("detail", not(emptyOrNullString()))
+                .body("detail", not(equalTo("null")));
     }
 }

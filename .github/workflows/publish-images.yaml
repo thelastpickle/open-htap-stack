@@ -3,10 +3,10 @@ name: Publish Images
 # Publishes every image the stack runs to GitHub Container Registry, so a room full of
 # laptops pulls instead of building, and reaches one registry rather than two.
 #
-# Seven are built here, one for each `build:` section in `podman-compose.yml`. Six name their
-# own directory as the context; `backend-java` builds one leaf of a Maven reactor, so its
-# context is the repository root and its Dockerfile is named separately, which is why every
-# matrix entry below carries a `dockerfile`.
+# Six are built here, one for each `build:` section in `podman-compose.yml`. Three name their
+# own directory as the context; the three reactor modules take the repository root, because a
+# module needs the parent pom and htap-common beside it, and each names its Dockerfile
+# separately, which is why every matrix entry below carries a `dockerfile`.
 #
 # Four more are mirrored, by `imagetools create` with no build: kafka, apicurio, presto and the
 # Spark base image are upstream images the compose file names, and twenty laptops behind one
@@ -29,10 +29,10 @@ name: Publish Images
 # in one API call.
 #
 # The Git LFS objects are cached, because they are the one cost visibility does not cover.
-# `cassandra/dist/apache-cassandra-sidecar-0.5-mck2.tar.gz` is 511 MB, the two `backend/dist`
-# wheels are 20 MB and 21 MB, and the two `htap-cqlite/dist` libraries are 38 MB and 40 MB, so
-# the six jobs that need LFS objects would fetch 1,261 MB per run against a repository's 1 GB
-# monthly LFS bandwidth. The cache key is the hash of the pointer files, which name the object
+# `cassandra/dist/apache-cassandra-sidecar-0.5-mck2.tar.gz` is 511 MB and the two
+# `htap-cqlite/dist` libraries are 38 MB and 40 MB, so the four jobs that need LFS objects
+# would fetch 1,120 MB per run against a repository's 1 GB monthly LFS bandwidth.  The two
+# `backend/dist` wheels are no longer among them: no image builds from that directory. The cache key is the hash of the pointer files, which name the object
 # by its oid, so a run pays LFS bandwidth only when a vendored artefact changes.
 #
 # No build cache, and the reason is that interaction: a `type=gha` cache shares one 10 GB
@@ -160,11 +160,11 @@ jobs:
       matrix:
         service:
           # `lfs` names the Git LFS paths this context needs, and empty means none. The
-          # checkout deliberately does not fetch LFS wholesale: four of the seven contexts
-          # need none of it, and `lfs: true` would pull all 805.4 MB in each of fourteen jobs.
+          # checkout deliberately does not fetch LFS wholesale: four of the six contexts
+          # need none of it, and `lfs: true` would pull all 805.4 MB in each of twelve jobs.
           #
-          # `dockerfile` is named for every service although six of them hold it at the root
-          # of their own context: `backend-java` does not, and one form for all seven keeps
+          # `dockerfile` is named for every service although three of them hold it at the root
+          # of their own context: the reactor modules do not, and one form for all six keeps
           # the build step below from having to decide which entries carry the field.
           - name: cassandra
             context: ./cassandra
@@ -174,14 +174,13 @@ jobs:
             context: ./accord-sql
             dockerfile: ./accord-sql/Dockerfile
             lfs: ''
+          # The three reactor builds.  Each takes the repository root as its context, because a
+          # module needs the parent pom and htap-common beside it, and .dockerignore at the root
+          # is what keeps the working tree and the dist/ directories it does not read out of it.
+          # Each name is the compose service that builds the same file, so what is published
+          # under a name is what a stack of that name runs; the ./backend, ./ingress/producer
+          # and ./ingress/consumer entries are gone with the services that built them.
           - name: backend
-            context: ./backend
-            dockerfile: ./backend/Dockerfile
-            lfs: backend/dist/**
-          # The reactor's own build: the context is the repository root, because the module
-          # needs the parent pom and htap-common beside it, and .dockerignore at the root is
-          # what keeps the working tree and the other two dist/ directories out of it.
-          - name: backend-java
             context: .
             dockerfile: ./htap-backend/Dockerfile
             lfs: htap-cqlite/dist/**
@@ -190,12 +189,12 @@ jobs:
             dockerfile: ./frontend/Dockerfile
             lfs: ''
           - name: data-producer
-            context: ./ingress/producer
-            dockerfile: ./ingress/producer/Dockerfile
+            context: .
+            dockerfile: ./htap-producer/Dockerfile
             lfs: ''
           - name: data-cassandra-sink
-            context: ./ingress/consumer
-            dockerfile: ./ingress/consumer/Dockerfile
+            context: .
+            dockerfile: ./htap-sink/Dockerfile
             lfs: ''
         platform:
           - arch: amd64
@@ -283,7 +282,6 @@ jobs:
           - cassandra
           - accord-sql
           - backend
-          - backend-java
           - frontend
           - data-producer
           - data-cassandra-sink
@@ -354,7 +352,7 @@ jobs:
     # building anything and without this runner holding the layers as an image.
     #
     # Each mirror carries the same tag set as a built image, so one tag selects all eleven:
-    # pinning a release tag would otherwise resolve for seven services and fail for four.
+    # pinning a release tag would otherwise resolve for six services and fail for four.
     # The upstream version goes on as a further tag, so what was copied is legible in the
     # registry rather than only in this file.
     name: mirror ${{ matrix.image.name }}
@@ -362,7 +360,7 @@ jobs:
     timeout-minutes: 20
     # A mirror copies an upstream manifest and reads none of this tree, so CI cannot fail
     # on its account. It waits all the same: the eleven tags move together, and a run that
-    # mirrored four images while the seven builds were blocked would leave `latest` meaning
+    # mirrored four images while the six builds were blocked would leave `latest` meaning
     # one thing for kafka and another for the backend.
     needs: require-ci
     permissions:

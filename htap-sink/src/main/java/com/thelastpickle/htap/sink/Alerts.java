@@ -2,6 +2,7 @@ package com.thelastpickle.htap.sink;
 
 import com.thelastpickle.htap.common.BucketKeys;
 import com.thelastpickle.htap.common.Geometry;
+import com.thelastpickle.htap.common.ZoneRules;
 import com.thelastpickle.htap.common.TimeUuids;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -14,18 +15,18 @@ import java.util.function.LongSupplier;
 /**
  * Scores a position against the restricted zones and decides which alerts to write.
  *
- * <p>The figures here are the dashboard's too: its what-if simulation uses the same warning distance
- * and the same risk curve, so the answer it gives for a hypothetical position matches what the live
- * alerting did for a real one. Changing one without the other makes the page disagree with the
- * table it is drawn beside.
+ * <p>The warning distance is the dashboard's too, which is why it lives in {@code htap-common}: the
+ * what-if simulation counts the assets a hypothetical zone would have inside it and within that
+ * distance, so the page and this table measure a position the same way. The risk curve below is this
+ * class's alone; the page computes no risk.
  *
  * <p>Scoring and writing are separate: this class answers with the rows an event earned and holds no
  * session, which is what lets the whole of the alerting rule be tested without a cluster.
  */
 final class Alerts {
 
-    /** Distance at which proximity is flagged at all. */
-    static final double WARNING_DISTANCE_M = 500.0;
+    /** Distance at which proximity is flagged at all, shared with the dashboard. */
+    static final double WARNING_DISTANCE_M = ZoneRules.WARNING_DISTANCE_M;
 
     /** Proximity risk above this counts as a predicted breach. */
     static final double BREACH_RISK_THRESHOLD = 0.7;

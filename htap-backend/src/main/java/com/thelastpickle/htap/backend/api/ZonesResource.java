@@ -5,6 +5,7 @@ import com.thelastpickle.htap.backend.api.dto.WhatIfZoneRequest;
 import com.thelastpickle.htap.backend.api.dto.WhatIfZoneResponse;
 import com.thelastpickle.htap.backend.api.dto.ZonesResponse;
 import com.thelastpickle.htap.backend.engine.CassandraPath;
+import com.thelastpickle.htap.common.ZoneRules;
 import com.thelastpickle.htap.backend.geo.Polygon;
 import com.thelastpickle.htap.backend.read.CassandraReads;
 import com.thelastpickle.htap.backend.read.FleetRow;
@@ -28,7 +29,7 @@ public class ZonesResource {
      * Distance at which the ingest sink starts flagging proximity. The what-if simulation uses
      * the same figure, so its answer matches the live alerting.
      */
-    static final double WARNING_DISTANCE_M = 500.0;
+    static final double WARNING_DISTANCE_M = ZoneRules.WARNING_DISTANCE_M;
 
     private final CassandraPath cassandra;
     private final CassandraReads reads;

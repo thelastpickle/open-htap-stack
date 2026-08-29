@@ -23,9 +23,14 @@ server {
         # time, with the TTL below.
         resolver ${NGINX_LOCAL_RESOLVERS} valid=10s;
         # The address comes from the environment so that moving the dashboard from
-        # one backend to another is a compose change rather than an image change,
-        # and so either can be shown while the two run side by side.  It has no
-        # default here, and an unset variable is a refusal rather than a silent
+        # one backend to another is a compose change rather than an image change.
+        # It is a scheme, host and port and nothing else: with a variable in
+        # proxy_pass, nginx passes the original request URI through only while the
+        # variable holds no path, so a trailing slash or any path replaces the whole
+        # request URI with it and every /api/... call arrives at the backend as
+        # GET /, with 404s and nothing naming the cause.
+        #
+        # No default here, and an unset variable is a refusal rather than a silent
         # proxy to nowhere: envsubst leaves the placeholder in place, and nginx
         # reads it as one of its own and exits with
         # `[emerg] unknown "api_upstream" variable`.  compose declares it on the

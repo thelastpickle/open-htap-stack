@@ -22,6 +22,7 @@ import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 
 /**
@@ -122,7 +123,7 @@ public final class Sink {
             if (polled.isEmpty()) {
                 continue;
             }
-            if (elapsedSeconds(lastZoneReload) > settings.zoneReload().toSeconds()) {
+            if (elapsedMillis(lastZoneReload) > settings.zoneReload().toMillis()) {
                 reloadZones(zones);
                 lastZoneReload = nanoClock.getAsLong();
             }
@@ -133,6 +134,12 @@ public final class Sink {
             }
             Batch batch = write(values);
             if (!batch.acknowledged()) {
+                // Back to where this batch began, on every partition it came from.  Without the
+                // seek the consumer's position is already past these records, so the next
+                // successful commit would move the committed offset beyond a batch that was
+                // never written: the events would be lost with nothing saying so.  The Python
+                // had that defect; the guarantee this class documents needs the seek.
+                rewind(consumer, polled);
                 continue;
             }
 
@@ -144,7 +151,7 @@ public final class Sink {
             windowInserted += batch.buffered();
 
             double elapsed = elapsedSeconds(lastReport);
-            if (elapsed >= settings.reportEvery().toSeconds()) {
+            if (elapsedMillis(lastReport) >= settings.reportEvery().toMillis()) {
                 Log.sink("total_inserted=%d (~%.0f/s)", totalInserted, windowInserted / elapsed);
                 windowInserted = 0;
                 lastReport = nanoClock.getAsLong();
@@ -216,6 +223,25 @@ public final class Sink {
 
     private double elapsedSeconds(long sinceNanos) {
         return (nanoClock.getAsLong() - sinceNanos) / 1e9;
+    }
+
+    /** In milliseconds, so a cadence set as a fraction of a second is the cadence honoured. */
+    private long elapsedMillis(long sinceNanos) {
+        return (nanoClock.getAsLong() - sinceNanos) / 1_000_000L;
+    }
+
+    /**
+     * Puts the consumer back at the first record of each partition this batch came from.
+     *
+     * <p>Seeked from the records rather than from {@code committed()}, which is a round trip to the
+     * broker and answers nothing this does not already hold: the first offset of each partition in
+     * the poll is exactly where a redelivery must begin.
+     */
+    private static void rewind(
+            Consumer<byte[], byte[]> consumer, ConsumerRecords<byte[], byte[]> polled) {
+        for (TopicPartition partition : polled.partitions()) {
+            consumer.seek(partition, polled.records(partition).getFirst().offset());
+        }
     }
 
     /**

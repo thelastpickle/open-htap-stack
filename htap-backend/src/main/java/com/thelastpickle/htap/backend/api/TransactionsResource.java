@@ -207,9 +207,10 @@ public class TransactionsResource {
      * nothing else: an out-of-range one has an obvious nearest answer, where an unparseable session
      * identifier does not.
      *
-     * <p>A divergence from FastAPI, which declared {@code ge=0, le=4000} and answered 422. Every
-     * query parameter in this backend clamps and every body field is refused, so the line is drawn
-     * at where the value came from rather than per route.
+     * <p>A divergence from FastAPI, which declared {@code ge=0, le=4000} and answered 422. The line
+     * this backend draws is the sentence above: a value with an obvious nearest answer is clamped and
+     * one without is refused, which is why {@code seq} and {@code session_id} are refused a few lines
+     * up while this is not.
      */
     private static int repeats(int asked) {
         return Math.clamp(asked, 0, MAX_REPEATS);

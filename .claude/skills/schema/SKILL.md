@@ -10,7 +10,7 @@ allowed-tools:
 
 # Changing the schema
 
-There is no migration tool.  `ingress/consumer/consumer.py:ensure_schema()` creates the keyspace and every table with `CREATE TABLE IF NOT EXISTS`, and runs on each sink start.  Two consequences decide everything below: the schema lives in the sink's image, and `IF NOT EXISTS` will not alter a table that already exists.  Rebuilding the sink after editing a key changes nothing, silently.
+There is no migration tool.  `htap-sink`'s `DemoSchema` holds the statements and `SchemaOwner.ensure()` runs them on each sink start, creating the keyspace and every table with `CREATE TABLE IF NOT EXISTS`.  Two consequences decide everything below: the schema lives in the sink's image, and `IF NOT EXISTS` will not alter a table that already exists.  Rebuilding the sink after editing a key changes nothing, silently.
 
 The keyspace is `demo`; the tables are `events`, `drone_latest_status`, `drone_text_embeddings`, `drone_events_by_entity`, `restricted_zones`, `alerts_by_bucket`, `ingestion_counts`, `sessions_open`, `session_seq_applied`, `session_timeline`, `session_timeline_plain`.
 

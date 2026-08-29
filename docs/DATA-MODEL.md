@@ -1,6 +1,6 @@
 # Data model
 
-The schema is defined in one place, `ensure_schema()` in [ingress/consumer/consumer.py](../ingress/consumer/consumer.py). &emsp;That process is the only one that has to exist for data to flow, so putting the definitions there means there is no separate migration step and no second copy to drift out of step.
+The schema is defined in one place, `DemoSchema` in [htap-sink](../htap-sink/src/main/java/com/thelastpickle/htap/sink/DemoSchema.java), which the sink applies on every start. &emsp;That process is the only one that has to exist for data to flow, so putting the definitions there means there is no separate migration step and no second copy to drift out of step.
 
 | Table                     | Shape                                                   | Read by                                      |
 | ------------------------- | ------------------------------------------------------- | -------------------------------------------- |

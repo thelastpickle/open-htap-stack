@@ -13,6 +13,7 @@ COPY htap-common/pom.xml htap-common/
 COPY htap-cqlite/pom.xml htap-cqlite/
 COPY htap-backend/pom.xml htap-backend/
 COPY htap-sink/pom.xml htap-sink/
+COPY htap-producer/pom.xml htap-producer/
 
 # Not every artifact a Quarkus build asks for: this resolves the declared dependencies, and
 # the augmentation step below fetches what it needs beyond them.  The value is the layer,

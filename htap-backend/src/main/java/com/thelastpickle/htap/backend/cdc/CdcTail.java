@@ -100,20 +100,39 @@ public class CdcTail {
         loop = Thread.ofVirtual().name("cdc-tail").start(this::run);
     }
 
+    /** How long shutdown waits for the loop to close its consumer before giving up on it. */
+    static final Duration STOP_TIMEOUT = Duration.ofSeconds(5);
+
     /**
-     * Stops the loop and lets it close its own consumer.
+     * Stops the loop, then waits for it to close its own consumer.
      *
      * <p>Closed by the loop and not here: a Kafka consumer permits one thread at a time, so closing
      * it from the shutdown thread while a poll was in flight would raise from the consumer's own
      * guard and leave it open. {@code wakeup} is the call that is safe from here.
+     *
+     * <p>And waited for, because the alternative is not a guarantee: once this observer returns
+     * Quarkus goes on to exit, and a virtual thread that has not reached its close yet does not
+     * finish it. Bounded, so a poll that will not return cannot hold the process up.
      */
     void onStop(@Observes ShutdownEvent event) {
         running = false;
         source.wakeup();
         Thread current = loop;
-        if (current != null) {
-            current.interrupt();
+        if (current == null) {
+            return;
         }
+        current.interrupt();
+        try {
+            current.join(STOP_TIMEOUT);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** Whether the loop thread is still running, which shutdown is what ends. */
+    boolean loopAlive() {
+        Thread current = loop;
+        return current != null && current.isAlive();
     }
 
     /** What the tail is doing, in the terms the page shows. */

@@ -124,6 +124,13 @@ class SinkTest {
 
         assertEquals(2, writes.events.size());
         assertEquals(second, writes.events.get(1).eventId());
+        // The tracker's own figures reach the write, which is what tells a wiring mistake from an
+        // arithmetic one: 55.6 m of latitude over 10 s at this latitude is 5.56 m/s due north.
+        assertEquals(0.0, writes.derived.getFirst().speedMps(), "nothing to derive from one reading");
+        assertEquals(5.6, writes.derived.get(1).speedMps(), 0.1);
+        assertEquals(0.0, writes.derived.get(1).headingDeg(), 0.5);
+        assertTrue(writes.derived.get(1).flying());
+        assertFalse(writes.proximity.get(1).nearZone(), "no zones are loaded in this test");
     }
 
     /**
@@ -145,9 +152,17 @@ class SinkTest {
         assertEquals(List.of(1), writes.countedRecords);
     }
 
-    /** A failed batch is not committed, and the loop goes back for the same records. */
+    /**
+     * A failed batch is not committed, and the loop is put back where the batch began.
+     *
+     * <p>The seek is what makes the redelivery real.  Without it the consumer's position is already
+     * past these records, so the next successful commit would move the committed offset beyond a
+     * batch nothing wrote, and those events would be lost with nothing saying so.  Asserting the
+     * absence of a commit alone cannot tell that apart from a skip, which is what this test used to
+     * do.
+     */
     @Test
-    void theLoopDoesNotCommitAFailedBatch() {
+    void aFailedBatchIsSeekedBackRatherThanSkipped() {
         writes.failure = new IllegalStateException("no host available");
         List<String> calls = new ArrayList<>();
         Consumer<byte[], byte[]> broker = scripted(calls, new ArrayDeque<>(List.of(
@@ -155,7 +170,7 @@ class SinkTest {
 
         assertThrows(StopTheLoop.class, () -> sink.run(broker, zones()));
 
-        assertEquals(List.of("poll", "poll"), calls);
+        assertEquals(List.of("poll", "seek demo-events-0@0", "poll"), calls);
         assertEquals(List.of(), writes.counted);
     }
 
@@ -186,11 +201,37 @@ class SinkTest {
         assertEquals(List.of("2026-08-29T12:30"), writes.counted);
     }
 
-    /** The rate is over the window between two reports, and the report is on the sink's own clock. */
+    /** The two cadences the loop keeps, as the environment leaves them. */
     @Test
-    void theReportIsEveryFiveSeconds() {
+    void theDefaultCadencesAreFiveAndSixtySeconds() {
         assertEquals(Duration.ofSeconds(5), SETTINGS.reportEvery());
         assertEquals(Duration.ofSeconds(60), SETTINGS.zoneReload());
+    }
+
+    /**
+     * A cadence set as a fraction of a second is the cadence honoured.
+     *
+     * <p>The loop compared whole seconds, so {@code ZONE_RELOAD_S=0.5} truncated to zero and read
+     * the zone table on every batch, and {@code 1.5} rounded down to one.  Driven through the zone
+     * reload because that one is observable: the read reaches the session fake.
+     */
+    @Test
+    void aFractionalReloadCadenceIsHonoured() {
+        SinkSettings half = SinkSettings.from(Map.of("ZONE_RELOAD_S", "1.5")::get);
+        Sink reloading = new Sink(half, writes, alerts, () -> NOW, nanos::get);
+        SinkFakes.RecordingSession node = new SinkFakes.RecordingSession();
+        List<String> calls = new ArrayList<>();
+        Consumer<byte[], byte[]> broker = scripted(calls, new ArrayDeque<>(List.of(
+                records(SinkFakes.event(id(), "asset-1", 59.91, 10.75, 120.0)),
+                records(SinkFakes.event(id(), "asset-2", 59.92, 10.76, 130.0)),
+                records(SinkFakes.event(id(), "asset-3", 59.93, 10.77, 140.0)))));
+
+        // One second on, which a truncating comparison would have read as a second reload due.
+        nanos.set(1_000_000_000L);
+        assertThrows(StopTheLoop.class,
+                () -> reloading.run(broker, new Zones(node.session(), "demo")));
+
+        assertEquals(1, node.executed.size(), "the zones were read again inside the window");
     }
 
     private static String id() {
@@ -238,6 +279,12 @@ class SinkTest {
                             yield next;
                         }
                         case "commitSync", "close" -> null;
+                        case "seek" -> {
+                            // Recorded as the partition and offset, since where a failed batch
+                            // is put back is the whole of the delivery guarantee.
+                            calls.set(calls.size() - 1, "seek " + args[0] + "@" + args[1]);
+                            yield null;
+                        }
                         default -> throw new UnsupportedOperationException(method.getName());
                     };
                 });

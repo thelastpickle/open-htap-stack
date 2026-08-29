@@ -151,6 +151,7 @@ public class SqlConsoleClient {
                 // two DROP TYPE refusals and /tables one per empty table -- and dropping on those
                 // would rebuild the connection once per refusal, which is a fresh
                 // DriverManager.getConnection and a probe, not a probe alone.
+                LOG.debugf("statement refused with SQLState %s: %s", e.getSQLState(), e.getMessage());
                 if (connectionLost(e)) {
                     drop();
                 }
@@ -166,12 +167,18 @@ public class SqlConsoleClient {
      *
      * <p>SQLState class 08 is the standard's connection-exception class, which pgjdbc uses:
      * {@code 08006} for a connection failure and {@code 08003} for one already closed, against class
-     * 42 or 22 for a server-side refusal. A failure carrying no state at all is treated as lost,
-     * since that is what a driver reports when it never got an answer.
+     * 42 or 22 for a server-side refusal. A failure carrying no state is treated as lost, and the
+     * empty string counts as none: {@code PSQLState.UNKNOWN_STATE} is constructed with {@code ""},
+     * so a driver that got no answer at all reports the empty string rather than null.
+     *
+     * <p>What cassandra-sql itself sends is measured rather than assumed, which is what the log line
+     * in {@code execute} is for: it prints the state of every refusal at DEBUG, so the two routine
+     * ones -- a {@code DROP TYPE} of an absent type and {@code COUNT(*)} over an empty table --
+     * evidence which class they carry on the release in front of you.
      */
     static boolean connectionLost(SQLException failure) {
         String state = failure.getSQLState();
-        return state == null || state.startsWith("08");
+        return state == null || state.isEmpty() || state.startsWith("08");
     }
 
     /**

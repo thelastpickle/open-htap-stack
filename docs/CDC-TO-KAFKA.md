@@ -15,7 +15,7 @@ cdc_total_space: 4096MiB
 cdc_block_writes: false
 ```
 
-**The table.**&emsp;`cdc` is a table option and, unlike `transactional_mode`, it can be turned on after the fact.&emsp;The sink owns the demo schema, so `ingress/consumer/consumer.py` declares it and reconciles it on every start:
+**The table.**&emsp;`cdc` is a table option and, unlike `transactional_mode`, it can be turned on after the fact.&emsp;The sink owns the demo schema, so `htap-sink`'s `DemoSchema` declares it and `SchemaOwner.ensureCdc()` reconciles it on every start:
 
 ```sql
 ALTER TABLE demo.drone_latest_status WITH cdc = true;

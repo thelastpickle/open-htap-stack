@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 /**
  * The buffer, the counters and the states, with the broker scripted.
@@ -207,20 +208,37 @@ class CdcTailTest {
     }
 
     /**
-     * Shutdown wakes the consumer and leaves the closing to the loop.
+     * Shutdown wakes the consumer, and the loop closes it before the process exits.
      *
      * <p>A Kafka consumer permits one thread at a time, so closing it from the shutdown thread while
      * a poll was in flight raises from its own guard and leaves it open; {@code wakeup} is the one
-     * call that is safe from there.
+     * call that is safe from there.  So the close belongs to the loop, and this drives the real
+     * thread rather than {@code tick} to check that it happens: without the join in {@code onStop},
+     * Quarkus would go on to exit with the close not yet reached.
      */
     @Test
-    void shutdownWakesTheConsumerRatherThanClosingIt() {
-        tail.tick();
+    @Timeout(20)
+    void shutdownWakesTheConsumerAndTheLoopClosesIt() {
+        tail.onStart(null);
+        // The loop attaches on its first turn; poll answers nothing, so it is running by then.
+        awaitAttached();
 
         tail.onStop(null);
 
         assertEquals(1, source.wakeups);
-        assertEquals(0, source.closes, "the shutdown thread must not close the consumer");
+        assertEquals(1, source.closes, "the loop had not closed its consumer by the time it stopped");
+        assertFalse(tail.loopAlive(), "the loop outlived the shutdown");
+    }
+
+    private void awaitAttached() {
+        for (int at = 0; at < 200 && source.attaches == 0; at++) {
+            try {
+                Thread.sleep(10);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
     }
 
     /** The newest record's own arrival time, so the page can say how long ago the last one was. */

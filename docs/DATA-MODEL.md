@@ -45,7 +45,7 @@ WHERE event_bucket = '2026-08-18T07:15' AND shard IN (0,1,2,3,4,5,6,7,8,9,10,11,
 GROUP BY event_type
 ```
 
-Measured on a seven-core laptop with the ingest running at 2,000 events/s, that same predicate without the grouping — `SELECT count(*)` — over one closed window holding 1,791,542 events, and then over a window that holds none:
+Measured on a seven-core laptop with the ingest running at 2,000 events/s, that same predicate without the grouping, `SELECT count(*)`, over one closed window holding 1,791,542 events, and then over a window that holds none. &emsp;Taken through the Python backend, which loaded the cqlite reader through a wheel: the three external engines are indifferent to which backend asked them, and the cqlite row is not, since that path runs inside the backend's own process.
 
 | Path | Window with data | Empty window |
 | --- | --- | --- |

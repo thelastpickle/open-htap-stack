@@ -69,7 +69,7 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
   const response = await fetch(path, init)
   const payload = await response.json().catch(() => null)
   if (!response.ok) {
-    // FastAPI puts the reason in `detail`; fall back to the status when it has
+    // The backend puts the reason in `detail`, as FastAPI did; fall back to the status when it has
     // not, so the UI never shows a bare "failed".
     throw new Error(detailOf(payload) ?? `${response.status} ${response.statusText}`)
   }

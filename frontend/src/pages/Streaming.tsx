@@ -470,7 +470,7 @@ export default function StreamingPage() {
 
       <Panel
         title="Latest mutations"
-        subtitle="Newest first. Select a row for the columns the mutation carried and where it sat on the topic. Age is the mutation's own write time against the clock here, so it is the whole path: Cassandra write, commit log discard, Sidecar publish, Kafka, decode."
+        subtitle="Newest first. Select a row for the columns the mutation carried and where it sat on the topic. Age is the mutation's own write time against the moment Kafka appended it, so it is the publisher's delay and not this page's: Cassandra write, commit log discard, Sidecar publish, Kafka."
       >
         {isLoading ? (
           <div className="flex items-center gap-3 py-10">

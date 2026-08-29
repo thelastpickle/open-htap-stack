@@ -88,7 +88,7 @@ Read that as the boundary's price rather than as something to tune. &emsp;`lto =
 
 ## What a caller needs at run time
 
-The library links only the C runtime. &emsp;`ldd` on the arm64 build lists `linux-vdso.so.1`, `libgcc_s.so.1`, `libm.so.6`, `libc.so.6` and `ld-linux-aarch64.so.1`, and the x86_64 build lists the same five with its own loader. &emsp;There is no Python, no JVM and no Cassandra in that list, which is the access path's whole claim.
+The library links only the C runtime. &emsp;`ldd` on the arm64 build lists `linux-vdso.so.1`, `libgcc_s.so.1`, `libm.so.6`, `libc.so.6` and `ld-linux-aarch64.so.1`, and the x86_64 build lists the same five with its own loader. &emsp;There is no Python, no JVM and no Cassandra in that list.
 
 A Java caller should pass `--enable-native-access=ALL-UNNAMED`: every call into this library is a Panama downcall, which JDK 24 made restricted, so without the flag JDK 25 warns on the first call and a later release will refuse it. &emsp;Nothing here has measured the flagless case, because the build script's probe always passes the flag. &emsp;The Java binding and what it needs beyond that arrive in the commit after this one.
 

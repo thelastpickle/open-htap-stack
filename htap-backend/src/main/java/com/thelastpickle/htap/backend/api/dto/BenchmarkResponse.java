@@ -14,7 +14,7 @@ import java.util.Map;
  *
  * @param sparkBulk the Analytics bulk reader: the same rows, read from a snapshot's SSTable files
  * @param cqlite the cqlite reader: the same rows again, read from the live files in place, in this
- *     process, with no snapshot and no JVM
+ *     process, with no snapshot and no second service
  * @param oltpBaseline the same point read measured before any path ran, so each path's figure has
  *     something to be read against
  * @param oltpCombined set only for a parallel run: one sample over the whole window, because while

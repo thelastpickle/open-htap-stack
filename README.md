@@ -1,6 +1,6 @@
 # Vendor-Neutral Open Source HTAP Data Platform
 
-_Proof of Concept that takes 4 minutes to demonstrate._
+_Proof of Concept that takes 4 minutes to demonstrate, once its images are built._
 
 An enterprise-grade Hybrid Transactional/Analytical Processing (HTAP) data platform, built from Apache-licensed components you already know.
 
@@ -52,6 +52,8 @@ podman machine inspect --format "{{.Resources.Memory}}" # must be greater than 1
 See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for how to increase the memory limit.
 
 ### Bring up the whole stack in under 4 minutes, and start ingesting event data
+
+Four minutes is the start, not the build.  Six of the ten services are built here and three of those are Maven modules, so a first `up` on a cold cache is minutes longer: `backend` alone takes 3 min 26 s with `--no-cache` and the sink 2 min 2 s, measured on darwin/arm64.  The `stack` skill has the rest of those figures.
 
 ```shell
 podman compose -f podman-compose.yml up
@@ -329,7 +331,7 @@ Kafka (ingest)  →  Cassandra (storage of record)  →  Spark / Presto (analyti
 Three access paths share the same persisted data:
 
 - **OLTP path** — point reads and bounded partition reads through Cassandra's request path. Latency performance: p99 write < 5ms, p99 read < 50ms.
-- **OLAP path** — wide scans and aggregations via the Spark Bulk Reader, reading SSTable files directly from coordinated snapshots. Does not contend with OLTP. Measured on this one node, counting the whole table with no predicate: 452,446,775 bytes of snapshot in 13.4 s, so 33.9 MB/s, and the snapshot itself cost 323 ms of that. Read it as a floor rather than a throughput figure, because the measurement is a laptop running eight containers on seven cores; the mechanism is what scales per node, and this demo does not measure that. No write rate is quoted, because the bulk writer does not work here yet — see the note above. The dashboard also reads the same files with no snapshot and no JVM, in its own process, through cqlite: the same count took 32.9 s over 450,318,008 bytes of live files, single-threaded against the bulk reader's four cores, and answers as of the last flush.
+- **OLAP path** — wide scans and aggregations via the Spark Bulk Reader, reading SSTable files directly from coordinated snapshots. Does not contend with OLTP. Measured on this one node, counting the whole table with no predicate: 452,446,775 bytes of snapshot in 13.4 s, so 33.9 MB/s, and the snapshot itself cost 323 ms of that. Read it as a floor rather than a throughput figure, because the measurement is a laptop running eight containers on seven cores; the mechanism is what scales per node, and this demo does not measure that. No write rate is quoted, because the bulk writer does not work here yet — see the note above. The dashboard also reads the same files with no snapshot and no second service, in its own process, through cqlite: the same count took 32.9 s over 450,318,008 bytes of live files, single-threaded against the bulk reader's four cores, and answers as of the last flush.
 - **CDC path** — change streams to Kafka via the Sidecar, read from discarded commit log segments rather than by querying the node. Measured here: 2,718 records/s to the topic, and a p50 median of 8.0 s end to end at 2,000 events a second when the publisher is ahead of the writer, against 2.2 to 4.7 s at 400. Under a sink backlog the publisher is the bound instead and the age reaches minutes. The replication-factor-aware deduplication is configured, `watermark_seconds: 1800`, and this one node at RF=1 does not exercise it.
 
 The architectural property that makes this work, that analytical scans do not touch the OLTP hot path — holds **by construction**, not by tuning. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full technical treatment.

@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.thelastpickle.htap</groupId>
+    <artifactId>htap-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>htap-cqlite</artifactId>
+  <name>Open HTAP stack: the cqlite reader's Java binding</name>
+  <description>
+    SQL over Cassandra's live SSTable files, in this process, over the C boundary
+    dist/ holds. No Cassandra, no snapshot and no second process: the library owns
+    a DataFusion session and returns rows over the Arrow C Data Interface.
+  </description>
+
+  <properties>
+    <!--
+      Where the library is, and what to read with it. All four are empty by default
+      and the tests that need one report themselves skipped, because the library is
+      a linux artefact and a developer machine here is darwin: `mvn verify` must
+      pass on a machine that cannot load it at all. The container run in the commit
+      message is what sets them.
+    -->
+    <htap.cqlite.library/>
+    <htap.cqlite.it.table/>
+    <htap.cqlite.it.directory/>
+    <htap.cqlite.it.ddl-file/>
+    <!--
+      What CQL counts in that table, when the operator has asked CQL. Unset the
+      count is only checked for being a count, because the two need not agree:
+      cqlite reads what is flushed, so a row still in a memtable is not read.
+    -->
+    <htap.cqlite.it.rows/>
+  </properties>
+
+  <dependencies>
+    <!--
+      arrow-vector for the schema and the vectors, arrow-c-data for the import of
+      the stream the library populates, and arrow-memory-unsafe as the allocator.
+      Unsafe rather than netty: netty is a second dependency tree for the same job,
+      and this module's only allocations are the ones Arrow makes for imported
+      buffers.
+    -->
+    <dependency>
+      <groupId>org.apache.arrow</groupId>
+      <artifactId>arrow-vector</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.arrow</groupId>
+      <artifactId>arrow-c-data</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.arrow</groupId>
+      <artifactId>arrow-memory-unsafe</artifactId>
+      <scope>runtime</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+          <!--
+            The parent's two arguments, restated because a child's compilerArgs
+            replaces the parent's list rather than adding to it, with one lint
+            switched off.
+
+            classfile is off because arrow-memory-core's BaseAllocator carries
+            @KeyFor from the Checker Framework, whose class file Arrow does not
+            publish to a consumer: javac reports "Cannot find annotation method
+            'value()' in type org.checkerframework.checker.nullness.qual.KeyFor",
+            and -Werror then fails the compile of any class that loads
+            BaseAllocator, which every test using RootAllocator does. The
+            alternative was a checker-qual dependency this module has no other use
+            for, pinned at a version nothing here manages.
+          -->
+          <compilerArgs>
+            <arg>-Xlint:all,-classfile</arg>
+            <arg>-Werror</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <!--
+            Three flags, and each answers a different mechanism. Named here without
+            their leading dashes, because an XML comment may not hold two in a row.
+
+            enable-native-access=ALL-UNNAMED covers both native surfaces at once:
+            the Panama downcalls into the cqlite library, and arrow-c-data's own
+            System.load of its Java Native Interface (JNI) shim, which JEP 472
+            restricts as well. Both this module and Arrow are unnamed modules on
+            the classpath, so one grant reaches both.
+
+            illegal-native-access=deny now, deliberately: JDK 26 makes deny the
+            default, so a warning nobody reads is how that becomes a surprise later.
+
+            add-opens=java.base/java.nio=ALL-UNNAMED is measured, not defensive.
+            Without it Data.importArrayStream fails at MemoryUtil.directBuffer with
+            "sun.misc.Unsafe or java.nio.DirectByteBuffer.&lt;init&gt;(long, int) not
+            available", because arrow-memory-core reaches the private constructor
+            reflectively. The same version also calls sun.misc.Unsafe.arrayBaseOffset,
+            which JDK 25 reports as terminally deprecated on first use; that warning
+            is Arrow's to fix and is not silenced here.
+          -->
+          <argLine>
+            --enable-native-access=ALL-UNNAMED
+            --illegal-native-access=deny
+            --add-opens=java.base/java.nio=ALL-UNNAMED
+          </argLine>
+          <systemPropertyVariables>
+            <!--
+              What Arrow says about a buffer nobody gave back, and about a child allocator
+              nobody closed. The first is reported either way: with this unset, a close
+              holding a buffer still refuses, with "Memory was leaked by query. Memory
+              leaked: (64)". Set, the message names the allocator and the count and carries
+              the allocation history, and the outstanding-child branch of
+              BaseAllocator.close() runs at all: that one sits behind `if (DEBUG)`, and
+              DEBUG reads this property once. Measured both ways on
+              AllocatorLeakCheckTest, and established by disassembling arrow-memory-core
+              19.0.0. The tests are where a leak is diagnosed, so they pay for the history.
+            -->
+            <arrow.memory.debug.allocator>true</arrow.memory.debug.allocator>
+            <htap.cqlite.library>${htap.cqlite.library}</htap.cqlite.library>
+            <htap.cqlite.it.table>${htap.cqlite.it.table}</htap.cqlite.it.table>
+            <htap.cqlite.it.directory>${htap.cqlite.it.directory}</htap.cqlite.it.directory>
+            <htap.cqlite.it.ddl-file>${htap.cqlite.it.ddl-file}</htap.cqlite.it.ddl-file>
+            <htap.cqlite.it.rows>${htap.cqlite.it.rows}</htap.cqlite.it.rows>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

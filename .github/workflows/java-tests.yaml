@@ -40,8 +40,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
-        # No `lfs: true`: nothing the reactor compiles today lives in LFS. The cqlite
-        # module will, and this line comes back with it.
+        # No `lfs: true`, and it stays off now that htap-cqlite has landed: the module's
+        # committed libraries are read only by CqliteNativeTest, which skips unless it is
+        # told where one is, and CqliteAbiTest reads the plain header beside them.
 
       - name: Set up JDK 25
         uses: actions/setup-java@v4

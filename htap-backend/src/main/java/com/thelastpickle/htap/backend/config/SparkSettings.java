@@ -2,13 +2,15 @@ package com.thelastpickle.htap.backend.config;
 
 import io.smallrye.config.ConfigMapping;
 import io.smallrye.config.WithDefault;
+import io.smallrye.config.WithName;
+import java.time.Duration;
 
 /**
- * The Spark master's web UI, which the platform probe reads and nothing else does.
+ * The three Spark ports this backend uses, which are three different servers.
  *
- * <p>The Thrift Server the two Spark access paths talk to is a different port, and the
- * application UI the Health page reads jobs from is a third; both arrive with the paths
- * that need them.
+ * <p>The master's web UI at 8080 is what the platform probe reads. The Thrift Server at 10000
+ * is what both Spark access paths run their SQL against. The application UI is a third, and
+ * the Health page reads running jobs from it; it arrives with the cancel that needs it.
  */
 @ConfigMapping(prefix = "spark")
 public interface SparkSettings {
@@ -18,4 +20,35 @@ public interface SparkSettings {
 
     @WithDefault("8080")
     int uiPort();
+
+    @WithDefault("spark")
+    String thriftHost();
+
+    @WithDefault("10000")
+    int thriftPort();
+
+    /**
+     * How long the client waits on a socket that is saying nothing before it gives up.
+     *
+     * <p>A Spark job has no other deadline, so this is what stops a stuck query hanging the
+     * dashboard. It bounds how long the server may go without answering, which is not a budget
+     * for how long the query may take. Set for the contended case and not the typical one: a
+     * scan of the whole history that answers in 113 s alone was still working after 180 s with
+     * the three other paths beside it. The bulk reader derives its snapshot lifetime from this
+     * value, and nginx allows 3600 s in front of the backend, so a longer setting than that
+     * is the browser's deadline rather than this one.
+     *
+     * <p>Seconds and an {@code int}, so the property name is the {@code SPARK_QUERY_TIMEOUT_S}
+     * compose already declares and the value is the bare integer it already carries. A {@code
+     * Duration} here would rest on the converter reading {@code 900} as seconds rather than
+     * refusing it, and the CI step that asserts a snapshot outlives its read takes the figure
+     * from that variable.
+     */
+    @WithName("query-timeout-s")
+    @WithDefault("900")
+    int queryTimeoutSeconds();
+
+    default Duration queryTimeout() {
+        return Duration.ofSeconds(queryTimeoutSeconds());
+    }
 }

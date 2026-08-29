@@ -53,9 +53,41 @@
       <artifactId>java-driver-core</artifactId>
     </dependency>
 
+    <!--
+      The two JDBC drivers, one per analytical service. Both are shaded distributions, so
+      neither contributes a transitive dependency that could argue with Quarkus's Netty or
+      Jackson; between them they are 35 MB of the image.
+    -->
+    <dependency>
+      <groupId>com.facebook.presto</groupId>
+      <artifactId>presto-jdbc</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kyuubi</groupId>
+      <artifactId>kyuubi-hive-jdbc-shaded</artifactId>
+    </dependency>
+
+    <!--
+      The broker client, for the settled-window check. Version from quarkus-bom, which
+      manages it because the Kafka extensions do; this uses the plain Admin API rather than
+      an extension, since the check opens one client per request and closes it after (see
+      KafkaSettings.offsetsTimeout). One client, where the Python needed two: Admin here
+      answers both the committed offsets and the offsets for a timestamp, so no consumer is
+      built and the group's own session timeout never bounds the request.
+    -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-clients</artifactId>
+    </dependency>
+
     <dependency>
       <groupId>com.thelastpickle.htap</groupId>
       <artifactId>htap-common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.thelastpickle.htap</groupId>
+      <artifactId>htap-cqlite</artifactId>
       <version>${project.version}</version>
     </dependency>
 

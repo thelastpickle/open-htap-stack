@@ -15,9 +15,8 @@ import org.jboss.logging.Logger;
  *
  * <p>The order is explicit and not the container's injection order, because one pair depends
  * on it. The cqlite reader takes each table's {@code CREATE TABLE} from the driver's schema
- * metadata, so the CQL path must have connected once before the reader can register anything;
- * it arrives with the other four paths in the next commit and goes after Cassandra in this
- * list.
+ * metadata, so the CQL path must have connected once before the reader can register anything,
+ * and it is last here for that reason.
  *
  * <p>On a virtual thread rather than in the startup observer, which is the one difference
  * from the Python: FastAPI's lifespan ran before the port opened, and an HTTP port that opens
@@ -32,8 +31,13 @@ public class EngineStartup {
 
     private final List<EnginePath> paths;
 
-    EngineStartup(CassandraPath cassandra) {
-        this.paths = List.of(cassandra);
+    EngineStartup(
+            CassandraPath cassandra,
+            PrestoPath presto,
+            SparkPath spark,
+            SparkBulkPath sparkBulk,
+            CqlitePath cqlite) {
+        this.paths = List.of(cassandra, presto, spark, sparkBulk, cqlite);
     }
 
     void onStart(@Observes StartupEvent event) {

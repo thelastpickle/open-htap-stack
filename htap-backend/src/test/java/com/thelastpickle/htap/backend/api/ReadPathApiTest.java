@@ -253,11 +253,11 @@ class ReadPathApiTest {
         when().get("/api/platform/health")
                 .then()
                 .statusCode(200)
-                .body("services.size()", equalTo(5))
+                .body("services.size()", equalTo(6))
                 .body("services.name", equalTo(java.util.List.of(
-                        "Cassandra", "Kafka", "Presto", "Spark", "cassandra-sql")))
+                        "Cassandra", "Kafka", "Presto", "Spark", "cassandra-sql", "cqlite reader")))
                 .body("services.status", equalTo(java.util.List.of(
-                        "down", "down", "down", "down", "down")))
+                        "down", "down", "down", "down", "down", "down")))
                 .body("overall_health_score", equalTo(0.0f))
                 .body("total_drones", equalTo(0))
                 .body("container_cli", equalTo("podman"));

@@ -6,9 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import com.thelastpickle.htap.backend.api.dto.ServiceHealth;
 import com.thelastpickle.htap.backend.config.AccordSqlSettings;
 import com.thelastpickle.htap.backend.config.CassandraSettings;
+import com.thelastpickle.htap.backend.config.CqliteSettings;
 import com.thelastpickle.htap.backend.config.KafkaSettings;
 import com.thelastpickle.htap.backend.config.PrestoSettings;
 import com.thelastpickle.htap.backend.config.SparkSettings;
+import com.thelastpickle.htap.backend.engine.CqlitePath;
 import io.quarkus.test.junit.QuarkusTest;
 import jakarta.inject.Inject;
 import java.util.List;
@@ -16,9 +18,10 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 
 /**
- * A Quarkus test because the five service addresses come from configuration, and taking them
- * from the container is what makes this cover the mapping as well as the probe. Every one of
- * them points at a closed port under {@code %test}, so the probe is deterministic.
+ * A Quarkus test because the service addresses come from configuration, and taking them from the
+ * container is what makes this cover the mapping as well as the probe. Every one of the five ports
+ * is closed under {@code %test}, and the sixth row has no port at all: the cqlite reader can
+ * register no table without a cluster, so it reports its directory with nothing in it.
  */
 @QuarkusTest
 class PlatformProbeTest {
@@ -38,21 +41,29 @@ class PlatformProbeTest {
     @Inject
     AccordSqlSettings accordSql;
 
+    @Inject
+    CqliteSettings cqliteSettings;
+
+    @Inject
+    CqlitePath cqlite;
+
     private final AtomicLong clock = new AtomicLong();
 
     private PlatformProbe probe() {
-        return new PlatformProbe(cassandra, kafka, presto, spark, accordSql, clock::get);
+        return new PlatformProbe(
+                cassandra, kafka, presto, spark, accordSql, cqliteSettings, cqlite, clock::get);
     }
 
     @Test
-    void theFiveServicesAreNamedAndAddressedFromConfiguration() {
+    void theFiveServicesAndTheReaderAreNamedAndAddressedFromConfiguration() {
         List<ServiceHealth> services = probe().services();
 
         assertEquals(
-                List.of("Cassandra", "Kafka", "Presto", "Spark", "cassandra-sql"),
+                List.of("Cassandra", "Kafka", "Presto", "Spark", "cassandra-sql", "cqlite reader"),
                 services.stream().map(ServiceHealth::name).toList());
         assertEquals(
-                List.of("127.0.0.1:1", "127.0.0.1:1", "127.0.0.1:1", "127.0.0.1:1", "127.0.0.1:1"),
+                List.of("127.0.0.1:1", "127.0.0.1:1", "127.0.0.1:1", "127.0.0.1:1", "127.0.0.1:1",
+                        cqliteSettings.dataDir() + " — 0 table(s), 0 SSTable(s)"),
                 services.stream().map(ServiceHealth::endpoint).toList());
     }
 
@@ -61,7 +72,7 @@ class PlatformProbeTest {
     void aClosedPortReadsAsDown() {
         List<ServiceHealth> services = probe().services();
 
-        assertEquals(List.of("down", "down", "down", "down", "down"),
+        assertEquals(List.of("down", "down", "down", "down", "down", "down"),
                 services.stream().map(ServiceHealth::status).toList());
         services.forEach(service -> assertFalse(service.up()));
     }

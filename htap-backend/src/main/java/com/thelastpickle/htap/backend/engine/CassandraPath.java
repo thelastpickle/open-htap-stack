@@ -2,12 +2,16 @@ package com.thelastpickle.htap.backend.engine;
 
 import com.datastax.oss.driver.api.core.AllNodesFailedException;
 import com.datastax.oss.driver.api.core.CqlSession;
+import com.datastax.oss.driver.api.core.DriverException;
 import com.datastax.oss.driver.api.core.config.DefaultDriverOption;
 import com.datastax.oss.driver.api.core.config.DriverConfigLoader;
 import com.datastax.oss.driver.api.core.config.ProgrammaticDriverConfigLoaderBuilder;
 import com.datastax.oss.driver.api.core.cql.ResultSet;
+import com.datastax.oss.driver.api.core.cql.SimpleStatement;
 import com.datastax.oss.driver.api.core.cql.Statement;
 import com.thelastpickle.htap.backend.config.CassandraSettings;
+import com.thelastpickle.htap.backend.query.Dialects;
+import com.thelastpickle.htap.backend.support.Messages;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -20,7 +24,7 @@ import java.util.function.Supplier;
  * compared against.
  */
 @ApplicationScoped
-public class CassandraPath implements EnginePath {
+public class CassandraPath implements QueryPath {
 
     /** As the Python's {@code RECONNECT_INTERVAL_S}. */
     static final Duration RETRY_INTERVAL = Duration.ofSeconds(10);
@@ -61,6 +65,30 @@ public class CassandraPath implements EnginePath {
     @Override
     public boolean connected() {
         return gate.connected();
+    }
+
+    @Override
+    public String dialect(String sql, int limit) {
+        return Dialects.cql(sql, limit);
+    }
+
+    /**
+     * Runs one console statement.
+     *
+     * <p>What CQL cannot express is refused here, and the refusal is the finding the compare page
+     * reports rather than a fault: a {@code GROUP BY} on a non-key column is the demo's own
+     * example. So the driver's own message is passed on, and only a session that has gone takes
+     * the path down.
+     */
+    @Override
+    public QueryRows query(String sql) {
+        try {
+            return CqlRows.read(execute(SimpleStatement.newInstance(sql)));
+        } catch (AllNodesFailedException e) {
+            throw new EngineUnavailable("Cassandra not connected: " + Messages.oneLine(e), e);
+        } catch (DriverException e) {
+            throw new EngineFailed(Messages.oneLine(e), e);
+        }
     }
 
     /**
@@ -114,10 +142,13 @@ public class CassandraPath implements EnginePath {
      * pool re-establishes the connection and the session stays usable. Invalidating on it
      * would rebuild the session on a blip the driver had already handled, fail every read
      * still paging through the old one, and report Cassandra down to the pages for up to
-     * {@link #RETRY_INTERVAL}. Nor does dropping it lose a genuinely dead session: these
-     * reads declare no idempotence, so the driver rethrows the aborted request rather than
-     * trying another host, and the following request finds an empty pool and raises {@code
-     * NoNodeAvailableException}, which closes the gate one request later.
+     * {@link #RETRY_INTERVAL}. Nor does dropping it lose a genuinely dead session: {@code
+     * DefaultRetryPolicy.onRequestAborted} answers {@code RETRY_NEXT} only for a request the
+     * caller declared idempotent and {@code RETHROW} otherwise, and nothing here declares it,
+     * neither a statement nor an execution profile, the driver's own {@code
+     * basic.request.default-idempotence} being false. So the aborted request is rethrown rather
+     * than tried on another host, and the following request finds an empty pool and raises
+     * {@code NoNodeAvailableException}, which closes the gate one request later.
      */
     static boolean sessionIsGone(RuntimeException failure) {
         return failure instanceof AllNodesFailedException;

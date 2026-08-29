@@ -105,6 +105,41 @@ class ConnectionGateTest {
         assertEquals(2, attempts.get());
     }
 
+    /**
+     * A top-up neither connects nor disconnects: the cqlite reader registers a table at a time and
+     * reads the ones it has, so a failure looking for the rest must leave those alone.
+     */
+    @Test
+    void aTopUpLeavesTheConnectedStateAsItWas() {
+        ConnectionGate gate = gate();
+        gate.topUp(attempts::incrementAndGet);
+
+        assertFalse(gate.connected());
+        assertEquals(1, attempts.get());
+
+        clock.addAndGet(RETRY.toNanos());
+        gate.connect(false, attempts::incrementAndGet);
+        clock.addAndGet(RETRY.toNanos());
+        gate.topUp(failing());
+
+        assertTrue(gate.connected());
+        assertEquals(3, attempts.get());
+    }
+
+    @Test
+    void aTopUpSharesTheThrottleWithConnect() {
+        ConnectionGate gate = gate();
+        gate.connect(false, failing());
+        gate.topUp(attempts::incrementAndGet);
+
+        assertEquals(1, attempts.get());
+
+        clock.addAndGet(RETRY.toNanos());
+        gate.topUp(attempts::incrementAndGet);
+
+        assertEquals(2, attempts.get());
+    }
+
     private ConnectionGate.Attempt failing() {
         return () -> {
             attempts.incrementAndGet();

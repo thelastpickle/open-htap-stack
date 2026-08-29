@@ -64,6 +64,33 @@ public final class ConnectionGate {
     }
 
     /**
+     * Run {@code attempt} on the same throttle although the path reports connected, and leave the
+     * connected state as it was.
+     *
+     * <p>One path connects by degrees. The cqlite reader registers a table at a time and is usable
+     * with some of them registered, so it has to look again for the ones it lacks; a failure there
+     * must not take away the tables it already reads, which is what {@link #connect} would do.
+     */
+    public void topUp(Attempt attempt) {
+        lock.lock();
+        try {
+            long now = nanoClock.getAsLong();
+            if (attempted && now - lastAttemptNanos < retryIntervalNanos) {
+                return;
+            }
+            attempted = true;
+            lastAttemptNanos = now;
+            try {
+                attempt.run();
+            } catch (Exception e) {
+                LOG.warnf("%s could not finish connecting: %s", path, e);
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
      * Run {@code attempt} unless the path is already connected or was tried too recently.
      *
      * @throws EngineUnavailable when {@code force} and the attempt threw

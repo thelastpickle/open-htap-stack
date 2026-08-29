@@ -28,6 +28,17 @@ public interface CassandraSettings {
     String datacenter();
 
     /**
+     * The Sidecar's HTTP port, on the same host as the node.
+     *
+     * <p>Two access paths reach it: the bulk reader takes its snapshot through the Sidecar,
+     * and the backend asks the same service how large that snapshot was. Under
+     * {@code cassandra} rather than a prefix of its own, because a Sidecar serves one node
+     * and its address is the node's.
+     */
+    @WithDefault("9043")
+    int sidecarPort();
+
+    /**
      * The address to rewrite every discovered node address to, absent for no translation.
      *
      * <p>A backend run on the host rather than inside the compose network is given

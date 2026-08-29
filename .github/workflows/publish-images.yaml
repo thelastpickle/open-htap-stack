@@ -3,9 +3,12 @@ name: Publish Images
 # Publishes every image the stack runs to GitHub Container Registry, so a room full of
 # laptops pulls instead of building, and reaches one registry rather than two.
 #
-# Six are built here, one for each `build:` context in `podman-compose.yml`.
+# Seven are built here, one for each `build:` section in `podman-compose.yml`. Six name their
+# own directory as the context; `backend-java` builds one leaf of a Maven reactor, so its
+# context is the repository root and its Dockerfile is named separately, which is why every
+# matrix entry below carries a `dockerfile`.
 #
-# Four are mirrored, by `imagetools create` with no build: kafka, apicurio, presto and the
+# Four more are mirrored, by `imagetools create` with no build: kafka, apicurio, presto and the
 # Spark base image are upstream images the compose file names, and twenty laptops behind one
 # conference NAT are one address to Docker Hub, whose anonymous pull limit answers
 # `toomanyrequests`; that reads to a participant as nothing at all. Mirroring the Spark base
@@ -16,7 +19,7 @@ name: Publish Images
 # Trunk publishes, so `latest` and `trunk` resolve to the current trunk at all times. A
 # `paths` filter was the obvious way to skip a docs-only push and is not used: on `push`,
 # GitHub applies `paths` to the tag legs as well, so a `v*` tag laid on a commit that
-# touched no build context would publish nothing at all. Ten publishes on a docs push is
+# touched no build context would publish nothing at all. Eleven publishes on a docs push is
 # the cheaper mistake; runners and GHCR are both free for a public repository.
 #
 # Nothing is built or copied until `Test Podman Compose` has succeeded on the same commit,
@@ -26,18 +29,18 @@ name: Publish Images
 # in one API call.
 #
 # The Git LFS objects are cached, because they are the one cost visibility does not cover.
-# `cassandra/dist/apache-cassandra-sidecar-0.5-mck2.tar.gz` is 511 MB and the two
-# `backend/dist` wheels are 20 MB and 21 MB, so the four jobs that need LFS objects would
-# fetch 1,104 MB per run against a repository's 1 GB monthly LFS bandwidth. The cache key is
-# the hash of the pointer files, which name the object by its oid, so a run pays LFS
-# bandwidth only when a vendored artefact changes.
+# `cassandra/dist/apache-cassandra-sidecar-0.5-mck2.tar.gz` is 511 MB, the two `backend/dist`
+# wheels are 20 MB and 21 MB, and the two `htap-cqlite/dist` libraries are 38 MB and 40 MB, so
+# the six jobs that need LFS objects would fetch 1,261 MB per run against a repository's 1 GB
+# monthly LFS bandwidth. The cache key is the hash of the pointer files, which name the object
+# by its oid, so a run pays LFS bandwidth only when a vendored artefact changes.
 #
 # No build cache, and the reason is that interaction: a `type=gha` cache shares one 10 GB
-# Actions cache with the LFS objects above, and evicting them puts the 1,104 MB back. If
+# Actions cache with the LFS objects above, and evicting them puts the 1,261 MB back. If
 # build time becomes the complaint, the lever is a registry cache in GHCR rather than the
 # Actions one.
 #
-# The first successful run creates ten *private* packages, because that is GHCR's
+# The first successful run creates eleven *private* packages, because that is GHCR's
 # default for an organisation. Make each one public once, under the organisation's
 # package settings, or every participant needs a token to pull. Verify it with
 # `docker manifest inspect` after `docker logout ghcr.io`: a pull that works while the
@@ -60,7 +63,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  # Slashes are legal in a GHCR package name, so the ten sit together under one prefix
+  # Slashes are legal in a GHCR package name, so the eleven sit together under one prefix
   # rather than scattering `backend` and `frontend` among the organisation's packages.
   IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/open-htap-stack
 
@@ -140,9 +143,10 @@ jobs:
 
   build:
     # One job per service per architecture, each on a runner of that architecture.
-    # Not QEMU: `backend/Dockerfile` picks its cqlite wheel with `uname -m`, so an
-    # emulated build would install the wrong one or none, and `accord-sql` runs a
-    # Gradle build that emulation makes an order of magnitude slower.
+    # Not QEMU: `backend/Dockerfile` picks its cqlite wheel with `uname -m` and
+    # `htap-backend/Dockerfile` its cqlite library the same way, so an emulated build
+    # would install the wrong one or none, and `accord-sql` runs a Gradle build that
+    # emulation makes an order of magnitude slower.
     name: ${{ matrix.service.name }} (${{ matrix.platform.arch }})
     runs-on: ${{ matrix.platform.runner }}
     timeout-minutes: 60
@@ -156,27 +160,42 @@ jobs:
       matrix:
         service:
           # `lfs` names the Git LFS paths this context needs, and empty means none. The
-          # checkout deliberately does not fetch LFS wholesale: four of the six contexts
-          # need none of it, and `lfs: true` would pull all 804.5 MB in each of twelve jobs.
-          # The Java backend image will want `htap-cqlite/dist/**` here, which is 78.3 MB of
-          # that total and is why no context lists it yet.
+          # checkout deliberately does not fetch LFS wholesale: four of the seven contexts
+          # need none of it, and `lfs: true` would pull all 805.4 MB in each of fourteen jobs.
+          #
+          # `dockerfile` is named for every service although six of them hold it at the root
+          # of their own context: `backend-java` does not, and one form for all seven keeps
+          # the build step below from having to decide which entries carry the field.
           - name: cassandra
             context: ./cassandra
+            dockerfile: ./cassandra/Dockerfile
             lfs: cassandra/dist/**
           - name: accord-sql
             context: ./accord-sql
+            dockerfile: ./accord-sql/Dockerfile
             lfs: ''
           - name: backend
             context: ./backend
+            dockerfile: ./backend/Dockerfile
             lfs: backend/dist/**
+          # The reactor's own build: the context is the repository root, because the module
+          # needs the parent pom and htap-common beside it, and .dockerignore at the root is
+          # what keeps the working tree and the other two dist/ directories out of it.
+          - name: backend-java
+            context: .
+            dockerfile: ./htap-backend/Dockerfile
+            lfs: htap-cqlite/dist/**
           - name: frontend
             context: ./frontend
+            dockerfile: ./frontend/Dockerfile
             lfs: ''
           - name: data-producer
             context: ./ingress/producer
+            dockerfile: ./ingress/producer/Dockerfile
             lfs: ''
           - name: data-cassandra-sink
             context: ./ingress/consumer
+            dockerfile: ./ingress/consumer/Dockerfile
             lfs: ''
         platform:
           - arch: amd64
@@ -225,6 +244,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.service.context }}
+          file: ${{ matrix.service.dockerfile }}
           platforms: linux/${{ matrix.platform.arch }}
           labels: ${{ steps.meta.outputs.labels }}
           # No tag here. Each architecture pushes an untagged manifest and the merge
@@ -263,6 +283,7 @@ jobs:
           - cassandra
           - accord-sql
           - backend
+          - backend-java
           - frontend
           - data-producer
           - data-cassandra-sink
@@ -332,16 +353,16 @@ jobs:
     # create` with one source copies the whole manifest list, both architectures, without
     # building anything and without this runner holding the layers as an image.
     #
-    # Each mirror carries the same tag set as a built image, so one tag selects all ten:
-    # pinning a release tag would otherwise resolve for six services and fail for four.
+    # Each mirror carries the same tag set as a built image, so one tag selects all eleven:
+    # pinning a release tag would otherwise resolve for seven services and fail for four.
     # The upstream version goes on as a further tag, so what was copied is legible in the
     # registry rather than only in this file.
     name: mirror ${{ matrix.image.name }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # A mirror copies an upstream manifest and reads none of this tree, so CI cannot fail
-    # on its account. It waits all the same: the ten tags move together, and a run that
-    # mirrored four images while the six builds were blocked would leave `latest` meaning
+    # on its account. It waits all the same: the eleven tags move together, and a run that
+    # mirrored four images while the seven builds were blocked would leave `latest` meaning
     # one thing for kafka and another for the backend.
     needs: require-ci
     permissions:

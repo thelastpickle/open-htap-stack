@@ -120,6 +120,11 @@ class CassandraPathTest {
             }
 
             @Override
+            public int sidecarPort() {
+                return CLOSED_PORT;
+            }
+
+            @Override
             public Optional<String> translateAddressesTo() {
                 return Optional.empty();
             }

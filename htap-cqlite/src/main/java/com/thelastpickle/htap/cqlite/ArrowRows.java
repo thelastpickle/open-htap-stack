@@ -78,6 +78,11 @@ final class ArrowRows {
             // Boolean, the four integer widths and the two float widths each box to a
             // Java type already; a wider statement output is stringified rather than
             // risking a JSON encoder failure at the route.
+            //
+            // Keeping a float32 a Float is what makes this path agree with the other four
+            // digit for digit: over one window the four analytical paths all answered
+            // 3.043663 for the same `float` column, where the Python reader widened it to a
+            // double and answered 3.0436630249023438, so its rows read as different data.
             default -> plain(vector.getObject(row));
         };
     }

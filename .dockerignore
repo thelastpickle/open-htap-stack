@@ -10,6 +10,14 @@ target
 **/target
 .github
 .claude
+# Another service's vendored artefacts.  This build needs htap-cqlite/dist, which is 78.3 MB and
+# is copied in the Dockerfile; the other three are 511.2 MB of Sidecar tarball, 41.8 MB of Python
+# wheels and 176.5 MB of Ivy jars, of which 126.6 MB is one cassandra-analytics-core.  A
+# root-context build uploads all three unless they are named here, and spark/'s own .dockerignore
+# does not apply, because that one governs a build whose context is spark/.
+backend/dist
+cassandra/dist
+spark/ivy
 cassandra-data
 frontend/node_modules
 frontend/dist

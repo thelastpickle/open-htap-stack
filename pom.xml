@@ -45,6 +45,23 @@
       follow from that are in htap-cqlite/pom.xml beside the tests that need them.
     -->
     <arrow.version>19.0.0</arrow.version>
+    <!--
+      Presto's own JDBC driver, at the version of the coordinator this stack runs:
+      podman-compose.yml pulls prestodb/presto:0.298.1, and the driver and the server
+      share a wire protocol that is versioned with them. Shaded, 15 MB, and it brings no
+      transitive dependency of its own.
+    -->
+    <presto-jdbc.version>0.298.1</presto-jdbc.version>
+    <!--
+      Kyuubi's Hive JDBC driver rather than org.apache.hive:hive-jdbc, for both Spark
+      access paths. hive-jdbc drags most of Hive and Hadoop in behind it; this one is 20 MB
+      with its Thrift and its transport relocated inside it, and it speaks HiveServer2
+      exactly as the Spark Thrift Server implements it. Verified with javap rather than
+      assumed: org.apache.kyuubi.jdbc.KyuubiHiveDriver is the registered driver, it accepts
+      a jdbc:hive2: URL, and KyuubiStatement.cancel() exists, which is what replaces the
+      Python's trick of closing the socket under a running query.
+    -->
+    <kyuubi-jdbc.version>1.10.2</kyuubi-jdbc.version>
     <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
     <maven-surefire-plugin.version>3.5.6</maven-surefire-plugin.version>
     <maven-enforcer-plugin.version>3.6.3</maven-enforcer-plugin.version>
@@ -106,6 +123,16 @@
         <groupId>org.apache.cassandra</groupId>
         <artifactId>java-driver-core</artifactId>
         <version>${cassandra-driver.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>com.facebook.presto</groupId>
+        <artifactId>presto-jdbc</artifactId>
+        <version>${presto-jdbc.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.kyuubi</groupId>
+        <artifactId>kyuubi-hive-jdbc-shaded</artifactId>
+        <version>${kyuubi-jdbc.version}</version>
       </dependency>
     </dependencies>
   </dependencyManagement>

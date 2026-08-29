@@ -602,9 +602,10 @@ services:
     restart: unless-stopped
 
   # The same API, ported to Java, on its own port while the two are compared.  It answers a
-  # subset for now: the CQL read path and the pages built on it.  The switchover moves it to
-  # 8000 and retires the service above; until then nothing depends on this one, and stopping
-  # it changes nothing a browser sees.
+  # subset for now: all five read paths, the console and the schema page, but not the timed
+  # comparison, the transaction demos or the SQL console.  The switchover moves it to 8000 and
+  # retires the service above; until then nothing depends on this one, and stopping it changes
+  # nothing a browser sees.
   backend-java:
     build:
       # The repository root, because the module is one leaf of a Maven reactor and the build
@@ -622,11 +623,22 @@ services:
       - "${BACKEND_JAVA_PORT:-8001}:8001"
     volumes:
       # Read-only, for the same reason the Python backend's mount is: a reader must never be
-      # able to corrupt the dataset the other paths read.  Not used until the cqlite path
-      # arrives; declared now so the two services differ in code rather than in what they see.
+      # able to corrupt the dataset the other paths read.  This is the mount the cqlite path
+      # reads, and CQLITE_DATA_DIR below has to name the same directory.
       - ./cassandra-data:/var/lib/cassandra:ro
-    mem_limit: "${BACKEND_JAVA_MEM_LIMIT:-2g}"
-    memswap_limit: "${BACKEND_JAVA_MEM_LIMIT:-2g}"
+    # The same 8 GB the Python backend has, and for the same reason: a cqlite read holds its
+    # rows in this process, measured at 1.09 GB of anonymous memory per shard of a window read
+    # one partition at a time and 3.9 GB per million rows when a whole window is read at once.
+    # A limit confines a cgroup out-of-memory kill to the container that earned it, and what it
+    # does not confine is the machine running out: three 8 GB limits, this backend's, the Python
+    # one's and Cassandra's, are the whole of a 24 GB podman machine before Spark and Presto are
+    # counted.  Measured while the two backends were being compared, a window read down each of
+    # them four minutes apart ended with the host killing `cassandra -f` on exit 137, its 4 GB
+    # heap being the largest resident process, and every path then reported no host available
+    # until the node was restarted.  So read a window down one backend at a time while both run,
+    # and lower this before raising CQLITE_KEY_CHUNK.
+    mem_limit: "${BACKEND_JAVA_MEM_LIMIT:-8g}"
+    memswap_limit: "${BACKEND_JAVA_MEM_LIMIT:-8g}"
     environment:
       # Each name is the environment spelling of one MicroProfile property, so the two
       # backends take their addresses from the same variables.
@@ -635,12 +647,36 @@ services:
       CASSANDRA_KEYSPACE: "${DEMO_KEYSPACE:-demo}"
       CASSANDRA_DATACENTER: "${CASSANDRA_DATACENTER:-datacenter1}"
       CONTAINER_CLI: "${CONTAINER_CLI:-podman}"
+      # Bucket width and shard count are declared once, here, and read by the sink and both
+      # backends: the three disagreeing produces queries that match nothing.
+      EVENT_BUCKET_MINUTES: "${DEMO_EVENT_BUCKET_MINUTES:-15}"
+      EVENT_SHARDS: "${DEMO_EVENT_SHARDS:-16}"
       PRESTO_HOST: "presto"
       PRESTO_PORT: "8080"
       SPARK_UI_HOST: "spark"
       SPARK_UI_PORT: "8080"
+      SPARK_THRIFT_HOST: "spark"
+      SPARK_THRIFT_PORT: "10000"
+      # The same bound the Python backend is given, and the same figure the bulk reader derives
+      # its snapshot TTL from; the comment on that service says what sits above it.
+      SPARK_QUERY_TIMEOUT_S: "${SPARK_QUERY_TIMEOUT_S:-900}"
       KAFKA_HOST: "kafka"
       KAFKA_PORT: "19092"
+      # The same topic and group the sink is given, under this backend's own spelling: the
+      # window's settled flag reads the sink's committed offsets under this group, and naming a
+      # different group would read no offsets and report every window unsettled.
+      KAFKA_EVENTS_TOPIC: "${DEMO_TOPIC:-demo-events}"
+      KAFKA_SINK_GROUP_ID: "${DEMO_GROUP_ID:-demo-cassandra-sink}"
+      # Where the cqlite reader looks for the keyspace directories.  This and the read-only
+      # mount above are one setting: the two disagreeing gives a path that finds no table
+      # directory and declines every query.
+      CQLITE_DATA_DIR: "/var/lib/cassandra/data"
+      # Both here for the same reason they are on the Python backend: what they bound is memory
+      # this process holds, so being able to raise either and watch the limit above do its work,
+      # with no rebuild, is the point.  The measured figures that keep them at one are in
+      # CqliteSettings.
+      CQLITE_SPLITS: "${CQLITE_SPLITS:-1}"
+      CQLITE_KEY_CHUNK: "${CQLITE_KEY_CHUNK:-1}"
       ACCORD_SQL_HOST: "accord-sql"
       ACCORD_SQL_PORT: "5432"
     healthcheck:

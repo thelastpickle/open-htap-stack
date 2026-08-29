@@ -125,8 +125,13 @@ final class Abi {
     }
 
     /**
-     * The handle reads and writes at a base offset the caller gives, so every call site
-     * passes {@code 0L} for a segment allocated to hold exactly this struct.
+     * A handle taking the segment and a base offset, both exactly as declared.
+     *
+     * <p>{@code withInvokeExactBehavior} is what forces the offset to be written {@code 0L} and
+     * not {@code 0}: with the default behaviour the call site is adapted as {@code
+     * MethodHandle.asType} would adapt it, so an {@code int} offset widens, and so does a {@code
+     * long} field read as a {@code double}. The offset is {@code 0L} everywhere here, because
+     * each segment holds exactly this one struct.
      */
     private static VarHandle field(StructLayout layout, String name) {
         return layout.varHandle(PathElement.groupElement(name)).withInvokeExactBehavior();

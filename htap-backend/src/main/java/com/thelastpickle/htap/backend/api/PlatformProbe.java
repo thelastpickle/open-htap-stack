@@ -3,9 +3,11 @@ package com.thelastpickle.htap.backend.api;
 import com.thelastpickle.htap.backend.api.dto.ServiceHealth;
 import com.thelastpickle.htap.backend.config.AccordSqlSettings;
 import com.thelastpickle.htap.backend.config.CassandraSettings;
+import com.thelastpickle.htap.backend.config.CqliteSettings;
 import com.thelastpickle.htap.backend.config.KafkaSettings;
 import com.thelastpickle.htap.backend.config.PrestoSettings;
 import com.thelastpickle.htap.backend.config.SparkSettings;
+import com.thelastpickle.htap.backend.engine.CqlitePath;
 import com.thelastpickle.htap.backend.support.Round;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -32,7 +34,7 @@ public class PlatformProbe {
 
     /**
      * The Overview key performance indicators embed the score and are polled every few
-     * seconds. Probing five sockets on every poll would add seconds of latency whenever a
+     * seconds. Probing every socket on every poll would add seconds of latency whenever a
      * service is down, so the score is reused for a little longer than a poll cycle.
      */
     private static final long SCORE_TTL_NANOS = 10_000_000_000L;
@@ -42,6 +44,8 @@ public class PlatformProbe {
     private record Reading(long expiresAtNanos, double score) {}
 
     private final List<Target> targets;
+    private final CqliteSettings cqliteSettings;
+    private final CqlitePath cqlite;
     private final LongSupplier nanoClock;
     private final AtomicReference<Reading> reading = new AtomicReference<>();
 
@@ -51,8 +55,10 @@ public class PlatformProbe {
             KafkaSettings kafka,
             PrestoSettings presto,
             SparkSettings spark,
-            AccordSqlSettings accordSql) {
-        this(cassandra, kafka, presto, spark, accordSql, System::nanoTime);
+            AccordSqlSettings accordSql,
+            CqliteSettings cqliteSettings,
+            CqlitePath cqlite) {
+        this(cassandra, kafka, presto, spark, accordSql, cqliteSettings, cqlite, System::nanoTime);
     }
 
     PlatformProbe(
@@ -61,7 +67,11 @@ public class PlatformProbe {
             PrestoSettings presto,
             SparkSettings spark,
             AccordSqlSettings accordSql,
+            CqliteSettings cqliteSettings,
+            CqlitePath cqlite,
             LongSupplier nanoClock) {
+        this.cqliteSettings = cqliteSettings;
+        this.cqlite = cqlite;
         // Every host and port comes from configuration, so the probe follows the backend
         // whether it runs inside the compose network or on the host. cassandra-sql is a
         // reachability row and nothing more: it is not one of the five paths.
@@ -76,14 +86,36 @@ public class PlatformProbe {
 
     /** Every service, probed now. */
     public List<ServiceHealth> services() {
-        List<ServiceHealth> services = new ArrayList<>(targets.size());
+        List<ServiceHealth> services = new ArrayList<>(targets.size() + 1);
         for (Target target : targets) {
             services.add(new ServiceHealth(
                     target.name(),
                     probe(target.host(), target.port()),
                     target.host() + ":" + target.port()));
         }
+        services.add(cqliteReader());
         return services;
+    }
+
+    /**
+     * The cqlite path, which has no socket to probe.
+     *
+     * <p>It is a library in this process reading a directory, so what stands in for reachability is
+     * whether it found the SSTable files: a backend without the data directory mounted reports the
+     * path down, and says which directory it looked in. The file count is what says the files are
+     * there rather than only the directory.
+     *
+     * <p>Registration is retried here, because there is no socket whose opening would otherwise
+     * show that the keyspace has since been created.
+     */
+    private ServiceHealth cqliteReader() {
+        cqlite.ensureRegistered();
+        CqlitePath.FileCount found = cqlite.filesNow();
+        return new ServiceHealth(
+                "cqlite reader",
+                found.files() > 0 ? ServiceHealth.UP : ServiceHealth.DOWN,
+                cqliteSettings.dataDir() + " — " + found.tables() + " table(s), "
+                        + found.files() + " SSTable(s)");
     }
 
     /** Fraction of the services reachable, to a thousandth. */

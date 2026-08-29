@@ -4,7 +4,9 @@ import com.datastax.oss.driver.api.core.cql.SimpleStatement;
 import com.thelastpickle.htap.backend.config.EventSettings;
 import com.thelastpickle.htap.backend.engine.CassandraPath;
 import com.thelastpickle.htap.common.EventPartitions;
+import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 import java.time.Duration;
 import java.time.Instant;
@@ -103,6 +105,33 @@ public class Windows {
     }
 
     /**
+     * A shard count no request could make valid is refused once, at startup.
+     *
+     * <p>Said here as well as in {@link #holdsEvents} because this class is the one that cannot work
+     * without it, and because the route is a {@code GET}: an {@code IllegalArgumentException} raised
+     * from a request reaches the browser as an unmapped 500 with no {@code detail} for the compare
+     * page to show, where a startup failure names the setting in the log the operator is reading.
+     */
+    void onStart(@Observes StartupEvent event) {
+        refuseZeroShards();
+    }
+
+    /**
+     * Refused rather than clamped, as {@link EventPartitions#shard} refuses the same value.
+     *
+     * <p>A count of zero makes the shard list empty, and {@code shard IN ()} is a
+     * {@code SyntaxException} that {@link #holdsEvents}'s own catch would swallow once per candidate
+     * window, so a misconfigured stack would report eight warnings and no window rather than the one
+     * thing wrong with it.
+     */
+    private void refuseZeroShards() {
+        if (events.shards() < 1) {
+            throw new IllegalArgumentException(
+                    "EVENT_SHARDS must be at least 1, got " + events.shards());
+        }
+    }
+
+    /**
      * Whether any shard of this window has a row in it.
      *
      * <p>One read of the window's partitions, stopped at the first row, so the cost does not
@@ -110,14 +139,7 @@ public class Windows {
      * empty, which makes the caller fall through to the one now filling rather than fail.
      */
     boolean holdsEvents(String bucket) {
-        // Refused rather than clamped, as EventPartitions.shard refuses the same value: a count of
-        // zero makes the shard list empty, and `shard IN ()` is a SyntaxException the catch below
-        // would swallow once per candidate window, so a misconfigured stack would report eight
-        // warnings and no window rather than the one thing wrong with it.
-        if (events.shards() < 1) {
-            throw new IllegalArgumentException(
-                    "EVENT_SHARDS must be at least 1, got " + events.shards());
-        }
+        refuseZeroShards();
         String shards = IntStream.range(0, events.shards())
                 .mapToObj(Integer::toString)
                 .collect(Collectors.joining(","));

@@ -17,6 +17,7 @@ import java.util.Optional;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -40,6 +41,18 @@ class ComparisonTest {
     private final ProbeReads reads = new ProbeReads();
     private final Comparison comparison = new Comparison(
             paths, new QueryRunner(), reads, gate, Duration.ofMillis(1));
+
+    /**
+     * Nothing leaves an interrupt behind it.
+     *
+     * <p>One test interrupts the calling thread on purpose, and JUnit reuses that thread; a flag left
+     * set makes the next test's own {@code await} return at once, which would turn one failure into
+     * several with nothing naming the cause.
+     */
+    @AfterEach
+    void clearAnyInterrupt() {
+        Thread.interrupted();
+    }
 
     /** The columns of a comparison must not move about with the order a caller named the paths in. */
     @Test
@@ -236,9 +249,12 @@ class ComparisonTest {
                 RunMode.PARALLEL, 10, false);
 
         comparison.together(run);
+        // Read before anything that can fail: a flag left set on the thread JUnit reuses makes the
+        // next test's own await return at once, so one real failure would become several.
+        boolean interrupted = Thread.interrupted();
 
         assertEquals(3, run.results().size());
-        assertTrue(Thread.interrupted(), "the interrupt was swallowed");
+        assertTrue(interrupted, "the interrupt was swallowed");
     }
 
     /** Worked out at the start, because by the time a cancel asks, the path is busy with it. */

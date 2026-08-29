@@ -20,11 +20,23 @@ public final class Messages {
 
     /** The text on one line, cut at {@link #LIMIT}. */
     public static String oneLine(String text) {
+        return oneLine(text, LIMIT);
+    }
+
+    /**
+     * The same, cut at a caller's own limit.
+     *
+     * <p>The statement columns are narrower than the message one, and a statement's limit has to be
+     * the same everywhere: the Spark cancel recognises its own jobs by comparing a statement it
+     * collapsed against a description the job list collapsed, so a difference of one character
+     * between the two would match nothing.
+     */
+    public static String oneLine(String text, int limit) {
         if (text == null) {
             return "";
         }
         String flattened = text.strip().replaceAll("\\s+", " ");
-        return flattened.length() <= LIMIT ? flattened : flattened.substring(0, LIMIT);
+        return flattened.length() <= limit ? flattened : flattened.substring(0, limit);
     }
 
     /** The failure's message on one line, or its type where it carries no message. */

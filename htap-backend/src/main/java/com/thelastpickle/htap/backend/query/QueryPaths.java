@@ -35,9 +35,12 @@ public class QueryPaths {
             SparkPath spark,
             SparkBulkPath sparkBulk,
             CqlitePath cqlite) {
-        for (QueryPath path : List.of(cassandra, presto, spark, sparkBulk, cqlite)) {
-            paths.put(path.name(), path);
-        }
+        this(List.of(cassandra, presto, spark, sparkBulk, cqlite));
+    }
+
+    /** The paths in the given order, which is how a test builds a set it can predict. */
+    QueryPaths(List<QueryPath> declared) {
+        declared.forEach(path -> paths.put(path.name(), path));
     }
 
     /** Every path, in the declared order. */
@@ -48,6 +51,44 @@ public class QueryPaths {
     /** The path of that name, or empty: a caller may name anything. */
     public Optional<QueryPath> byName(String name) {
         return Optional.ofNullable(paths.get(name));
+    }
+
+    /**
+     * The paths a comparison asked for, or refuse.
+     *
+     * <p>Null means all of them. Otherwise the order is this class's own, so the columns do not move
+     * about depending on the order a caller named them in; {@code keepOrder} takes the caller's
+     * order instead, which the stream route wants, since there the order is the order paths answer in
+     * and the dashboard sends its quickest path first so a viewer has something to read while the
+     * slow ones work.
+     *
+     * <p>A duplicate is dropped either way: the same path twice would be timed twice and reported
+     * once.
+     */
+    public List<String> chosen(List<String> names, boolean keepOrder) {
+        if (names == null) {
+            return List.copyOf(paths.keySet());
+        }
+        List<String> unknown = names.stream().filter(name -> !paths.containsKey(name)).toList();
+        if (!unknown.isEmpty()) {
+            throw new Unknown("Unknown engine(s): " + String.join(", ", unknown));
+        }
+        List<String> order = keepOrder ? names : List.copyOf(paths.keySet());
+        List<String> chosen = order.stream().filter(names::contains).distinct().toList();
+        if (chosen.isEmpty()) {
+            throw new Unknown("Choose at least one engine to compare");
+        }
+        return chosen;
+    }
+
+    /** A comparison naming a path this backend does not have, which the route answers 400. */
+    public static class Unknown extends RuntimeException {
+
+        private static final long serialVersionUID = 1L;
+
+        Unknown(String detail) {
+            super(detail);
+        }
     }
 
     /** Which paths are connected, in order, for the engine selector. */

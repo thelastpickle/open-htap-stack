@@ -9,8 +9,8 @@ import java.time.Duration;
  * The three Spark ports this backend uses, which are three different servers.
  *
  * <p>The master's web UI at 8080 is what the platform probe reads. The Thrift Server at 10000
- * is what both Spark access paths run their SQL against. The application UI is a third, and
- * the Health page reads running jobs from it; it arrives with the cancel that needs it.
+ * is what both Spark access paths run their SQL against. The application UI at 4040 is the third,
+ * and it is where a running job is seen and killed.
  */
 @ConfigMapping(prefix = "spark")
 public interface SparkSettings {
@@ -26,6 +26,16 @@ public interface SparkSettings {
 
     @WithDefault("10000")
     int thriftPort();
+
+    /**
+     * The Thrift Server's own application UI, on the same host as the master's.
+     *
+     * <p>4040 is where the first application in a JVM binds, and the Thrift Server is the only
+     * application in that container. The property is the {@code SPARK_APP_UI_PORT} compose declares.
+     */
+    @WithName("app-ui-port")
+    @WithDefault("4040")
+    int appUiPort();
 
     /**
      * How long the client waits on a socket that is saying nothing before it gives up.

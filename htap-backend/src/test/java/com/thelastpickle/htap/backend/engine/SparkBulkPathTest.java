@@ -117,31 +117,6 @@ class SparkBulkPathTest {
     }
 
     private static SparkSettings spark(int seconds) {
-        return new SparkSettings() {
-            @Override
-            public String uiHost() {
-                return "spark";
-            }
-
-            @Override
-            public int uiPort() {
-                return 8080;
-            }
-
-            @Override
-            public String thriftHost() {
-                return "spark";
-            }
-
-            @Override
-            public int thriftPort() {
-                return 10_000;
-            }
-
-            @Override
-            public int queryTimeoutSeconds() {
-                return seconds;
-            }
-        };
+        return Engines.spark(4040, seconds);
     }
 }

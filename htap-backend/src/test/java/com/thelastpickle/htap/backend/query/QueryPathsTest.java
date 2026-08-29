@@ -1,6 +1,7 @@
 package com.thelastpickle.htap.backend.query;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.thelastpickle.htap.backend.engine.QueryPath;
@@ -43,6 +44,51 @@ class QueryPathsTest {
         assertTrue(paths.byName("duckdb").isEmpty());
         assertTrue(paths.byName("Cassandra").isEmpty());
         assertTrue(paths.byName("").isEmpty());
+    }
+
+    /** Null is what the whole-body route sends when a caller named no engines at all. */
+    @Test
+    void namingNoEnginesChoosesEveryPath() {
+        assertEquals(DECLARED, paths.chosen(null, false));
+        assertEquals(DECLARED, paths.chosen(null, true));
+    }
+
+    /** So the comparison's columns do not move about depending on how a caller listed them. */
+    @Test
+    void theChosenPathsComeBackInTheDeclaredOrder() {
+        assertEquals(List.of("cassandra", "spark", "cqlite"),
+                paths.chosen(List.of("cqlite", "spark", "cassandra"), false));
+    }
+
+    /** The stream route asks for the caller's order, since there it is the order paths answer in. */
+    @Test
+    void keepingTheOrderTakesTheCallersOwn() {
+        assertEquals(List.of("cqlite", "spark", "cassandra"),
+                paths.chosen(List.of("cqlite", "spark", "cassandra"), true));
+    }
+
+    /** The same path twice would be timed twice and reported once. */
+    @Test
+    void aDuplicateIsDropped() {
+        assertEquals(List.of("spark", "cassandra"),
+                paths.chosen(List.of("spark", "cassandra", "spark"), true));
+    }
+
+    @Test
+    void anUnknownEngineIsRefusedAndNamed() {
+        QueryPaths.Unknown refused = assertThrows(QueryPaths.Unknown.class,
+                () -> paths.chosen(List.of("cassandra", "duckdb", "sqlite"), false));
+
+        assertEquals("Unknown engine(s): duckdb, sqlite", refused.getMessage());
+    }
+
+    /** An empty list is a selector with nothing ticked, which is a mistake rather than "all". */
+    @Test
+    void anEmptyListIsRefused() {
+        QueryPaths.Unknown refused = assertThrows(QueryPaths.Unknown.class,
+                () -> paths.chosen(List.of(), false));
+
+        assertEquals("Choose at least one engine to compare", refused.getMessage());
     }
 
     /** The selector reads this map, and it is ordered: a plain map literal would not be. */

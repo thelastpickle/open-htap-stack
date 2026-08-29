@@ -457,7 +457,12 @@ services:
 
   backend:
     build:
-      context: ./backend
+      # The repository root, because the module is one leaf of a Maven reactor and the
+      # build needs the parent pom, htap-common and htap-cqlite beside it.
+      # .dockerignore at the root is what keeps cassandra-data and .git out of the
+      # context.
+      context: .
+      dockerfile: htap-backend/Dockerfile
     container_name: backend
     networks: [htap-net]
     depends_on:
@@ -467,7 +472,7 @@ services:
       # REST API and OpenAPI docs at /docs.  Only the host side moves: the
       # frontend's nginx proxies /api to http://backend:8000, the producer reads
       # its settings from http://backend:8000/api/settings/demo, and the
-      # healthcheck curls localhost:8000 inside the container, so all three are
+      # healthcheck tests localhost:8000 inside the container, so all three are
       # indifferent to this.  What does follow the variable is a host-side
       # caller: scripts/cqlite-memsample.sh, and `npm run dev`, whose Vite proxy
       # already has VITE_API_PROXY for the same purpose.
@@ -476,44 +481,52 @@ services:
       # The cqlite path parses these files in place, with no snapshot and no
       # Sidecar.  Read-only because a reader must never be able to corrupt the
       # dataset the other four paths are reading; Cassandra mounts the same host
-      # directory read-write, and the spark service mounts it too.
+      # directory read-write, and the spark service mounts it too.  This is the
+      # mount CQLITE_DATA_DIR below has to name.
       - ./cassandra-data:/var/lib/cassandra:ro
     # The cqlite path reads SSTable files in this process, so a query's memory is
-    # this container's memory.  Measured here, the kernel killed uvicorn three
-    # times in one afternoon at 11.1 to 11.9 GB anonymous resident, once
-    # mid-query, so that query never answered; the cause was cqlite's seek path
-    # holding every row of the partitions a query named, and it is bounded now
-    # (see cqlite_key_chunk in backend/app/config.py).  The limit stays because a
-    # global out-of-memory event lets the kernel choose its victim, and it may
-    # choose Cassandra, which is the one process every access path reads through.
-    # A limit confines the kill to the container that earned it, and compose
-    # restarts it.  It has done so since: raising CQLITE_KEY_CHUNK to 16 and
-    # counting one window twice crossed 8 GB on the second statement, and the
-    # container came back in seconds.  That was 1.78M rows on Cassandra 5.0 "da"
-    # files; the same setting over 1.25M rows of 6.0 "ea" files held 4.84 GB and
-    # was not killed, so what reaches the limit is the row count and the repeat
-    # rather than the file version.  Mind that the limit also counts the page
-    # cache of the files a read touches, 4.19 GB for a walk of the whole table,
-    # so it cannot be set from the anonymous figure alone; the kernel reclaims
-    # those pages rather than killing for them.
+    # this container's memory.  Measured before the bound existed, the kernel killed
+    # the backend three times in one afternoon at 11.1 to 11.9 GB anonymous resident,
+    # once mid-query, so that query never answered; the cause was cqlite's seek path
+    # holding every row of the partitions a query named, and it is bounded now (see
+    # CQLITE_KEY_CHUNK below and the figures in CqliteSettings).  The limit stays
+    # because a global out-of-memory event lets the kernel choose its victim, and it
+    # may choose Cassandra, which is the one process every access path reads through.
+    # A limit confines the kill to the container that earned it, and compose restarts
+    # it.  It has done so since: raising CQLITE_KEY_CHUNK to 16 and counting one
+    # window twice crossed 8 GB on the second statement, and the container came back
+    # in seconds.  That was 1.78M rows on Cassandra 5.0 "da" files; the same setting
+    # over 1.25M rows of 6.0 "ea" files held 4.84 GB and was not killed, so what
+    # reaches the limit is the row count and the repeat rather than the file version.
+    # Mind that the limit also counts the page cache of the files a read touches,
+    # 4.19 GB for a walk of the whole table, so it cannot be set from the anonymous
+    # figure alone; the kernel reclaims those pages rather than killing for them.
     mem_limit: "${BACKEND_MEM_LIMIT:-8g}"
     memswap_limit: "${BACKEND_MEM_LIMIT:-8g}"
     environment:
+      # Each name is the environment spelling of one MicroProfile property, so a
+      # setting is declared here and read there under the same name.
       CASSANDRA_HOST: "cassandra"
       CASSANDRA_PORT: "9042"
       CASSANDRA_KEYSPACE: "${DEMO_KEYSPACE:-demo}"
+      CASSANDRA_DATACENTER: "${CASSANDRA_DATACENTER:-datacenter1}"
       # Which command the Health page's copyable restart and log commands name.  podman
       # here; a workshop attendee runs docker, and a dashboard handing them a command
       # their machine does not have is the one failure they cannot diagnose.
       CONTAINER_CLI: "${CONTAINER_CLI:-podman}"
-      # The same two values the sink writes with, so the window the compare page
-      # offers names partitions that exist.
+      # Bucket width and shard count are declared once, here, and read by the sink and
+      # the backend: the two disagreeing produces queries that match nothing.
       EVENT_BUCKET_MINUTES: "${DEMO_EVENT_BUCKET_MINUTES:-15}"
       EVENT_SHARDS: "${DEMO_EVENT_SHARDS:-16}"
       PRESTO_HOST: "presto"
       PRESTO_PORT: "8080"
+      SPARK_UI_HOST: "spark"
+      SPARK_UI_PORT: "8080"
       SPARK_THRIFT_HOST: "spark"
       SPARK_THRIFT_PORT: "10000"
+      # And the application UI, which the running-work page reads and the cancel kills
+      # jobs through.
+      SPARK_APP_UI_PORT: "4040"
       # How long either Spark path may go without answering before its socket times
       # out, which is not how long a query may take: a scan that answered in 113s
       # alone was still working after 180s with three other paths beside it.  Also
@@ -533,12 +546,11 @@ services:
       # of the two, and where that happens depends on how far into the step the call
       # sits rather than on this number alone.
       #
-      # The 900 below is the default the stack runs, and the backend's own
-      # spark_query_timeout_s default is unreachable while this line exists, because
-      # this is the only place the variable is declared and it is always passed.  So
-      # change this one; a change to backend/app/config.py alone would leave the
-      # running backend at 900, and the CI assertion reads that container's own
-      # environment and would agree with it.
+      # The 900 below is the default the stack runs, and the backend's own default is
+      # unreachable while this line exists, because this is the only place the variable
+      # is declared and it is always passed.  So change this one; a change to
+      # SparkSettings alone would leave the running backend at 900, and the CI
+      # assertion reads that container's own environment and would agree with it.
       SPARK_QUERY_TIMEOUT_S: "${SPARK_QUERY_TIMEOUT_S:-900}"
       KAFKA_HOST: "kafka"
       KAFKA_PORT: "19092"
@@ -547,170 +559,57 @@ services:
       # can still grow is a question about the writer's position, and Kafka is where
       # that position is recorded.  Naming a different group would read no offsets
       # and report every window unsettled.
-      EVENTS_TOPIC: "${DEMO_TOPIC:-demo-events}"
-      SINK_GROUP_ID: "${DEMO_GROUP_ID:-demo-cassandra-sink}"
-      # The CDC topic the Sidecar publishes to, and the registry that holds the Avro schema
-      # each record names.  The Streaming page tails the topic through the backend; the buffer
-      # is bounded, so a page nobody is watching costs one consumer and a fixed slice of
-      # memory.  Same three values the cassandra service seeds into the Sidecar's config.
+      KAFKA_EVENTS_TOPIC: "${DEMO_TOPIC:-demo-events}"
+      KAFKA_SINK_GROUP_ID: "${DEMO_GROUP_ID:-demo-cassandra-sink}"
+      # The CDC topic the Sidecar publishes to, and the registry that holds the Avro
+      # schema each record names.  The Streaming page tails the topic through the
+      # backend; the buffer is bounded, so a page nobody is watching costs one consumer
+      # and a fixed slice of memory.  Same three values the cassandra service seeds
+      # into the Sidecar's config.
       CDC_TOPIC: "${DEMO_CDC_TOPIC:-cdc-mutations}"
       CDC_SCHEMA_REGISTRY_URL: "http://apicurio:8080/apis/ccompat/v7"
       CDC_BUFFER_SIZE: "${DEMO_CDC_BUFFER_SIZE:-200}"
-      SPARK_UI_HOST: "spark"
-      SPARK_UI_PORT: "8080"
-      # Where the cqlite reader looks for the keyspace directories.  Stated here
-      # rather than left to the backend's default, because it and the read-only
-      # mount above are one setting: the two disagreeing gives a path that finds
-      # no table directory and reports every query as a decline.
+      # Where the cqlite reader looks for the keyspace directories.  This and the
+      # read-only mount above are one setting: the two disagreeing gives a path that
+      # finds no table directory and declines every query.
       CQLITE_DATA_DIR: "/var/lib/cassandra/data"
-      # How many token-ring slices a scan with no WHERE divides into.  One, and
-      # reachable from here so the split can be exercised without a rebuild: the
-      # reader applies the token bound itself, because cqlite's BTI route drops
-      # it, and that is worth being able to check.  Raising it multiplies memory
-      # rather than throughput; see backend/app/config.py for the measured
-      # figure that keeps it at one.
-      CQLITE_SPLITS: "${CQLITE_SPLITS:-1}"
-      # How many of the partitions a query names are read at a time.  Here for
-      # the same reason as the setting above: the memory this bounds is what
-      # killed uvicorn before it existed, so being able to raise it and watch
-      # that happen again, without a rebuild, is the point.
-      CQLITE_KEY_CHUNK: "${CQLITE_KEY_CHUNK:-1}"
-      # Shown as the startup defaults on the Settings page, so they must match
-      # what data-producer above was started with.
-      DEMO_N_ENTITIES: "${DEMO_N_ENTITIES:-100}"
-      DEMO_MAX_ENTITIES: "${DEMO_MAX_ENTITIES:-2000}"
-      DEMO_EVENTS_PER_SEC: "${DEMO_EVENTS_PER_SEC:-2000}"
-      DEMO_OUTLIER_PERCENT: "${DEMO_OUTLIER_PERCENT:-5.0}"
-      # Whether the vector index follows the snippets the sink writes, and how
-      # often.  Off at startup: the Explore page turns it on, and the reason to
-      # turn it on there is to watch the point read on the Health page stay where
-      # it was while the embedder works, which is not visible if it was already
-      # running.  The loop reads the snippets after the sink has written them, so
-      # nothing in the write path waits for an embedding.
-      VECTOR_LIVE_EMBEDDINGS: "${DEMO_VECTOR_LIVE_EMBEDDINGS:-false}"
-      VECTOR_LIVE_INTERVAL_S: "${DEMO_VECTOR_LIVE_INTERVAL_S:-5}"
-      VECTOR_LIVE_MAX_PER_CYCLE: "${DEMO_VECTOR_LIVE_MAX_PER_CYCLE:-64}"
-      # Optional.  Without a key the backend embeds text locally, so the AI
-      # search still works; see backend/app/routes/vector.py.
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\""]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-    restart: unless-stopped
-
-  # The same API, ported to Java, on its own port while the two are compared.  It answers a
-  # subset for now: all five read paths, the console and the schema page, but not the timed
-  # comparison, the transaction demos or the SQL console.  The switchover moves it to 8000 and
-  # retires the service above; until then nothing depends on this one, and stopping it changes
-  # nothing a browser sees.
-  backend-java:
-    build:
-      # The repository root, because the module is one leaf of a Maven reactor and the build
-      # needs the parent pom and htap-common beside it.  .dockerignore at the root is what
-      # keeps cassandra-data and .git out of the context.
-      context: .
-      dockerfile: htap-backend/Dockerfile
-    container_name: backend-java
-    networks: [htap-net]
-    depends_on:
-      cassandra:
-        condition: service_healthy
-    ports:
-      # 8001 so both APIs answer at once and a field-name diff between them is one curl each.
-      - "${BACKEND_JAVA_PORT:-8001}:8001"
-    volumes:
-      # Read-only, for the same reason the Python backend's mount is: a reader must never be
-      # able to corrupt the dataset the other paths read.  This is the mount the cqlite path
-      # reads, and CQLITE_DATA_DIR below has to name the same directory.
-      - ./cassandra-data:/var/lib/cassandra:ro
-    # The same 8 GB the Python backend has, and for the same reason: a cqlite read holds its
-    # rows in this process, measured at 1.09 GB of anonymous memory per shard of a window read
-    # one partition at a time and 3.9 GB per million rows when a whole window is read at once.
-    # A limit confines a cgroup out-of-memory kill to the container that earned it, and what it
-    # does not confine is the machine running out: three 8 GB limits, this backend's, the Python
-    # one's and Cassandra's, are the whole of a 24 GB podman machine before Spark and Presto are
-    # counted.  Measured while the two backends were being compared, a window read down each of
-    # them four minutes apart ended with the host killing `cassandra -f` on exit 137, its 4 GB
-    # heap being the largest resident process, and every path then reported no host available
-    # until the node was restarted.  So read a window down one backend at a time while both run,
-    # and lower this before raising CQLITE_KEY_CHUNK.
-    mem_limit: "${BACKEND_JAVA_MEM_LIMIT:-8g}"
-    memswap_limit: "${BACKEND_JAVA_MEM_LIMIT:-8g}"
-    environment:
-      # Each name is the environment spelling of one MicroProfile property, so the two
-      # backends take their addresses from the same variables.
-      CASSANDRA_HOST: "cassandra"
-      CASSANDRA_PORT: "9042"
-      CASSANDRA_KEYSPACE: "${DEMO_KEYSPACE:-demo}"
-      CASSANDRA_DATACENTER: "${CASSANDRA_DATACENTER:-datacenter1}"
-      CONTAINER_CLI: "${CONTAINER_CLI:-podman}"
-      # Bucket width and shard count are declared once, here, and read by the sink and both
-      # backends: the three disagreeing produces queries that match nothing.
-      EVENT_BUCKET_MINUTES: "${DEMO_EVENT_BUCKET_MINUTES:-15}"
-      EVENT_SHARDS: "${DEMO_EVENT_SHARDS:-16}"
-      PRESTO_HOST: "presto"
-      PRESTO_PORT: "8080"
-      SPARK_UI_HOST: "spark"
-      SPARK_UI_PORT: "8080"
-      SPARK_THRIFT_HOST: "spark"
-      SPARK_THRIFT_PORT: "10000"
-      # The same bound the Python backend is given, and the same figure the bulk reader derives
-      # its snapshot TTL from; the comment on that service says what sits above it.
-      SPARK_QUERY_TIMEOUT_S: "${SPARK_QUERY_TIMEOUT_S:-900}"
-      KAFKA_HOST: "kafka"
-      KAFKA_PORT: "19092"
-      # The same topic and group the sink is given, under this backend's own spelling: the
-      # window's settled flag reads the sink's committed offsets under this group, and naming a
-      # different group would read no offsets and report every window unsettled.
-      KAFKA_EVENTS_TOPIC: "${DEMO_TOPIC:-demo-events}"
-      KAFKA_SINK_GROUP_ID: "${DEMO_GROUP_ID:-demo-cassandra-sink}"
-      # Where the cqlite reader looks for the keyspace directories.  This and the read-only
-      # mount above are one setting: the two disagreeing gives a path that finds no table
-      # directory and declines every query.
-      CQLITE_DATA_DIR: "/var/lib/cassandra/data"
-      # Both here for the same reason they are on the Python backend: what they bound is memory
-      # this process holds, so being able to raise either and watch the limit above do its work,
-      # with no rebuild, is the point.  The measured figures that keep them at one are in
-      # CqliteSettings.
+      # How many token-ring slices a scan with no WHERE divides into, and how many of
+      # the partitions a query names are read at a time.  Both one, and both reachable
+      # from here so either can be exercised without a rebuild: what they bound is
+      # memory this process holds, and raising the second is what the limit above
+      # exists for.  The measured figures that keep them at one are in CqliteSettings.
       CQLITE_SPLITS: "${CQLITE_SPLITS:-1}"
       CQLITE_KEY_CHUNK: "${CQLITE_KEY_CHUNK:-1}"
       ACCORD_SQL_HOST: "accord-sql"
       ACCORD_SQL_PORT: "5432"
-      # The CDC topic, the registry and the tail's buffer, as the Python backend is given them
-      # and as the cassandra service seeds them into the Sidecar's config.  A stack overriding
-      # DEMO_CDC_TOPIC would otherwise leave this tail on cdc-mutations, reporting
-      # waiting_for_topic while the other backend read the topic that exists.
-      CDC_TOPIC: "${DEMO_CDC_TOPIC:-cdc-mutations}"
-      CDC_SCHEMA_REGISTRY_URL: "http://apicurio:8080/apis/ccompat/v7"
-      CDC_BUFFER_SIZE: "${DEMO_CDC_BUFFER_SIZE:-200}"
-      # What the Settings page opens showing, so they must match what data-producer was started
-      # with.  Given to both backends for the reason EVENT_SHARDS is: read from one declaration
-      # or not at all.  A stack started with DEMO_N_ENTITIES=500 would open this backend's page
-      # at 100, and the first POST from that page would cut the running fleet to 100.
+      # Shown as the startup defaults on the Settings page, so they must match what
+      # data-producer above was started with.  The producer owns them from then on: it
+      # polls /api/settings/demo and adopts what it finds.
       DEMO_N_ENTITIES: "${DEMO_N_ENTITIES:-100}"
       DEMO_MAX_ENTITIES: "${DEMO_MAX_ENTITIES:-2000}"
       DEMO_EVENTS_PER_SEC: "${DEMO_EVENTS_PER_SEC:-2000}"
       DEMO_OUTLIER_PERCENT: "${DEMO_OUTLIER_PERCENT:-5.0}"
-      # Whether the vector index follows the snippets the sink writes, and how often; off at
-      # startup for the reason the Python backend's copy of these gives.
+      # Whether the vector index follows the snippets the sink writes, and how often.
+      # Off at startup: the Explore page turns it on, and the reason to turn it on
+      # there is to watch the point read on the Health page stay where it was while the
+      # embedder works, which is not visible if it was already running.  The loop reads
+      # the snippets after the sink has written them, so nothing in the write path waits
+      # for an embedding.
       VECTOR_LIVE_EMBEDDINGS: "${DEMO_VECTOR_LIVE_EMBEDDINGS:-false}"
       VECTOR_LIVE_INTERVAL_S: "${DEMO_VECTOR_LIVE_INTERVAL_S:-5}"
       VECTOR_LIVE_MAX_PER_CYCLE: "${DEMO_VECTOR_LIVE_MAX_PER_CYCLE:-64}"
-      # Optional, and it has to reach both backends while both run: with a key set for one
-      # only, that one embeds remotely and the other embeds locally, and the two would write
-      # vectors of different provenance into the same payload_vector column, where a search
-      # ranks the mismatched ones as noise.  That is the corruption Embeddings refuses a wrong
-      # dimension count to prevent, and a mixed column passes the dimension check.
+      # Optional.  Without a key the backend embeds text locally, so the AI search still
+      # works; see the vector package.  A key changes which embedder writes
+      # payload_vector, so a stack that has indexed with one should re-index after
+      # setting the other: a column holding vectors of both provenances passes the
+      # dimension check and ranks the mismatched ones as noise.
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
     healthcheck:
       # The JRE image carries no curl, and the liveness route needs no body read: a TCP
       # connect through bash's /dev/tcp says the server is listening, which is what the
       # ordering below the compose file needs.
-      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/8001'"]
+      test: ["CMD-SHELL", "timeout 2 bash -c '</dev/tcp/localhost/8000'"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -726,10 +625,10 @@ services:
     ports:
       - "4000:80"     # the dashboard: http://localhost:4000
     environment:
-      # Which backend nginx proxies /api to.  Here rather than in the template so
-      # that pointing the dashboard at the other backend is a compose change and no
-      # rebuild, and so a browser can be shown either while both run: the Java one
-      # answers the same routes on 8001.  nginx refuses to start if this is unset,
-      # which is why it carries the address rather than a bare hostname.
+      # Which backend nginx proxies /api to.  Here rather than in the template so that
+      # pointing the dashboard elsewhere is a compose change and no rebuild, which is
+      # what let the two backends be compared through the same dashboard while both
+      # ran.  nginx refuses to start if this is unset, which is why it carries the
+      # address rather than a bare hostname.
       API_UPSTREAM: "${DASHBOARD_API_UPSTREAM:-http://backend:8000}"
     restart: unless-stopped

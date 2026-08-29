@@ -1,1 +1,0 @@
-# HTAP Mission Control Backend

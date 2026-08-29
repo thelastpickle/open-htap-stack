@@ -1,3 +1,0 @@
-# The backend build context is ./backend, like every other service's, so this file only
-# has to keep local Python build output out of the image.
-**/__pycache__

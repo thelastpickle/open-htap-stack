@@ -76,7 +76,7 @@ COPY --from=build /src/htap-backend/target/quarkus-app/*.jar ./
 COPY --from=build /src/htap-backend/target/quarkus-app/app/ ./app/
 COPY --from=build /src/htap-backend/target/quarkus-app/quarkus/ ./quarkus/
 
-EXPOSE 8001
+EXPOSE 8000
 
 # Three flags, each answering a different mechanism, and the same three the htap-cqlite tests
 # run under; that pom's surefire comment records what each was measured against.

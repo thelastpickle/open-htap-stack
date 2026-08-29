@@ -411,7 +411,10 @@ services:
 
   data-cassandra-sink:
     build:
-      context: ./ingress/consumer
+      # The repository root, because the module is one leaf of a Maven reactor and the
+      # build needs the parent pom and htap-common beside it.
+      context: .
+      dockerfile: htap-sink/Dockerfile
     container_name: data-cassandra-sink
     networks: [htap-net]
     depends_on:
@@ -425,6 +428,9 @@ services:
       GROUP_ID: "${DEMO_GROUP_ID:-demo-cassandra-sink}"
       CASSANDRA_HOST: "cassandra"
       CASSANDRA_PORT: "9042"
+      # Named because this driver requires a local datacenter where the Python driver
+      # inferred one from the first node it reached.
+      CASSANDRA_DATACENTER: "${CASSANDRA_DATACENTER:-datacenter1}"
       KEYSPACE: "${DEMO_KEYSPACE:-demo}"
       TABLE: "${DEMO_TABLE:-events}"
       BATCH_SIZE: "${DEMO_BATCH_SIZE:-200}"
@@ -437,7 +443,7 @@ services:
       # tables into Accord.  Read from the same declaration the cassandra service
       # reads above, because the node refuses transactional_mode='full' at CREATE
       # TABLE when the subsystem is off, and the two disagreeing would stop the
-      # sink at its schema step.  See ensure_schema in consumer.py.
+      # sink at its schema step.  See DemoSchema, which is where the statements live.
       CASSANDRA_ACCORD_ENABLED: "${CASSANDRA_ACCORD_ENABLED:-true}"
       # And it is the sink that opts drone_latest_status into CDC, for the same reason: the
       # table's options are written where the table is created.  Read from the declaration

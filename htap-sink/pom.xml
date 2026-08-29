@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.thelastpickle.htap</groupId>
+    <artifactId>htap-parent</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>htap-sink</artifactId>
+  <name>Open HTAP stack: the Kafka sink</name>
+  <description>
+    Consumes the event topic into Cassandra and derives what the dashboard reads.
+    It also owns the demo schema: this module holds the only definition of the
+    fourteen demo tables, their keys and their options.
+  </description>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.thelastpickle.htap</groupId>
+      <artifactId>htap-common</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+
+    <dependency>
+      <groupId>org.apache.cassandra</groupId>
+      <artifactId>java-driver-core</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-clients</artifactId>
+    </dependency>
+    <!--
+      Jackson for the event payloads, which the producer writes as JSON objects. Version
+      from quarkus-bom, as the backend's is: nothing here uses Quarkus, but the reactor
+      imports that BOM at the parent and two Jackson versions in one build is a class of
+      breakage worth not having.
+    -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <!--
+        A plain jar with its dependencies beside it in lib/, rather than a shaded uber-jar.
+        The driver reads its defaults from a Typesafe `reference.conf`, and every dependency
+        that carries one needs an appending transformer for shading to merge rather than
+        overwrite them; a wrong merge is invisible until the driver applies a default nobody
+        set. The layout also gives the image two layers, lib/ moving with the poms and the
+        jar with the code, which is what htap-backend's fast-jar copy gets from Quarkus.
+      -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>copy-runtime-dependencies</id>
+            <phase>package</phase>
+            <goals><goal>copy-dependencies</goal></goals>
+            <configuration>
+              <outputDirectory>${project.build.directory}/lib</outputDirectory>
+              <includeScope>runtime</includeScope>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <configuration>
+          <archive>
+            <manifest>
+              <mainClass>com.thelastpickle.htap.sink.Sink</mainClass>
+              <addClasspath>true</addClasspath>
+              <classpathPrefix>lib/</classpathPrefix>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

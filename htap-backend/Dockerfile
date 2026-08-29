@@ -5,11 +5,14 @@ FROM maven:3.9-eclipse-temurin-25 AS build
 
 WORKDIR /src
 
-# Every pom first, so a source-only change reuses the dependency download below.
+# Every pom first, so a source-only change reuses the dependency download below.  Every
+# module's, and not only the three this one builds: the parent lists them all in <modules>,
+# so a missing pom fails the reactor read even for a `-pl` build of one leaf.
 COPY pom.xml ./
 COPY htap-common/pom.xml htap-common/
 COPY htap-cqlite/pom.xml htap-cqlite/
 COPY htap-backend/pom.xml htap-backend/
+COPY htap-sink/pom.xml htap-sink/
 
 # Not every artifact a Quarkus build asks for: this resolves the declared dependencies, and
 # the augmentation step below fetches what it needs beyond them.  The value is the layer,

@@ -19,6 +19,7 @@
     <module>htap-common</module>
     <module>htap-cqlite</module>
     <module>htap-backend</module>
+    <module>htap-sink</module>
   </modules>
 
   <properties>
@@ -77,6 +78,11 @@
     <maven-jar-plugin.version>3.5.0</maven-jar-plugin.version>
     <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
     <maven-clean-plugin.version>3.2.0</maven-clean-plugin.version>
+    <!--
+      The sink lays its dependencies out beside its jar rather than shading them, and this
+      plugin is what copies them; htap-sink/pom.xml says why not a shaded jar.
+    -->
+    <maven-dependency-plugin.version>3.7.0</maven-dependency-plugin.version>
   </properties>
 
   <dependencyManagement>
@@ -186,6 +192,11 @@
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-clean-plugin</artifactId>
           <version>${maven-clean-plugin.version}</version>
+        </plugin>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-dependency-plugin</artifactId>
+          <version>${maven-dependency-plugin.version}</version>
         </plugin>
       </plugins>
     </pluginManagement>

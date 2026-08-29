@@ -725,4 +725,11 @@ services:
       - backend
     ports:
       - "4000:80"     # the dashboard: http://localhost:4000
+    environment:
+      # Which backend nginx proxies /api to.  Here rather than in the template so
+      # that pointing the dashboard at the other backend is a compose change and no
+      # rebuild, and so a browser can be shown either while both run: the Java one
+      # answers the same routes on 8001.  nginx refuses to start if this is unset,
+      # which is why it carries the address rather than a bare hostname.
+      API_UPSTREAM: "${DASHBOARD_API_UPSTREAM:-http://backend:8000}"
     restart: unless-stopped

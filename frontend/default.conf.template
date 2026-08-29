@@ -22,7 +22,15 @@ server {
         # passing the upstream through a variable defers the lookup to request
         # time, with the TTL below.
         resolver ${NGINX_LOCAL_RESOLVERS} valid=10s;
-        set $upstream http://backend:8000;
+        # The address comes from the environment so that moving the dashboard from
+        # one backend to another is a compose change rather than an image change,
+        # and so either can be shown while the two run side by side.  It has no
+        # default here, and an unset variable is a refusal rather than a silent
+        # proxy to nowhere: envsubst leaves the placeholder in place, and nginx
+        # reads it as one of its own and exits with
+        # `[emerg] unknown "api_upstream" variable`.  compose declares it on the
+        # frontend service.
+        set $upstream ${API_UPSTREAM};
         proxy_pass $upstream;
 
         proxy_http_version 1.1;

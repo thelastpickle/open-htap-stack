@@ -8,6 +8,7 @@ import com.thelastpickle.htap.backend.api.dto.SchemaTable;
 import com.thelastpickle.htap.backend.api.dto.SchemaView;
 import com.thelastpickle.htap.backend.config.CassandraSettings;
 import com.thelastpickle.htap.backend.engine.CassandraPath;
+import com.thelastpickle.htap.backend.sql.SqlCatalog;
 import com.thelastpickle.htap.backend.support.Messages;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -57,10 +58,12 @@ public class SchemaResource {
 
     private final CassandraSettings settings;
     private final CassandraPath cassandra;
+    private final SqlCatalog sqlCatalog;
 
-    SchemaResource(CassandraSettings settings, CassandraPath cassandra) {
+    SchemaResource(CassandraSettings settings, CassandraPath cassandra, SqlCatalog sqlCatalog) {
         this.settings = settings;
         this.cassandra = cassandra;
+        this.sqlCatalog = sqlCatalog;
     }
 
     /** The demo keyspace: every table, its key, and whether Accord fronts it. */
@@ -98,6 +101,19 @@ public class SchemaResource {
         }
         warnings.add(accordNote(tables));
         return new SchemaView("cassandra", keyspace, tables, indexes, storage, warnings, null);
+    }
+
+    /**
+     * cassandra-sql's own tables, and the keyspaces they are encoded into.
+     *
+     * <p>A second route rather than a second half of the first, because the two engines fail apart:
+     * Cassandra can be up while cassandra-sql is down, and a page reading both in one call would
+     * blank the half it could still answer.
+     */
+    @GET
+    @Path("/sql")
+    public SchemaView sql() {
+        return sqlCatalog.schema();
     }
 
     /**

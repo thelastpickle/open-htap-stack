@@ -6,6 +6,7 @@ import com.datastax.oss.driver.api.core.DriverException;
 import com.datastax.oss.driver.api.core.config.DefaultDriverOption;
 import com.datastax.oss.driver.api.core.config.DriverConfigLoader;
 import com.datastax.oss.driver.api.core.config.ProgrammaticDriverConfigLoaderBuilder;
+import com.datastax.oss.driver.api.core.cql.PreparedStatement;
 import com.datastax.oss.driver.api.core.cql.ResultSet;
 import com.datastax.oss.driver.api.core.cql.SimpleStatement;
 import com.datastax.oss.driver.api.core.cql.Statement;
@@ -107,6 +108,22 @@ public class CassandraPath implements QueryPath {
      */
     public ResultSet execute(Statement<?> statement) {
         return guarded(() -> session().execute(statement));
+    }
+
+    /**
+     * Prepares a statement, through the same guard every request goes through.
+     *
+     * <p>The Python held its own prepared statements per statement text, under the lock the
+     * connection used, and cleared them on a reconnect. None of that is needed here: this driver's
+     * session keeps prepared statements itself, keyed by the statement, and {@code
+     * CqlPrepareAsyncProcessor.process} consults them before going to the node, so preparing a text
+     * it has already seen makes no round trip. Read out of the 4.19.3 bytecode rather than assumed,
+     * because a per-call round trip would be invisible and would double the cost of every
+     * transaction the demo times. The clearing comes for free too, since a reconnect builds a new
+     * session and the old one's statements go with it.
+     */
+    public PreparedStatement prepare(String cql) {
+        return guarded(() -> session().prepare(cql));
     }
 
     /**

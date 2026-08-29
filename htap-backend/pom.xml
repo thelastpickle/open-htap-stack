@@ -68,6 +68,32 @@
     </dependency>
 
     <!--
+      Postgres's own JDBC driver, for cassandra-sql, which speaks that wire protocol and
+      nothing else. Version from quarkus-bom (42.7.13); no quarkus-jdbc-postgresql, because
+      that extension brings Agroal and a datasource this needs none of: one connection,
+      serialised, opened by DriverManager exactly as the two analytical paths are.
+
+      The driver must be told preferQueryMode=simple, and SqlConsoleClient says why beside
+      the property: the default extended mode raises an IllegalStateException that no
+      catch of SQLException would report.
+    -->
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+    </dependency>
+    <!--
+      Avro, for the CDC records the Sidecar's publisher writes: each carries a Confluent
+      framing header naming a schema the registry holds, and the payload is binary Avro.
+      Version from quarkus-bom (1.12.1). The plain library rather than quarkus-avro, whose
+      code generation is for schemas known at build time; these arrive from the registry at
+      run time, so GenericDatumReader over a parsed schema is what fits.
+    -->
+    <dependency>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
+    </dependency>
+
+    <!--
       The broker client, for the settled-window check. Version from quarkus-bom, which
       manages it because the Kafka extensions do; this uses the plain Admin API rather than
       an extension, since the check opens one client per request and closes it after (see

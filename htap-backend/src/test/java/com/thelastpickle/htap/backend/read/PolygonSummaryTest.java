@@ -11,6 +11,7 @@ class PolygonSummaryTest {
     private static FleetRow row(Double speed, Double altitude, Double tempInternal) {
         return new FleetRow(
                 "asset-1",
+                "observer-1",
                 Instant.EPOCH,
                 1.0,
                 2.0,

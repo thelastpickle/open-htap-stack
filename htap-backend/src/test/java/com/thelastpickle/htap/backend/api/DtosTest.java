@@ -23,8 +23,8 @@ class DtosTest {
 
     private static FleetRow fleetRow(Double latitude, Double speed, Instant at) {
         return new FleetRow(
-                "drone-7", at, latitude, 2.0, null, speed, null, true, null, null, false, true,
-                null);
+                "drone-7", "observer-3", at, latitude, 2.0, null, speed, null, true, null, null,
+                false, true, null);
     }
 
     @Test

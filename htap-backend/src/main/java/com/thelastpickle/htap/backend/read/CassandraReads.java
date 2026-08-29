@@ -251,6 +251,7 @@ public class CassandraReads {
         for (Row row : rows(cql, values)) {
             fleet.add(new FleetRow(
                     row.getString("entity_id"),
+                    row.getString("observer_id"),
                     row.getInstant("event_time"),
                     f64(row, "latitude"),
                     f64(row, "longitude"),

@@ -152,6 +152,25 @@ class QueryApiTest {
                 .body("error", not(nullValue()));
     }
 
+    /**
+     * The SQL half answers apart from the CQL half, and names the address it could not reach.
+     *
+     * <p>Two routes for that reason: either engine can be down while the other answers, and one
+     * route reading both would blank the half it could still show.
+     */
+    @Test
+    void theSqlSchemaReportsTheServiceItCouldNotReach() {
+        when().get("/api/schema/sql")
+                .then()
+                .statusCode(200)
+                .body("engine", equalTo("cassandra-sql"))
+                .body("keyspace", equalTo("cassandra_sql"))
+                .body("tables", emptyIterable())
+                .body("storage_keyspaces",
+                        equalTo(List.of("cassandra_sql", "cassandra_sql_internal", "pg_catalog")))
+                .body("error", equalTo("cassandra-sql is not reachable at 127.0.0.1:1"));
+    }
+
     /** A comparison of nothing is a selector with nothing ticked, and is told so. */
     @Test
     void aComparisonNamingNoPathItCouldRunIsRefused() {

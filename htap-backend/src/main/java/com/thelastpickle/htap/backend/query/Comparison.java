@@ -30,8 +30,12 @@ public class Comparison {
      *
      * <p>Long enough for a dozen readings at the probe's interval, and short enough that it is not
      * most of the wait on the questions that answer in a second.
+     *
+     * <p>The transactions page takes the same window, so the two pages' idle figures are comparable:
+     * a shorter idle window there would make its own reference read look steadier than this one's for
+     * no reason but the sample count.
      */
-    static final Duration BASELINE_WINDOW = Duration.ofSeconds(3);
+    public static final Duration BASELINE_WINDOW = Duration.ofSeconds(3);
 
     private final QueryPaths paths;
     private final QueryRunner runner;

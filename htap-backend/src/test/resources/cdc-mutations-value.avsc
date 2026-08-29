@@ -1,0 +1,364 @@
+{
+  "doc": "schema",
+  "fields": [
+    {
+      "name": "timestampMicros",
+      "type": "long"
+    },
+    {
+      "name": "sourceTable",
+      "type": "string"
+    },
+    {
+      "name": "sourceKeyspace",
+      "type": "string"
+    },
+    {
+      "name": "truncatedFields",
+      "type": {
+        "items": "string",
+        "type": "array"
+      }
+    },
+    {
+      "default": null,
+      "doc": "to allow serde of evolving schemas",
+      "name": "version",
+      "type": [
+        "null",
+        "string"
+      ]
+    },
+    {
+      "name": "operationType",
+      "type": {
+        "name": "OperationType",
+        "symbols": [
+          "INSERT",
+          "UPDATE",
+          "DELETE",
+          "COMPLEX_ELEMENT_DELETE",
+          "DELETE_RANGE",
+          "DELETE_PARTITION"
+        ],
+        "type": "enum"
+      }
+    },
+    {
+      "default": false,
+      "name": "isPartial",
+      "type": "boolean"
+    },
+    {
+      "default": null,
+      "doc": "used to differentiate between absent data, and data being updated to a null value (when isPartial = true)",
+      "name": "updateFields",
+      "type": [
+        "null",
+        {
+          "items": "string",
+          "type": "array"
+        }
+      ]
+    },
+    {
+      "default": null,
+      "doc": "clustering keys only - logical AND of predicates",
+      "name": "range",
+      "type": [
+        "null",
+        {
+          "items": {
+            "fields": [
+              {
+                "name": "field",
+                "type": "string"
+              },
+              {
+                "name": "rangePredicateType",
+                "type": {
+                  "name": "RangePredicateType",
+                  "symbols": [
+                    "LT",
+                    "LTE",
+                    "EQ",
+                    "GTE",
+                    "GT",
+                    "IN"
+                  ],
+                  "type": "enum"
+                }
+              },
+              {
+                "doc": "table schema (same as primary payload) with only a single field populated",
+                "name": "value",
+                "type": "bytes"
+              }
+            ],
+            "name": "RangePredicate",
+            "type": "record"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    {
+      "doc": "TTL (if any) of the associated row",
+      "name": "ttl",
+      "type": [
+        "null",
+        {
+          "fields": [
+            {
+              "doc": "Relative time in seconds as set in the CQL query",
+              "name": "ttl",
+              "type": "int"
+            },
+            {
+              "doc": "Future timestamp in seconds",
+              "name": "deletedAt",
+              "type": "long"
+            }
+          ],
+          "name": "TTL",
+          "type": "record"
+        }
+      ]
+    },
+    {
+      "doc": "payload",
+      "name": "payload",
+      "type": {
+        "clustering_keys": [],
+        "doc": "doc",
+        "fields": [
+          {
+            "doc": "doc",
+            "name": "entity_id",
+            "type": [
+              {
+                "cqlType": "text",
+                "type": "string"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "altitude_m",
+            "type": [
+              {
+                "cqlType": "float",
+                "type": "float"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "event_id",
+            "type": [
+              {
+                "cqlType": "timeuuid",
+                "logicalType": "uuid",
+                "type": "string"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "event_time",
+            "type": [
+              {
+                "cqlType": "timestamp",
+                "logicalType": "timestamp-micros",
+                "type": "long"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "event_type",
+            "type": [
+              {
+                "cqlType": "text",
+                "type": "string"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "heading_deg",
+            "type": [
+              {
+                "cqlType": "double",
+                "type": "double"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "is_flying",
+            "type": [
+              {
+                "cqlType": "boolean",
+                "type": "boolean"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "latitude",
+            "type": [
+              {
+                "cqlType": "double",
+                "type": "double"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "longitude",
+            "type": [
+              {
+                "cqlType": "double",
+                "type": "double"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "near_restricted_zone",
+            "type": [
+              {
+                "cqlType": "boolean",
+                "type": "boolean"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "observer_id",
+            "type": [
+              {
+                "cqlType": "text",
+                "type": "string"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "predicted_zone_breach",
+            "type": [
+              {
+                "cqlType": "boolean",
+                "type": "boolean"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "risk_score",
+            "type": [
+              {
+                "cqlType": "double",
+                "type": "double"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "speed_mps",
+            "type": [
+              {
+                "cqlType": "double",
+                "type": "double"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "telemetry_age_s",
+            "type": [
+              {
+                "cqlType": "int",
+                "type": "int"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "temp_external_c",
+            "type": [
+              {
+                "cqlType": "float",
+                "type": "float"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "temp_internal_c",
+            "type": [
+              {
+                "cqlType": "float",
+                "type": "float"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "text_payload",
+            "type": [
+              {
+                "cqlType": "text",
+                "type": "string"
+              },
+              "null"
+            ]
+          },
+          {
+            "doc": "doc",
+            "name": "updated_at",
+            "type": [
+              {
+                "cqlType": "timestamp",
+                "logicalType": "timestamp-micros",
+                "type": "long"
+              },
+              "null"
+            ]
+          }
+        ],
+        "name": "drone_latest_status",
+        "namespace": "demo.drone_latest_status",
+        "partition_keys": [
+          "entity_id"
+        ],
+        "primary_keys": [
+          "entity_id"
+        ],
+        "static_columns": [],
+        "type": "record"
+      }
+    }
+  ],
+  "name": "CassandraCDC",
+  "namespace": "org.apache.cassandra",
+  "type": "record"
+}

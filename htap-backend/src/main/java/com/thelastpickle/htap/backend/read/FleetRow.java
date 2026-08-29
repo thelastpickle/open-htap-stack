@@ -16,6 +16,7 @@ import java.time.Instant;
  */
 public record FleetRow(
         String entityId,
+        String observerId,
         Instant eventTime,
         Double latitude,
         Double longitude,

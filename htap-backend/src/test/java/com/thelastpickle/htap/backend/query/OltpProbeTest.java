@@ -17,6 +17,12 @@ import org.junit.jupiter.api.Timeout;
  * <p>A read that never came back is the finding the probe exists for, so what has to hold is that a
  * failing read is counted and the sampling carries on. The interval is this test's own, so nothing
  * here waits on a wall clock.
+ *
+ * <p>Each latch here counts down as a read <em>begins</em>, and the probe appends a reading only
+ * after the read returns, so a test waits for one read more than the readings it asserts: read
+ * {@code n} beginning is what proves reading {@code n - 1} was appended. Awaiting as many reads as
+ * readings is what {@code theReadingsCanBeAskedForWhileTheProbeIsStillRunning} did before, and it
+ * failed intermittently on nothing but scheduling.
  */
 class OltpProbeTest {
 
@@ -29,7 +35,7 @@ class OltpProbeTest {
     @Test
     @Timeout(10)
     void aReadingIsTheReadsOwnElapsedTimeInMilliseconds() throws InterruptedException {
-        CountDownLatch read = new CountDownLatch(2);
+        CountDownLatch read = new CountDownLatch(3);
 
         try (OltpProbe probe = OltpProbe.start(read::countDown, NO_WAIT, this::tick)) {
             assertTrue(read.await(5, TimeUnit.SECONDS));
@@ -69,7 +75,7 @@ class OltpProbeTest {
     @Test
     @Timeout(10)
     void theReadingsCanBeAskedForWhileTheProbeIsStillRunning() throws InterruptedException {
-        CountDownLatch read = new CountDownLatch(1);
+        CountDownLatch read = new CountDownLatch(2);
 
         try (OltpProbe probe = OltpProbe.start(read::countDown, NO_WAIT, this::tick)) {
             assertTrue(read.await(5, TimeUnit.SECONDS));

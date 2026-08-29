@@ -25,7 +25,7 @@ class ConsoleGateTest {
      * The refusal is what another thread sees, not a wait.
      *
      * <p>A single connection means a queued caller would sit on the client's lock for the length of
-     * the batch ahead of it, and a reset sends twenty-four statements.
+     * the batch ahead of it, and a reset sends twenty-five statements.
      */
     @Test
     void anotherThreadIsRefusedRatherThanBlocked() throws InterruptedException {

@@ -39,7 +39,7 @@ class SqlConsoleTest {
      * A refusal is a field, and the batch continues past it.
      *
      * <p>Which is what a reset needs: its two {@code DROP TYPE} statements are refused on a stack
-     * whose ENUM types are absent, and the twenty-two after them are the ones that matter.
+     * whose ENUM types are absent, and the twenty-three that succeed are the ones that matter.
      */
     @Test
     void aRefusedStatementIsReportedAndTheBatchContinues() {

@@ -146,15 +146,32 @@ public class SqlConsoleClient {
                 SqlAnswer answer = lastResult(statement, sql);
                 return answer.withDuration((System.nanoTime() - started) / 1_000_000.0);
             } catch (SQLException e) {
-                // A rejected statement and a service that went away are indistinguishable here, so
-                // the connection goes either way and the next call re-proves it. That costs one
-                // SELECT 1.
-                drop();
+                // Only a connection-class failure costs the connection. A refused statement is the
+                // routine case on these routes rather than the exception -- a reset always has its
+                // two DROP TYPE refusals and /tables one per empty table -- and dropping on those
+                // would rebuild the connection once per refusal, which is a fresh
+                // DriverManager.getConnection and a probe, not a probe alone.
+                if (connectionLost(e)) {
+                    drop();
+                }
                 throw e;
             }
         } finally {
             lock.unlock();
         }
+    }
+
+    /**
+     * Whether this failure means the connection is gone rather than the statement refused.
+     *
+     * <p>SQLState class 08 is the standard's connection-exception class, which pgjdbc uses:
+     * {@code 08006} for a connection failure and {@code 08003} for one already closed, against class
+     * 42 or 22 for a server-side refusal. A failure carrying no state at all is treated as lost,
+     * since that is what a driver reports when it never got an answer.
+     */
+    static boolean connectionLost(SQLException failure) {
+        String state = failure.getSQLState();
+        return state == null || state.startsWith("08");
     }
 
     /**

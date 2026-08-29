@@ -8,7 +8,7 @@ import java.util.concurrent.Semaphore;
  *
  * <p>The client holds a single connection, so a second caller would wait on its lock anyway;
  * refusing says so instead. And the unit that must not interleave is the batch and not the
- * statement: a reset sends twenty-four statements, and another caller's {@code INSERT} landing
+ * statement: a reset sends twenty-five statements, and another caller's {@code INSERT} landing
  * between the drops and the seed would leave a state neither caller asked for.
  *
  * <p>Not the transaction gate, although it does the same thing. Sharing one would have a console

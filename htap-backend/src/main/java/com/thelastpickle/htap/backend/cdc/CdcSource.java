@@ -19,6 +19,15 @@ interface CdcSource {
     /** Closes whatever {@link #attach} opened. A source with nothing open does nothing. */
     void close();
 
+    /**
+     * Asks the loop's poll to return now, from another thread.
+     *
+     * <p>The one call a Kafka consumer documents as safe from a second thread: it permits one thread
+     * at a time and raises {@code ConcurrentModificationException} from its own guard, so a shutdown
+     * that closed the consumer under a poll in flight would leave it open.
+     */
+    void wakeup();
+
     /** The broker the page names, whether or not anything is attached to it. */
     String bootstrap();
 

@@ -679,6 +679,33 @@ services:
       CQLITE_KEY_CHUNK: "${CQLITE_KEY_CHUNK:-1}"
       ACCORD_SQL_HOST: "accord-sql"
       ACCORD_SQL_PORT: "5432"
+      # The CDC topic, the registry and the tail's buffer, as the Python backend is given them
+      # and as the cassandra service seeds them into the Sidecar's config.  A stack overriding
+      # DEMO_CDC_TOPIC would otherwise leave this tail on cdc-mutations, reporting
+      # waiting_for_topic while the other backend read the topic that exists.
+      CDC_TOPIC: "${DEMO_CDC_TOPIC:-cdc-mutations}"
+      CDC_SCHEMA_REGISTRY_URL: "http://apicurio:8080/apis/ccompat/v7"
+      CDC_BUFFER_SIZE: "${DEMO_CDC_BUFFER_SIZE:-200}"
+      # What the Settings page opens showing, so they must match what data-producer was started
+      # with.  Given to both backends for the reason EVENT_SHARDS is: read from one declaration
+      # or not at all.  A stack started with DEMO_N_ENTITIES=500 would open this backend's page
+      # at 100, and the first POST from that page would cut the running fleet to 100.
+      DEMO_N_ENTITIES: "${DEMO_N_ENTITIES:-100}"
+      DEMO_MAX_ENTITIES: "${DEMO_MAX_ENTITIES:-2000}"
+      DEMO_EVENTS_PER_SEC: "${DEMO_EVENTS_PER_SEC:-2000}"
+      DEMO_OUTLIER_PERCENT: "${DEMO_OUTLIER_PERCENT:-5.0}"
+      # Whether the vector index follows the snippets the sink writes, and how often; off at
+      # startup for the reason the Python backend's copy of these gives.
+      VECTOR_LIVE_EMBEDDINGS: "${DEMO_VECTOR_LIVE_EMBEDDINGS:-false}"
+      VECTOR_LIVE_INTERVAL_S: "${DEMO_VECTOR_LIVE_INTERVAL_S:-5}"
+      VECTOR_LIVE_MAX_PER_CYCLE: "${DEMO_VECTOR_LIVE_MAX_PER_CYCLE:-64}"
+      # Optional, and it has to reach both backends while both run: with a key set for one
+      # only, that one embeds remotely and the other embeds locally, and the two would write
+      # vectors of different provenance into the same payload_vector column, where a search
+      # ranks the mismatched ones as noise.  That is the corruption Embeddings refuses a wrong
+      # dimension count to prevent, and a mixed column passes the dimension check.
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
     healthcheck:
       # The JRE image carries no curl, and the liveness route needs no body read: a TCP
       # connect through bash's /dev/tcp says the server is listening, which is what the

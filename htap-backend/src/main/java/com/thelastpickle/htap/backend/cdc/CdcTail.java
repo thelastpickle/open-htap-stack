@@ -100,13 +100,20 @@ public class CdcTail {
         loop = Thread.ofVirtual().name("cdc-tail").start(this::run);
     }
 
+    /**
+     * Stops the loop and lets it close its own consumer.
+     *
+     * <p>Closed by the loop and not here: a Kafka consumer permits one thread at a time, so closing
+     * it from the shutdown thread while a poll was in flight would raise from the consumer's own
+     * guard and leave it open. {@code wakeup} is the call that is safe from here.
+     */
     void onStop(@Observes ShutdownEvent event) {
         running = false;
+        source.wakeup();
         Thread current = loop;
         if (current != null) {
             current.interrupt();
         }
-        source.close();
     }
 
     /** What the tail is doing, in the terms the page shows. */
@@ -162,9 +169,10 @@ public class CdcTail {
     private void run() {
         while (running) {
             if (!tick() && !sleepRetryDelay()) {
-                return;
+                break;
             }
         }
+        detach();
     }
 
     /** One attach-and-poll, answering whether it got through without a failure. */

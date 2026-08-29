@@ -206,6 +206,23 @@ class CdcTailTest {
         assertEquals(List.of(CdcFixtures.SCHEMA_ID), tail.status().schemaIds());
     }
 
+    /**
+     * Shutdown wakes the consumer and leaves the closing to the loop.
+     *
+     * <p>A Kafka consumer permits one thread at a time, so closing it from the shutdown thread while
+     * a poll was in flight raises from its own guard and leaves it open; {@code wakeup} is the one
+     * call that is safe from there.
+     */
+    @Test
+    void shutdownWakesTheConsumerRatherThanClosingIt() {
+        tail.tick();
+
+        tail.onStop(null);
+
+        assertEquals(1, source.wakeups);
+        assertEquals(0, source.closes, "the shutdown thread must not close the consumer");
+    }
+
     /** The newest record's own arrival time, so the page can say how long ago the last one was. */
     @Test
     void theLastRecordTimeIsTheBrokersAppend() {
@@ -248,6 +265,7 @@ class CdcTailTest {
         private RuntimeException attachFailure;
         private int attaches;
         private int closes;
+        private int wakeups;
 
         @Override
         public Attachment attach() {
@@ -267,6 +285,11 @@ class CdcTailTest {
         @Override
         public void close() {
             closes++;
+        }
+
+        @Override
+        public void wakeup() {
+            wakeups++;
         }
 
         @Override

@@ -102,7 +102,7 @@ public class TransactionsResource {
         if (seq < 0) {
             throw new ApiException(422, "seq must not be negative");
         }
-        return alone(() -> sessions.step(userId, parsed, seq, eventType));
+        return alone(() -> unavailable(() -> sessions.step(userId, parsed, seq, eventType)));
     }
 
     /** The whole scripted sequence, in one call, on a session of its own. */
@@ -153,6 +153,9 @@ public class TransactionsResource {
             @QueryParam("zone_id") @DefaultValue(Clearance.DEMO_ZONE) String zoneId,
             @QueryParam("askers") @DefaultValue("16") int askers) {
         return alone(() -> unavailable(
+                // Clamped, where FastAPI declared ge=2, le=100 and answered 422: two is the
+                // fewest askers that can contend at all, and the ceiling is what the node was
+                // measured against.
                 () -> clearance.contend(zoneId, Math.clamp(askers, 2, MAX_ASKERS))));
     }
 
@@ -203,6 +206,10 @@ public class TransactionsResource {
      * Clamped rather than refused, because a repeat count decides how long a measurement runs and
      * nothing else: an out-of-range one has an obvious nearest answer, where an unparseable session
      * identifier does not.
+     *
+     * <p>A divergence from FastAPI, which declared {@code ge=0, le=4000} and answered 422. Every
+     * query parameter in this backend clamps and every body field is refused, so the line is drawn
+     * at where the value came from rather than per route.
      */
     private static int repeats(int asked) {
         return Math.clamp(asked, 0, MAX_REPEATS);

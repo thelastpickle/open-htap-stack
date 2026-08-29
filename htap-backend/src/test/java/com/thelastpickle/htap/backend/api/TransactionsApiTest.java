@@ -116,4 +116,23 @@ class TransactionsApiTest {
     void everyReadOfTheLedgerNeedsTheNodeToo() {
         when().get("/api/transactions/clearance/state").then().statusCode(503);
     }
+
+    /**
+     * The step route answers 503 as its siblings do, rather than an unmapped 500.
+     *
+     * <p>It is the one route whose own code catches the transaction's failure, and both of its paths
+     * then read the timeline, which is a second Accord read: with the node down that read raised out
+     * of the catch and out of the route, and the page driving the demo a step at a time was given a
+     * 500 with no detail to show.
+     */
+    @Test
+    void aStepAgainstAnUnreachableNodeSaysSoRatherThanFailing() {
+        given().queryParam("user_id", "txn-demo")
+                .queryParam("session_id", SESSION)
+                .queryParam("seq", 1)
+                .when()
+                .post("/api/transactions/session/step")
+                .then()
+                .statusCode(503);
+    }
 }

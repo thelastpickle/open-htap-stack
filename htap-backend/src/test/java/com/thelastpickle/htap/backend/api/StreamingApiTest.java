@@ -47,7 +47,13 @@ class StreamingApiTest {
                 .body("records", emptyIterable());
     }
 
-    /** A limit outside the range is clamped rather than refused, as everywhere else here. */
+    /**
+     * A limit outside the range is clamped rather than refused.
+     *
+     * <p>A divergence from FastAPI, which declared {@code Query(50, ge=1, le=500)} and answered 422;
+     * the reason is beside the parameter. A body field is still refused, as {@code /vector/search}
+     * and the settings route both are, so it is query parameters alone that clamp here.
+     */
     @Test
     void aLimitOutsideTheRangeIsClamped() {
         when().get("/api/streaming/cdc?limit=0").then().statusCode(200);

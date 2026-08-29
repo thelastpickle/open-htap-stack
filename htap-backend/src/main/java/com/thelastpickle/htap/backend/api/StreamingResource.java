@@ -25,7 +25,13 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 @Tag(name = "streaming")
 public class StreamingResource {
 
-    /** The largest window a page may ask for, which is also the largest the buffer can hold. */
+    /**
+     * The largest window one response may carry, which the buffer bounds further.
+     *
+     * <p>Independent of {@code cdc.buffer-size}, 200 by default: a page asking for 500 is given
+     * whatever the buffer holds, so this is a ceiling on the response rather than a claim about the
+     * tail.
+     */
     static final int MAX_LIMIT = 500;
 
     private final CdcTail tail;
@@ -44,6 +50,9 @@ public class StreamingResource {
      */
     @GET
     @Path("/cdc")
+    // The limit is clamped where FastAPI declared `Query(50, ge=1, le=500)` and answered 422, which
+    // is the one divergence on this route: it matches the other query parameters in this backend,
+    // and a page polling a live tail is better served the nearest window than an error.
     public CdcStreamResponse stream(
             @QueryParam("limit") @DefaultValue("50") int limit, @QueryParam("since") Long since) {
         return new CdcStreamResponse(

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -141,11 +142,21 @@ class SingleRunGateTest {
         assertSame(second, gate.inFlight().orElseThrow());
     }
 
-    /** The value a fresh thread computed, with whatever it raised re-raised here. */
+    /**
+     * The value a fresh thread computed.
+     *
+     * <p>The cause is unwrapped so that a failure names what the gate raised: {@code FutureTask.get}
+     * reports an {@code ExecutionException} holding it, and under the lock this test rules out the
+     * failure line would say that rather than {@code Busy}.
+     */
     private static <T> T onAnotherThread(Callable<T> work) throws Exception {
         FutureTask<T> task = new FutureTask<>(work);
         Thread.ofPlatform().start(task).join();
-        return task.get();
+        try {
+            return task.get();
+        } catch (ExecutionException wrapped) {
+            throw wrapped.getCause() instanceof Exception cause ? cause : wrapped;
+        }
     }
 
     /** Worked out at the start, because by the time a cancel asks, the path is busy with it. */

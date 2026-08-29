@@ -121,6 +121,11 @@ class WindowsTest {
     void aShardCountOfZeroIsRefusedRatherThanAskedAbout() {
         IllegalArgumentException refused = assertThrows(
                 IllegalArgumentException.class, () -> windows(15, 0).holdsEvents("2026-08-28T12:15"));
+        // And at startup, which is the only caller of the observer: nothing else drives it, so
+        // dropping that call would put the detail-less 500 back with every test still green.
+        IllegalArgumentException atStartup =
+                assertThrows(IllegalArgumentException.class, () -> windows(15, 0).onStart(null));
+        assertEquals("EVENT_SHARDS must be at least 1, got 0", atStartup.getMessage());
 
         assertEquals("EVENT_SHARDS must be at least 1, got 0", refused.getMessage());
     }

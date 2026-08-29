@@ -13,9 +13,11 @@ import java.util.Properties;
 import org.apache.kafka.clients.consumer.CloseOptions;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 
 /**
@@ -82,11 +84,28 @@ public class KafkaCdcSource implements CdcSource {
     @Override
     public List<Arrival> poll() {
         List<Arrival> arrivals = new ArrayList<>();
-        for (ConsumerRecord<byte[], byte[]> record : consumer.poll(settings.pollTimeout())) {
+        ConsumerRecords<byte[], byte[]> polled;
+        try {
+            polled = consumer.poll(settings.pollTimeout());
+        } catch (WakeupException asked) {
+            // Answered as an empty poll, so Kafka's own type stays behind this seam and a shutdown
+            // does not report itself to the page as a failure. The loop stops because `running` is
+            // already false by the time this can happen.
+            return List.of();
+        }
+        for (ConsumerRecord<byte[], byte[]> record : polled) {
             arrivals.add(new Arrival(
                     record.partition(), record.offset(), record.key(), record.timestamp(), record.value()));
         }
         return arrivals;
+    }
+
+    @Override
+    public void wakeup() {
+        KafkaConsumer<byte[], byte[]> open = consumer;
+        if (open != null) {
+            open.wakeup();
+        }
     }
 
     @Override
@@ -97,7 +116,8 @@ public class KafkaCdcSource implements CdcSource {
             try {
                 open.close(CLOSING);
             } catch (RuntimeException e) {
-                // A close that fails leaves nothing to do: the next attach opens its own consumer.
+                // A close that fails leaves nothing to do: this runs on the loop thread, which is
+                // about to attach again or to end.
             }
         }
     }

@@ -1,7 +1,9 @@
 package com.thelastpickle.htap.backend.sql;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.sql.SQLException;
 import java.sql.Statement;
@@ -71,6 +73,23 @@ class SqlConsoleClientTest {
 
         assertEquals(COLUMNS, answer.columns());
         assertEquals(List.of(), answer.rows());
+    }
+
+    /**
+     * A refused statement keeps the connection; a broken one does not.
+     *
+     * <p>A refusal is the routine case on these routes -- a reset always has its two {@code DROP
+     * TYPE} refusals and {@code /tables} one per empty table -- so dropping the connection for those
+     * would rebuild it once per refusal. SQLState class 08 is the standard's connection-exception
+     * class, and a failure carrying no state at all is what a driver reports when it got no answer.
+     */
+    @Test
+    void onlyAConnectionClassFailureCostsTheConnection() {
+        assertFalse(SqlConsoleClient.connectionLost(new SQLException("Aggregation failed", "42601")));
+        assertFalse(SqlConsoleClient.connectionLost(new SQLException("invalid input", "22P02")));
+        assertTrue(SqlConsoleClient.connectionLost(new SQLException("An I/O error", "08006")));
+        assertTrue(SqlConsoleClient.connectionLost(new SQLException("closed", "08003")));
+        assertTrue(SqlConsoleClient.connectionLost(new SQLException("no state at all")));
     }
 
     /** A trailing update count means nothing to show, so it clears the result set before it. */

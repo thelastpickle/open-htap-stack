@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import MaterialIcon from '../components/MaterialIcon'
 import Panel from '../components/Panel'
+import RatePicker from '../components/RatePicker'
 import { formatCount, formatMs, getJson } from '../lib/api'
 
 /**
@@ -9,10 +10,11 @@ import { formatCount, formatMs, getJson } from '../lib/api'
  * arrive on Kafka.
  *
  * It shows a window rather than a log.  The backend keeps a fixed number of records
- * and this page renders that window each second, so watching the stream costs the same
- * whether the page has been open for a minute or a day, and no record here is one the
- * dashboard is keeping.  What holds every mutation is the topic, which is the point:
- * the demo's other five paths read the rows, and this one is told about the writes.
+ * and this page renders that window at whatever rate is chosen above it, so watching
+ * the stream costs the same whether the page has been open for a minute or a day, and
+ * no record here is one the dashboard is keeping.  What holds every mutation is the
+ * topic, which is the point: the demo's other five paths read the rows, and this one
+ * is told about the writes.
  */
 
 interface CdcRecord {
@@ -111,6 +113,15 @@ const OPERATION_STYLES: Record<string, string> = {
   DELETE_PARTITION: 'text-tertiary bg-tertiary/10',
   COMPLEX_ELEMENT_DELETE: 'text-tertiary bg-tertiary/10',
 }
+
+/**
+ * The refresh rates this page offers, fastest last.
+ *
+ * A tick reads a slice of the buffer the backend already holds: no Cassandra and no
+ * Kafka call, so the cost is one response to serialise and one table to redraw.  That
+ * is what lets the default sit at the fastest of these rather than the slowest.
+ */
+const RATES = [1000, 500, 250] as const
 
 function clockOf(ms: number): string {
   if (!ms) return '—'
@@ -363,11 +374,20 @@ export default function StreamingPage() {
   // frozen: pausing is for reading a record, not for holding the stream.
   const [paused, setPaused] = useState(false)
   const [limit, setLimit] = useState(50)
+  // The fastest of the offered rates, because a tick reads no table.
+  const [rateMs, setRateMs] = useState<(typeof RATES)[number]>(250)
 
   const { data, isLoading } = useQuery<CdcStreamResponse>({
     queryKey: ['cdc-stream', limit],
+    // The endpoint takes a `since` parameter and this page does not use it.  Asking for
+    // only the records minted after the last one seen sounds like the way to make a
+    // faster poll cheaper, and at the rate the demo publishes it saves nothing: the
+    // buffer holds a fraction of a second of the topic, so at any of the rates offered
+    // here the whole window is new anyway and `since` would return a full `limit` of
+    // rows while adding a merge on this side.  The rate is not in the query key because
+    // it does not change the response, where `limit` does.
     queryFn: () => getJson<CdcStreamResponse>(`/api/streaming/cdc?limit=${limit}`),
-    refetchInterval: paused ? false : 1000,
+    refetchInterval: paused ? false : rateMs,
   })
 
   const status = data?.status
@@ -414,6 +434,12 @@ export default function StreamingPage() {
             <MaterialIcon name={paused ? 'play_arrow' : 'pause'} className="text-[14px]" />
             {paused ? 'Resume' : 'Freeze view'}
           </button>
+          <RatePicker
+            value={rateMs}
+            options={RATES}
+            onChange={setRateMs}
+            title="How often this page rereads the buffer; it reads no table, so a faster rate costs one response and one redraw"
+          />
           <select
             value={limit}
             onChange={(event) => setLimit(Number(event.target.value))}

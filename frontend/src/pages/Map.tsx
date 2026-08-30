@@ -4,6 +4,7 @@ import MarkerClusterGroup from 'react-leaflet-cluster'
 import { Icon, type LatLngExpression, type LatLngTuple } from 'leaflet'
 import { useQuery } from '@tanstack/react-query'
 import MaterialIcon from '../components/MaterialIcon'
+import RatePicker from '../components/RatePicker'
 import { getJson } from '../lib/api'
 import 'leaflet.markercluster/dist/MarkerCluster.css'
 import 'leaflet.markercluster/dist/MarkerCluster.Default.css'
@@ -78,6 +79,16 @@ const ZONE_FALLBACK_COLOUR = '#40c4ff'
 const DEFAULT_CENTRE: LatLngTuple = [59.91, 10.75]
 const FILTERS = ['all', 'flying', 'at risk'] as const
 type Filter = (typeof FILTERS)[number]
+
+/**
+ * The fleet-poll rates this page offers, fastest last, defaulting to the slowest.
+ *
+ * Unlike the Streaming page's rates, a tick here is a fleet-wide read of
+ * `drone_latest_status` over the request path, and the browser redraws every marker
+ * after it.  So turning it up is fine to do deliberately and wrong to do by default:
+ * the Explore page's reference timings are taken while this page polls.
+ */
+const FLEET_RATES = [5000, 2000, 1000, 500] as const
 
 function droneIcon(colour: string, grounded = false): Icon {
   const size = grounded ? 22 : 32
@@ -155,6 +166,7 @@ function ViewController({
 
 export default function MapPage() {
   const [filter, setFilter] = useState<Filter>('all')
+  const [rateMs, setRateMs] = useState<(typeof FLEET_RATES)[number]>(5000)
   const [theme, setTheme] = useState<MapTheme>('dark')
   const [selected, setSelected] = useState<string | null>(null)
   const [flyTo, setFlyTo] = useState<LatLngTuple | null>(null)
@@ -187,11 +199,16 @@ export default function MapPage() {
   const { data, isLoading } = useQuery<MapLive>({
     queryKey: ['map-live'],
     queryFn: () => getJson<MapLive>('/api/map/live?limit=2000'),
-    refetchInterval: 5000,
+    // Chosen above the map, because how live the positions need to be is the
+    // operator's call and what a tick costs is the same either way.
+    refetchInterval: rateMs,
   })
 
   // The trail is the asset's recorded history, read from Cassandra on demand,
-  // so it is only fetched while an asset is selected.
+  // so it is only fetched while an asset is selected.  It does not follow the fleet
+  // rate: a history that is a few seconds old still draws the same path, and each
+  // fetch is a range scan, so tying it to the fastest rate would multiply those by
+  // twenty for no visible gain.
   const { data: trail } = useQuery<Trail>({
     queryKey: ['trail', selected],
     queryFn: () => getJson<Trail>(`/api/map/drone/${selected}/trail?points=80`),
@@ -279,6 +296,12 @@ export default function MapPage() {
               {option} ({counts[option]})
             </button>
           ))}
+          <RatePicker
+            value={rateMs}
+            options={FLEET_RATES}
+            onChange={setRateMs}
+            title="How often the fleet's positions are reread; each tick is a fleet-wide read of drone_latest_status over the request path"
+          />
           <button
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
             className="bg-surface-container-highest text-on-surface-variant hover:text-primary flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-colors"

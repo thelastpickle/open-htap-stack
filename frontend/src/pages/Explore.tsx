@@ -218,6 +218,19 @@ function shardList(shards: number): string {
 const DEFAULT_RUN_ORDER: Engine[] = ['cassandra', 'cqlite', 'presto', 'spark', 'spark_bulk']
 
 /**
+ * Why CQL cannot express the three grouped presets, shown where the transactional
+ * path would otherwise be offered.
+ *
+ * The refusal is still the finding: three of the four presets exist because CQL
+ * declines them, and each was measured declining, in 3.0 to 13.2 ms.  What the page
+ * now does with that is say it rather than spend a run proving it, and that run is the
+ * one thing given up: a viewer who wants the decline itself can hand-edit the
+ * statement, and the path comes back as soon as the statement is nobody's measurement.
+ */
+const NO_GROUP_BY_IN_CQL =
+  'CQL groups only by primary-key columns, and event_type is not one, so Cassandra declines this statement rather than answering it'
+
+/**
  * Four queries of deliberately different size, because one query cannot show
  * what five access paths are for, and because the size is most of the answer.
  * The bounded read is where the transactional path wins; grouping the fleet is
@@ -232,6 +245,7 @@ const COMPARE_PRESETS = [
     label: 'Latest state',
     cost: 'milliseconds',
     hint: 'One bounded read of the current fleet — the shape Cassandra is built for',
+    cqlDecline: null,
     // Warm: cassandra 8.4 ms, cqlite 74.1 ms, presto 184.1 ms, spark 253.4 ms,
     // the bulk reader 727.3 ms, most of the last being the snapshot.
     order: ['cassandra', 'cqlite', 'presto', 'spark', 'spark_bulk'],
@@ -242,6 +256,7 @@ const COMPARE_PRESETS = [
     label: 'Group the fleet',
     cost: 'under a second',
     hint: 'The current fleet, grouped — the smallest question CQL cannot express at all',
+    cqlDecline: NO_GROUP_BY_IN_CQL,
     // Warm: cassandra declines in 4.7 ms, cqlite 68.7 ms, presto 264.4 ms,
     // spark 467.7 ms, the bulk reader 1.86 s.
     order: ['cassandra', 'cqlite', 'presto', 'spark', 'spark_bulk'],
@@ -258,6 +273,7 @@ const COMPARE_PRESETS = [
     label: 'One window',
     cost: 'seconds',
     hint: 'The same grouping, bounded to the partitions holding one window — the question the data model was shaped for',
+    cqlDecline: NO_GROUP_BY_IN_CQL,
     // Two things about this question are settled, and one is not.  Cassandra declines
     // it in 3.0 to 13.2 ms, and Presto is decisively the quickest that can express it,
     // 2.20 to 4.06 s against 12 to 25 s for the other three.  cqlite seeks the 16
@@ -291,6 +307,7 @@ const COMPARE_PRESETS = [
     label: 'Every event ever ingested',
     cost: 'minutes',
     hint: 'The whole history, scanned on one node while it ingests — so it costs more every hour the demo runs',
+    cqlDecline: NO_GROUP_BY_IN_CQL,
     // On a drained sink over 957 MB of data files: cassandra declines in 3.6 ms,
     // presto 7.38 s, spark 10.38 s, the bulk reader 23.51 s plus a 2.45 s snapshot,
     // cqlite 100.0 s.  A run while the sink drained a backlog gave the same order at
@@ -683,6 +700,10 @@ function PendingCard({
 function ComparePanel() {
   const [preset, setPreset] = useState<string>(COMPARE_PRESETS[0].key)
   const [sql, setSql] = useState<string>(COMPARE_PRESETS[0].sql ?? DEFAULT_SQL)
+  // Whether the statement has been typed into since a preset put it there.  What a
+  // path can express is known per preset, from having run it here; the first keystroke
+  // makes it a question nobody has measured, and the knowledge lapses with it.
+  const [edited, setEdited] = useState(false)
 
   // Which window can be named, refreshed often enough that the preset does not
   // offer a bucket that has since stopped being the last complete one.
@@ -705,6 +726,23 @@ function ComparePanel() {
   const [runOrder, setRunOrder] = useState<Engine[]>([])
   const [answered, setAnswered] = useState<Engine[]>([])
 
+  /**
+   * What CQL cannot express in the statement on offer, when that is known, and null
+   * when it is not.  Known means the statement is a preset's own and was measured
+   * declining on this stack; a hand-edited one is nobody's measurement, so the
+   * transactional path is offered again and answers for itself.
+   */
+  const cqlDecline: string | null = edited
+    ? null
+    : (COMPARE_PRESETS.find((option) => option.key === preset)?.cqlDecline ?? null)
+
+  /**
+   * The paths this run will ask.  Cassandra is dropped from it rather than out of
+   * `chosen`, so a watcher's selection survives a question CQL cannot express and is
+   * still there for the next one that it can.
+   */
+  const asking = cqlDecline ? chosen.filter((key) => key !== 'cassandra') : chosen
+
   /** The quickest-first order for the question on offer, restricted to the paths chosen. */
   const orderFor = (presetKey: string, engines: Engine[]): Engine[] => {
     const option = COMPARE_PRESETS.find((candidate) => candidate.key === presetKey)
@@ -721,7 +759,7 @@ function ComparePanel() {
    * that overlap have no individual figure to report as each finishes.
    */
   const start = async () => {
-    const order = orderFor(preset, chosen)
+    const order = orderFor(preset, asking)
     setError(null)
     setAnswered([])
     setRunOrder(order)
@@ -735,7 +773,7 @@ function ComparePanel() {
           await postJson<BenchmarkResponse>('/api/query/benchmark', {
             sql,
             limit: 10,
-            engines: chosen,
+            engines: asking,
             mode,
             reuse_snapshot: reuseSnapshot,
           }),
@@ -831,7 +869,7 @@ function ComparePanel() {
       <div className="glass-panel overflow-hidden rounded-xl">
         <div className="flex flex-wrap items-center gap-4 border-b border-white/5 bg-surface-container-high px-6 py-3">
           <span className="text-primary text-[10px] font-black uppercase tracking-widest">
-            One query, {chosen.length} access {chosen.length === 1 ? 'path' : 'paths'}
+            One query, {asking.length} access {asking.length === 1 ? 'path' : 'paths'}
           </span>
           <span className="text-on-surface-variant text-[10px] uppercase tracking-wider opacity-60">
             Each in its own dialect; the rewrite is shown with its result
@@ -844,32 +882,42 @@ function ComparePanel() {
               Compare
             </span>
             {ENGINES.map((engine) => {
-              const on = chosen.includes(engine.key)
+              // Cassandra cannot be selected for a statement CQL cannot express: the
+              // reason takes the place of the path's own description, so the tooltip
+              // says why rather than only refusing.
+              const declined = engine.key === 'cassandra' && cqlDecline !== null
+              const on = asking.includes(engine.key)
               return (
                 <button
                   key={engine.key}
                   onClick={() => toggle(engine.key)}
+                  disabled={declined}
                   title={
-                    on && chosen.length === 1
-                      ? 'At least one path has to stay selected'
-                      : engine.role
+                    declined
+                      ? cqlDecline
+                      : on && chosen.length === 1
+                        ? 'At least one path has to stay selected'
+                        : engine.role
                   }
                   aria-pressed={on}
-                  className="flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors"
+                  className="flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:cursor-not-allowed"
                   style={{
                     background: on ? 'color-mix(in srgb, var(--color-surface-container-highest) 100%, transparent)' : 'transparent',
                     color: on ? engine.colour : 'var(--color-on-surface-variant)',
-                    opacity: on ? 1 : 0.5,
+                    opacity: on ? 1 : declined ? 0.3 : 0.5,
                   }}
                 >
                   <MaterialIcon
-                    name={on ? 'check_box' : 'check_box_outline_blank'}
+                    name={declined ? 'block' : on ? 'check_box' : 'check_box_outline_blank'}
                     className="text-[14px]"
                   />
                   {engine.label}
                 </button>
               )
             })}
+            {cqlDecline && (
+              <span className="text-on-surface-variant/60 text-[10px]">{cqlDecline}</span>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
@@ -900,7 +948,7 @@ function ComparePanel() {
 
           {/* Only the bulk reader takes a snapshot, so the control is only shown
               when it is one of the paths being compared. */}
-          {chosen.includes('spark_bulk') && (
+          {asking.includes('spark_bulk') && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-on-surface-variant text-[9px] font-bold uppercase tracking-wider">
                 Snapshot
@@ -949,6 +997,7 @@ function ComparePanel() {
                 if (statement === null) return
                 setPreset(option.key)
                 setSql(statement)
+                setEdited(false)
               }}
               title={
                 statement === null
@@ -992,16 +1041,22 @@ function ComparePanel() {
         <textarea
           id="compare-sql"
           value={sql}
-          onChange={(e) => setSql(e.target.value)}
+          onChange={(e) => {
+            setSql(e.target.value)
+            setEdited(true)
+          }}
           className="text-primary h-40 w-full resize-none bg-surface-container-lowest/40 p-6 font-code text-sm leading-relaxed focus:outline-none"
           spellCheck={false}
         />
       </div>
 
+      {/* Nothing left to ask is reachable in one state: Cassandra alone was selected,
+          and the statement is one CQL cannot express. */}
       <button
         onClick={() => void start()}
-        disabled={pending}
-        className="font-headline flex w-full cursor-pointer items-center justify-center gap-3 rounded border border-white/10 bg-surface-container px-8 py-3 font-bold tracking-wider transition-all hover:bg-surface-container-high active:scale-95 disabled:opacity-60"
+        disabled={pending || asking.length === 0}
+        title={asking.length === 0 ? (cqlDecline ?? undefined) : undefined}
+        className="font-headline flex w-full cursor-pointer items-center justify-center gap-3 rounded border border-white/10 bg-surface-container px-8 py-3 font-bold tracking-wider transition-all hover:bg-surface-container-high active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
       >
         <MaterialIcon
           name={pending ? 'sync' : 'compare_arrows'}
@@ -1009,14 +1064,16 @@ function ComparePanel() {
         />
         {pending ? 'Running…' : 'Run'}
         <span className="font-normal opacity-70">
-          {chosen.length === ENGINES.length
-            ? 'all five paths'
-            : `${chosen.length} ${chosen.length === 1 ? 'path' : 'paths'}`}
-          {chosen.length > 1 && (mode === 'parallel' ? ' at once' : ' one at a time, quickest first')}
+          {asking.length === 0
+            ? 'no path left that can express this query'
+            : asking.length === ENGINES.length
+              ? 'all five paths'
+              : `${asking.length} ${asking.length === 1 ? 'path' : 'paths'}`}
+          {asking.length > 1 && (mode === 'parallel' ? ' at once' : ' one at a time, quickest first')}
         </span>
       </button>
 
-      {mode === 'parallel' && chosen.length > 1 && costsMinutes && (
+      {mode === 'parallel' && asking.length > 1 && costsMinutes && (
         <div className="border-secondary/30 bg-secondary/5 text-on-surface-variant flex items-start gap-3 rounded-lg border p-4">
           <MaterialIcon name="schedule" className="text-secondary shrink-0 text-[18px]" />
           <p className="text-[11px] leading-relaxed">

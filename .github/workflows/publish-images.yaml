@@ -19,8 +19,14 @@ name: Publish Images
 # Trunk publishes, so `latest` and `trunk` resolve to the current trunk at all times. A
 # `paths` filter was the obvious way to skip a docs-only push and is not used: on `push`,
 # GitHub applies `paths` to the tag legs as well, so a `v*` tag laid on a commit that
-# touched no build context would publish nothing at all. Eleven publishes on a docs push is
+# touched no build context would publish nothing at all. Ten publishes on a docs push is
 # the cheaper mistake; runners and GHCR are both free for a public repository.
+#
+# `trunk-java` publishes too, under its own branch tag, so a room can run the Java stack
+# without building it. It cannot disturb the Python images: `latest` is enabled only on the
+# default branch or a `v*` tag, so a push here moves `trunk-java` and `sha-…` and nothing
+# else. The `v*` leg has no branch test, though, so a release tag laid on this branch would
+# repoint `latest` for all ten packages at the Java stack; tag trunk for a release.
 #
 # Nothing is built or copied until `Test Podman Compose` has succeeded on the same commit,
 # which the `require-ci` job below waits for. A trunk push starts both workflows at once,
@@ -40,7 +46,7 @@ name: Publish Images
 # build time becomes the complaint, the lever is a registry cache in GHCR rather than the
 # Actions one.
 #
-# The first successful run creates eleven *private* packages, because that is GHCR's
+# The first successful run creates ten *private* packages, because that is GHCR's
 # default for an organisation. Make each one public once, under the organisation's
 # package settings, or every participant needs a token to pull. Verify it with
 # `docker manifest inspect` after `docker logout ghcr.io`: a pull that works while the
@@ -50,6 +56,7 @@ on:
   push:
     branches:
       - trunk
+      - trunk-java
     tags:
       - 'v*'
   workflow_dispatch:
@@ -58,12 +65,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   # Cancel a superseded branch run, keep every tag run. Two trunk runs in flight would race
   # on the `latest` and `trunk` tags, and the older one finishing second would leave both
-  # pointing behind trunk. A tag is published once and has nothing to race with.
+  # pointing behind trunk. A tag is published once and has nothing to race with. The group
+  # carries the ref, so a trunk run and a trunk-java run do not cancel each other; they
+  # share no tag, and only `latest` would be a shared one.
   cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 env:
   REGISTRY: ghcr.io
-  # Slashes are legal in a GHCR package name, so the eleven sit together under one prefix
+  # Slashes are legal in a GHCR package name, so the ten sit together under one prefix
   # rather than scattering `backend` and `frontend` among the organisation's packages.
   IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/open-htap-stack
 
@@ -351,7 +360,7 @@ jobs:
     # create` with one source copies the whole manifest list, both architectures, without
     # building anything and without this runner holding the layers as an image.
     #
-    # Each mirror carries the same tag set as a built image, so one tag selects all eleven:
+    # Each mirror carries the same tag set as a built image, so one tag selects all ten:
     # pinning a release tag would otherwise resolve for six services and fail for four.
     # The upstream version goes on as a further tag, so what was copied is legible in the
     # registry rather than only in this file.
@@ -359,7 +368,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     # A mirror copies an upstream manifest and reads none of this tree, so CI cannot fail
-    # on its account. It waits all the same: the eleven tags move together, and a run that
+    # on its account. It waits all the same: the ten tags move together, and a run that
     # mirrored four images while the six builds were blocked would leave `latest` meaning
     # one thing for kafka and another for the backend.
     needs: require-ci

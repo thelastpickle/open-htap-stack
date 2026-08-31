@@ -21,6 +21,18 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
+    env:
+      # The stack ships at 5 events a second so that a laptop can be left running it, and
+      # every assertion below was written against a stack ingesting hard: window row counts,
+      # the five-path comparison, the CDC publish rate and the sink's own lag all need volume
+      # within the job's 45 minutes.  A shell variable beats the .env file compose reads, so
+      # this one line is what restores the rate the assertions assume, without the repository
+      # defaulting to a rate that fills a disk.
+      #
+      # Set here rather than per step: podman compose is invoked from several steps, and a
+      # producer recreated by one of them at 5 a second would starve the steps after it.
+      DEMO_EVENTS_PER_SEC: "2000"
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v7

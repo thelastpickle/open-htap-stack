@@ -42,7 +42,6 @@ class ProducerTest {
     void oneTurnSendsTheBatchTheRateAsksFor() {
         Recorder sent = oneTurn(new LiveSettings(2000, 10, 5.0));
 
-        assertEquals(10, settings.eventsPerBatch(2000));
         assertEquals(10, sent.keys.size());
         assertEquals(List.of("demo-events"), sent.topics.stream().distinct().toList());
         // The record's own body, because a loop that passed the two the other way round would satisfy
@@ -98,6 +97,22 @@ class ProducerTest {
         live.apply(reported(OptionalInt.of(400), OptionalInt.empty(), Optional.empty()));
 
         assertEquals(2, oneTurn(live).keys.size(), "400 a second over a 5 ms period is two events");
+    }
+
+    /**
+     * The demo's default rate sends one event, not a batch, and not one event a turn.
+     *
+     * <p>The rate the stack ships with is below one event a turn at either cadence, which is the
+     * case the loop used to round up: it sent one event every turn and so ran at 200 a second here
+     * where 5 was asked for.  {@code oneTurn} ends the loop from inside the first send, so what this
+     * asserts is that the send arrived alone; the turns before it sent nothing.
+     */
+    @Test
+    @Timeout(20)
+    void theDefaultRateSendsOneEventAndNotABatch() {
+        Recorder sent = oneTurn(new LiveSettings(5, 10, 5.0));
+
+        assertEquals(1, sent.keys.size(), "5 a second over a 5 ms period is one event every 40 turns");
     }
 
     /**

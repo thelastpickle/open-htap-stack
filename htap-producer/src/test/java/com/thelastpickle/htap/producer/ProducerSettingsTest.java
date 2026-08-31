@@ -18,7 +18,7 @@ class ProducerSettingsTest {
 
         assertEquals("kafka:19092", settings.bootstrap());
         assertEquals("demo-events", settings.topic());
-        assertEquals(2000, settings.eventsPerSec());
+        assertEquals(5, settings.eventsPerSec(), "the default rate is one a laptop can be left at");
         assertEquals(100, settings.nEntities());
         assertEquals(2000, settings.maxEntities());
         assertEquals(5.0, settings.outlierPercent());
@@ -38,7 +38,7 @@ class ProducerSettingsTest {
                 "OUTLIER_PERCENT", "",
                 "BATCH_PERIOD_MS", "0x32")));
 
-        assertEquals(2000, settings.eventsPerSec());
+        assertEquals(5, settings.eventsPerSec());
         assertEquals(5.0, settings.outlierPercent());
         assertEquals(Duration.ofMillis(50), settings.batchPeriod());
     }
@@ -79,14 +79,16 @@ class ProducerSettingsTest {
                 ProducerSettings.from(env(Map.of("BATCH_PERIOD_MS", "200"))).batchPeriod());
     }
 
-    /** How many events one turn of the loop sends, which is the rate over the cadence. */
+    /**
+     * The pacer takes its cadence from this record, which is the coupling worth asserting.
+     *
+     * <p>What the pacer then does with a rate is {@link BatchPacerTest}'s.
+     */
     @Test
-    void aBatchIsTheRateForOnePeriod() {
-        ProducerSettings settings = ProducerSettings.from(env(Map.of()));
+    void thePacerRunsAtTheConfiguredCadence() {
+        ProducerSettings settings = ProducerSettings.from(env(Map.of("BATCH_PERIOD_MS", "200")));
 
-        assertEquals(100, settings.eventsPerBatch(2000));
-        assertEquals(1, settings.eventsPerBatch(1), "a rate too low for one event a period still sends");
-        assertEquals(500, settings.eventsPerBatch(10_000));
+        assertEquals(400, settings.pacer().next(2000), "2,000 a second over 200 ms");
     }
 
     /** The area is configurable, because a fleet elsewhere is a supported demo. */

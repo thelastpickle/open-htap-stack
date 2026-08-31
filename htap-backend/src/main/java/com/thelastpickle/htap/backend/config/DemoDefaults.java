@@ -31,8 +31,16 @@ public interface DemoDefaults {
     @WithDefault("2000")
     int maxEntities();
 
+    /**
+     * The ingest rate the producer starts at, which the Settings page opens showing.
+     *
+     * <p>Five a second, matching what compose gives the producer. The rate the docs' figures were
+     * measured at is 2,000, and the page reaches 5,000: the demo starts as a trickle and is turned
+     * up for the run it is being shown in, because a stack left at 2,000 fills a laptop's disk in an
+     * afternoon and nothing downstream of the generator bounds it.
+     */
     @WithName("events-per-sec")
-    @WithDefault("2000")
+    @WithDefault("5")
     int eventsPerSec();
 
     /**

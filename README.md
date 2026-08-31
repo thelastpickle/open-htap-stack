@@ -68,6 +68,8 @@ podman compose -f podman-compose.yml up
 | Spark application UI     | <http://localhost:4040>                        |
 | Apicurio schema registry | <http://localhost:8085>                        |
 
+**The stack starts at 5 events a second, and the demo wants more.**&emsp;Turn the rate up on the dashboard's Settings page, to 2,000 for the figures quoted in this README or to the 5,000 the page reaches.&emsp;The producer polls the page and adopts a change within ten seconds, so no restart is needed either way.&emsp;It starts as a trickle because nothing downstream of the generator bounds the data: at 2,000 a second a stack somebody leaves running fills its disk in an afternoon, and two laptops died to exactly that.&emsp;`DEMO_EVENTS_PER_SEC` in `.env` is the startup value if you would rather not click.
+
 ### The 4-minute demonstration
 
 Open <http://localhost:4000>. Every figure on every page is a live query against the stack you just

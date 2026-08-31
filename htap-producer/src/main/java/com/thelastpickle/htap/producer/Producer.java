@@ -134,6 +134,7 @@ public final class Producer {
      */
     void sendUntilInterrupted(Sender sender, Fleet fleet, LiveSettings live, TextSource text) {
         double periodSeconds = settings.batchPeriod().toMillis() / 1000.0;
+        BatchPacer pacer = settings.pacer();
         long reportEveryNanos = settings.reportEvery().toNanos();
         long lastReport = System.nanoTime();
         long totalSent = 0;
@@ -144,11 +145,15 @@ public final class Producer {
             double nowSeconds = System.currentTimeMillis() / 1000.0;
             LiveSettings.Snapshot now = live.snapshot();
 
-            if (!now.paused()) {
+            // A batch of none is a turn the pacer is spending on a rate below one event a period,
+            // and it is skipped rather than sent: Fleet.batch divides the stamp window by the
+            // batch size.
+            int batchSize = now.paused() ? 0 : pacer.next(now.eventsPerSec());
+            if (batchSize > 0) {
                 // The fleet's arrays are sized for maxEntities, so a request for more is capped
                 // rather than allowed to index past the end.
                 int liveEntities = Math.min(now.nEntities(), settings.maxEntities());
-                int[] ids = fleet.next(settings.eventsPerBatch(now.eventsPerSec()), liveEntities);
+                int[] ids = fleet.next(batchSize, liveEntities);
                 for (Fleet.Event event : fleet.batch(
                         ids,
                         nowSeconds,

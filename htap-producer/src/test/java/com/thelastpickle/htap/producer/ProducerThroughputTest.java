@@ -26,9 +26,10 @@ class ProducerThroughputTest {
     /**
      * The floor, in events a second.
      *
-     * <p>The demo asks for 2,000 and this loop does far more; 20,000 is the rate below which the
-     * producer would be the reason the demo could not reach its own figure, which is what this
-     * assertion is for.
+     * <p>The rate measured against is 2,000 a second, which is what the docs' figures were taken at
+     * and what the Settings page is turned up to for a run; the shipped default is 5.  This loop
+     * does far more than 2,000, and 20,000 is the rate below which the producer would be the reason
+     * the demo could not reach its own figure, which is what this assertion is for.
      */
     private static final double FLOOR_PER_SECOND = 20_000.0;
 
@@ -64,7 +65,8 @@ class ProducerThroughputTest {
     private static int run(Fleet fleet, double from, int events) {
         int built = 0;
         double at = from;
-        // 100 events a batch, which is 2,000 a second over the 50 ms cadence the image ships with.
+        // 100 events a batch, which is 2,000 a second over the 50 ms cadence the image ships with;
+        // the pacer is not in the way here, because this measures what one event costs to build.
         while (built < events) {
             int[] ids = fleet.next(100, FLEET);
             built += fleet.batch(ids, at, 0.05, TextSource.NONE, 5.0, 30.0, 0.05).length;

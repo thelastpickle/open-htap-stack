@@ -60,7 +60,11 @@ record ProducerSettings(
                 text(env, "PRODUCER_CLIENT_ID", "demo-producer"),
                 integer(env, "TOPIC_PARTITIONS", 12),
                 (short) integer(env, "TOPIC_RF", 1),
-                Math.max(1, integer(env, "EVENTS_PER_SEC", 2000)),
+                // Five a second, which is a rate a laptop can be left at.  The measurements in the
+                // docs were taken at 2,000 and the Settings page reaches 5,000, so the demo starts
+                // slow and is turned up for the run; a stack left ingesting at 2,000 fills a disk
+                // and a Kafka volume in an afternoon, which is what happened to two of them.
+                Math.max(1, integer(env, "EVENTS_PER_SEC", 5)),
                 nEntities,
                 // The fleet's arrays are allocated once for the largest size the dashboard may
                 // ask for, so the ceiling can never be below the starting size.
@@ -97,14 +101,13 @@ record ProducerSettings(
     }
 
     /**
-     * How many events one turn of the loop sends, at the rate asked for.
+     * How many events one turn of the loop sends, which {@link BatchPacer} answers.
      *
-     * <p>Named apart from {@link #kafkaBatchSize}, which is a count of bytes the client buffers:
-     * the two are unrelated and sharing a name would be the kind of collision that reads as
-     * correct.
+     * <p>Not a method on this record: the answer needs the fraction of an event the turns before it
+     * left over, so it is state rather than a derivation, and a record is the wrong place for it.
      */
-    int eventsPerBatch(int eventsPerSec) {
-        return Math.max(1, (int) (eventsPerSec * batchPeriod.toMillis() / 1000.0));
+    BatchPacer pacer() {
+        return new BatchPacer(batchPeriod());
     }
 
     /**

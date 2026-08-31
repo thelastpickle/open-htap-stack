@@ -163,7 +163,13 @@ class Settings(BaseSettings):
 
     # Demo defaults.  Compose sets these from the same variables it passes to the
     # data producer, so the Settings page opens showing what is actually running.
-    demo_events_per_sec: int = 2000
+    #
+    # Five a second, matching what the producer is given.  The figures in the docs were
+    # measured at 2,000 and the Settings page reaches 5,000: the demo starts as a
+    # trickle and is turned up for the run it is being shown in, because nothing
+    # downstream of the generator bounds the data and a stack left at 2,000 fills a
+    # laptop's disk in an afternoon.
+    demo_events_per_sec: int = 5
     demo_n_entities: int = 100
     demo_max_entities: int = 2000
     demo_outlier_percent: float = 5.0

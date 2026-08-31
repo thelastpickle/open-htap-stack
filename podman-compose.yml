@@ -214,7 +214,16 @@ services:
     environment:
       # Set home directory for Ivy cache (needed for --packages)
       HOME: "/opt/spark/work-dir"
-      PATH: "/opt/spark/bin:${PATH}"
+      # The image's own PATH with /opt/spark/bin in front, written out rather than
+      # referring to ${PATH}: compose substitutes the *host* shell's PATH there, not
+      # the container's.  On a Windows host that is a list of C:\... entries with no
+      # /bin, so the runtime could not resolve the `bash` this service's command
+      # names and the container exited 127 with "exec: bash: not found".  Reproduced
+      # on this image by passing a Windows-shaped PATH, and the value below then
+      # resolves bash, java, spark-submit, nproc, wget and sha1sum, which is every
+      # binary the command block calls.  It worked on macOS and Linux only because
+      # a host PATH there happens to contain /usr/bin and /bin.
+      PATH: "/opt/spark/bin:/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       # The CQL connector and the Analytics bulk reader, resolved through the Ivy
       # repository this repository vendors.  Same coordinates as the CI SparkSQL tests.
       # 0.5-mck0 is a local build, not a release; scripts/vendor-analytics.sh made it and
@@ -395,13 +404,23 @@ services:
       KAFKA_BOOTSTRAP: "kafka:19092"
       TOPIC: "${DEMO_TOPIC:-demo-events}"
       # Starting fleet size and rate.  The dashboard's Settings page can change
-      # both at runtime, up to MAX_ENTITIES.  The default rate is one the sink
-      # sustains on a laptop: it writes three rows per event at QUORUM, so it is
-      # the narrower end of the pipe, and a producer that outruns it turns a live
-      # demo into a growing Kafka backlog.
+      # both at runtime, up to MAX_ENTITIES and up to 5,000 a second.
+      #
+      # Five a second is a trickle, and that is the point: the rate the docs'
+      # figures were taken at, 2,000, is the rate a stack left running fills a
+      # disk at.  Two colleagues' laptops died to it after half an hour, and the
+      # bounds that are supposed to stop that are all further downstream than the
+      # generator: Kafka's retention holds some 12 GiB, cdc_raw holds 4 GiB, and
+      # Cassandra's own data directory has no bound at all.  So the demo starts
+      # slow and is turned up on the Settings page for the run it is being shown
+      # in, rather than starting fast and hoping somebody stops it.
+      #
+      # CI needs the volume its assertions are written against, so
+      # .github/workflows/test-podman-compose.yaml sets DEMO_EVENTS_PER_SEC in
+      # the job's environment; a shell variable beats the .env file beside this.
       N_ENTITIES: "${DEMO_N_ENTITIES:-100}"
       MAX_ENTITIES: "${DEMO_MAX_ENTITIES:-2000}"
-      EVENTS_PER_SEC: "${DEMO_EVENTS_PER_SEC:-2000}"
+      EVENTS_PER_SEC: "${DEMO_EVENTS_PER_SEC:-5}"
       OUTLIER_PERCENT: "${DEMO_OUTLIER_PERCENT:-5.0}"
       PRODUCER_CLIENT_ID: "demo-producer"
       # Live demo controls.  Unset this to ignore the dashboard entirely.
@@ -553,7 +572,7 @@ services:
       # what data-producer above was started with.
       DEMO_N_ENTITIES: "${DEMO_N_ENTITIES:-100}"
       DEMO_MAX_ENTITIES: "${DEMO_MAX_ENTITIES:-2000}"
-      DEMO_EVENTS_PER_SEC: "${DEMO_EVENTS_PER_SEC:-2000}"
+      DEMO_EVENTS_PER_SEC: "${DEMO_EVENTS_PER_SEC:-5}"
       DEMO_OUTLIER_PERCENT: "${DEMO_OUTLIER_PERCENT:-5.0}"
       # Whether the vector index follows the snippets the sink writes, and how
       # often.  Off at startup: the Explore page turns it on, and the reason to

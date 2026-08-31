@@ -35,10 +35,13 @@ const SLIDERS = [
   {
     key: 'events_per_sec' as const,
     label: 'Events per second',
-    hint: 'Total ingest rate across the fleet.',
-    min: 50,
+    hint: 'Total ingest rate across the fleet. The stack starts at 5 so it can be left running; turn it up for the run and back down afterwards.',
+    // The minimum has to reach the startup default, which is 5.  At a minimum of 50 the
+    // thumb sat at 50 while the readout said 5, and the first drag raised the rate to a
+    // value nobody had asked for.  A step of 5 spans the range in a thousand positions.
+    min: 5,
     max: 5000,
-    step: 50,
+    step: 5,
     format: (v: number) => v.toLocaleString(),
   },
   {

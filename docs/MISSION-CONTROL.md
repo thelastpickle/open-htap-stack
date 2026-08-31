@@ -245,7 +245,7 @@ Both failures are time-dependent, since the first queries after a restart succee
 The Settings page writes to the backend's memory; the data producer polls `GET /api/settings/demo` every ten seconds and adopts what it finds. &emsp;Every control there changes what the stack generates:
 
 - **Fleet size**: assets emitting telemetry, up to the producer's `MAX_ENTITIES`.
-- **Events per second**: total ingest rate across the fleet.
+- **Events per second**: total ingest rate across the fleet, 5 to 5,000. &emsp;The stack starts at 5 and every figure in these documents was measured at 2,000, so this is the first control to touch: nothing downstream of the producer bounds the data, and a stack left running at 2,000 fills a laptop's disk in an afternoon.
 - **Overheating assets**: the share of the fleet running an anomalous internal temperature, so the outlier queries on Explore have something to find.
 - **Pause**: stops generation; stored data stays put.
 - **Trigger breach scenario**: flags a real airborne asset as breaching and writes a matching alert, which the map, the indicators and the alert feed then pick up through their ordinary queries.

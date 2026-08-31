@@ -633,7 +633,11 @@ def main() -> None:
 
     # An Apple M3 laptop sustains roughly 11k events/s through this loop.
     live = LiveSettings(
-        events_per_sec=max(1, env_int("EVENTS_PER_SEC", 2000)),
+        # Five a second, which is a rate a laptop can be left at.  The figures in the
+        # docs were measured at 2,000 and the Settings page reaches 5,000, so the demo
+        # starts slow and is turned up for the run; a stack left ingesting at 2,000
+        # fills a disk and a Kafka volume in an afternoon, which killed two laptops.
+        events_per_sec=max(1, env_int("EVENTS_PER_SEC", 5)),
         n_entities=max(1, env_int("N_ENTITIES", 100)),
         outlier_percent=env_float("OUTLIER_PERCENT", 5.0),
     )
@@ -696,6 +700,15 @@ def main() -> None:
     total_sent = 0
     window_sent = 0
     last_report = time.time()
+    # The fraction of an event the turns so far have left over, always in [0, 1).
+    # The rate over the cadence is rarely a whole number, and flooring each turn on
+    # its own put a floor under the achieved rate: the loop runs every 50 ms, so the
+    # demo's default of 5 a second is a quarter of an event a turn, and max(1, int(
+    # 0.25)) sent one, which is 20 a second while the line above reports 5.  Carrying
+    # it means four quarter-turns send one event between them.  What is carried is
+    # below one event, so a rate the Settings page changes takes effect on the next
+    # turn with no burst of the old one.
+    owed = 0.0
 
     print(
         f"[producer] started bootstrap={bootstrap} topic={topic} "
@@ -715,43 +728,50 @@ def main() -> None:
             # The fleet arrays are sized for max_entities, so a request for more
             # is capped rather than allowed to index past the end.
             n_entities = min(n_entities, max_entities)
-            batch_n = max(1, int(eps * period_s))
+            owed += eps * period_s
+            batch_n = int(owed)
+            owed -= batch_n
 
-            ids = (np.arange(ptr, ptr + batch_n, dtype=np.int64) % n_entities)
-            ptr = int((ptr + batch_n) % n_entities)
+            # A batch of none is a turn the pacing is spending on a rate below one event
+            # a period, and it is skipped rather than sent: stamp_step_s divides by the
+            # batch size.  Guarded rather than `continue`d, so the report below still
+            # fires on a turn that sent nothing.
+            if batch_n > 0:
+                ids = (np.arange(ptr, ptr + batch_n, dtype=np.int64) % n_entities)
+                ptr = int((ptr + batch_n) % n_entities)
 
-            lat, lon, z_m, t_ext, t_in, texts = fleet.step(
-                ids,
-                now_ts=loop_start,
-                text_sampler=text_sampler,
-                text_refresh_range_s=text_refresh,
-                outlier_fraction=outlier_percent / 100.0,
-            )
-
-            # Spread the batch's events across the window they represent rather
-            # than stamping them all at the same instant.  The event_id is a
-            # timeuuid, and the sink derives event_time from it, so identical
-            # stamps would collapse an asset's history into one point and leave
-            # the ordering within a batch undefined.
-            stamp_step_s = period_s / ids.shape[0]
-            for k in range(ids.shape[0]):
-                index = int(ids[k])
-                producer.send(
-                    topic,
-                    key=entity_keys[index],
-                    value=_dumps({
-                        "event_id": str(uuid_from_time(loop_start + k * stamp_step_s)),
-                        "entity_id": entity_ids[index],
-                        "observer_id": fleet.observer_ids[index],
-                        "event_type": EVENT_TYPES[index % len(EVENT_TYPES)],
-                        "position": {"lat": float(lat[k]), "lon": float(lon[k])},
-                        "z_m": float(z_m[k]),
-                        "temp_external_c": float(t_ext[k]),
-                        "temp_internal_c": float(t_in[k]),
-                        "text": texts[k],
-                    }),
+                lat, lon, z_m, t_ext, t_in, texts = fleet.step(
+                    ids,
+                    now_ts=loop_start,
+                    text_sampler=text_sampler,
+                    text_refresh_range_s=text_refresh,
+                    outlier_fraction=outlier_percent / 100.0,
                 )
-            window_sent += ids.shape[0]
+
+                # Spread the batch's events across the window they represent rather
+                # than stamping them all at the same instant.  The event_id is a
+                # timeuuid, and the sink derives event_time from it, so identical
+                # stamps would collapse an asset's history into one point and leave
+                # the ordering within a batch undefined.
+                stamp_step_s = period_s / ids.shape[0]
+                for k in range(ids.shape[0]):
+                    index = int(ids[k])
+                    producer.send(
+                        topic,
+                        key=entity_keys[index],
+                        value=_dumps({
+                            "event_id": str(uuid_from_time(loop_start + k * stamp_step_s)),
+                            "entity_id": entity_ids[index],
+                            "observer_id": fleet.observer_ids[index],
+                            "event_type": EVENT_TYPES[index % len(EVENT_TYPES)],
+                            "position": {"lat": float(lat[k]), "lon": float(lon[k])},
+                            "z_m": float(z_m[k]),
+                            "temp_external_c": float(t_ext[k]),
+                            "temp_internal_c": float(t_in[k]),
+                            "text": texts[k],
+                        }),
+                    )
+                window_sent += ids.shape[0]
 
             elapsed = time.time() - loop_start
             if elapsed < period_s:

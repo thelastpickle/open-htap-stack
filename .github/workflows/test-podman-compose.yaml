@@ -2190,7 +2190,32 @@ jobs:
           # is where a downstream consumer would read it.  {topic}-value is the subject
           # name Confluent's serializer writes, and Apicurio serves it under its
           # compatibility endpoint.
-          curl -s http://localhost:8000/api/streaming/cdc/schema > "$TMP_DIR/cdc-schema.json"
+          #
+          # Retried, because one read decided this assertion and the read can be slow
+          # rather than wrong.  SchemaRegistry.TIMEOUT is 10s, and on a runner going at
+          # about half the usual speed the read spent all of it and the step failed with
+          # three consequences of one HttpTimeoutException: schema id None, record None
+          # and an empty column list.  The same read answered in 0.3s on the run before.
+          # So the wait is bounded and the elapsed time of each attempt is printed: what
+          # this asserts is that the registry answers, not that it answers first time.
+          SCHEMA_ERROR="the registry was never read"
+          for attempt in $(seq 1 6); do
+            STARTED=$(date +%s)
+            if ! curl -s --max-time 30 http://localhost:8000/api/streaming/cdc/schema \
+                 > "$TMP_DIR/cdc-schema.json"; then
+              echo '{"error": "curl could not reach the backend"}' > "$TMP_DIR/cdc-schema.json"
+            fi
+            # The backend reports a failed registry read as an `error` field with HTTP 200,
+            # so the retry has to read the body rather than the status.
+            SCHEMA_ERROR=$(python3 -c \
+              'import json,sys; print(json.load(open(sys.argv[1])).get("error") or "")' \
+              "$TMP_DIR/cdc-schema.json" 2>/dev/null || echo "the response was not JSON")
+            echo "  registry read attempt $attempt took $(( $(date +%s) - $STARTED ))s${SCHEMA_ERROR:+, error: $SCHEMA_ERROR}"
+            if [ -z "$SCHEMA_ERROR" ]; then
+              break
+            fi
+            sleep 5
+          done
           curl -s http://localhost:8000/api/streaming/cdc?limit=50 > "$TMP_DIR/cdc-stream.json"
           python3 - "$TMP_DIR" << 'PY'
           import json, sys
@@ -2710,7 +2735,10 @@ jobs:
           # answered oddly is usually one line it printed and nothing else did.  A missing
           # snapshot_bytes cost a dive through the Sidecar's access log to attribute, where
           # "[db] could not size snapshot ... ReadTimeout" would have named it at once.
-          for service in kafka cassandra spark presto backend data-producer data-cassandra-sink; do
+          # apicurio is here because it was absent the day it was the cause: a CDC step
+          # failed on a 10s timeout reading the schema registry, and this dump held every
+          # service except the one that had not answered.
+          for service in kafka cassandra spark presto backend apicurio data-producer data-cassandra-sink; do
             echo -e "\n=== $service logs ==="
             podman logs "$service" || true
           done

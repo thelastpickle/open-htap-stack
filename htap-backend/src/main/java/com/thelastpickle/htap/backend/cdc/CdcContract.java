@@ -11,6 +11,7 @@ import com.thelastpickle.htap.backend.support.Messages;
 import jakarta.enterprise.context.ApplicationScoped;
 import java.util.ArrayList;
 import java.util.List;
+import org.jboss.logging.Logger;
 
 /**
  * The contract the topic's records are written against, read from the registry.
@@ -21,6 +22,8 @@ import java.util.List;
  */
 @ApplicationScoped
 public class CdcContract {
+
+    private static final Logger LOG = Logger.getLogger(CdcContract.class);
 
     private final SchemaRegistry registry;
     private final CdcSettings settings;
@@ -36,6 +39,7 @@ public class CdcContract {
     public CdcSchemaView published() {
         String subject = settings.subject();
         String where = settings.registry();
+        long startedAt = System.nanoTime();
         try {
             JsonNode body = registry.latest(subject);
             if (body == null) {
@@ -57,8 +61,15 @@ public class CdcContract {
             return CdcSchemaView.failed(subject, where, "interrupted while asking the registry");
         } catch (Exception e) {
             // The page reports a registry it cannot reach, since the tail can be running without it.
-            return CdcSchemaView.failed(subject, where,
-                    e.getClass().getSimpleName() + ": " + Messages.oneLine(e.getMessage()));
+            //
+            // Logged as well as returned, with how long the attempt took.  Returning it alone put
+            // the cause in an HTTP response body and nowhere else, so a CI run that failed on
+            // SchemaRegistry.TIMEOUT showed three consequences in its annotations and no elapsed
+            // time to say whether the registry had been slow or absent.
+            String why = e.getClass().getSimpleName() + ": " + Messages.oneLine(e.getMessage());
+            LOG.warnf("the registry at %s did not serve %s after %d ms: %s",
+                    where, subject, (System.nanoTime() - startedAt) / 1_000_000L, why);
+            return CdcSchemaView.failed(subject, where, why);
         }
     }
 
